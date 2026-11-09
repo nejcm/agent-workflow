@@ -172,5 +172,6 @@ The nono profiles have not been run yet; prove the boundaries on a throwaway rep
 - **Unverified:** nono's GitHub credential route for `git push`; whether `gh`'s endpoint rules are wide enough; Remote Control endpoints beyond `claude.ai` from inside the sandbox; Linear `issue(id: "ENG-42")` lookup and filter shape; whether trusting `~/agent-ws` covers worktrees below it.
 - **Main clone is agent-writable:** the sandbox grants `<repoPath>/.git` (worktree commits need it), so an agent could plant `.git/hooks` that later run outside the sandbox. Use a dedicated clone per lane.
 - **Token scope:** the GitHub credential comes from `gh auth token` (all your scopes). Prefer a fine-grained token limited to the lane repos.
+- **Codex under nono runs with `--no-daemon`** (required on Linux), so sandboxed Codex sessions show in the app history but can't be live-steered; with `sandbox: "none"` they can.
 - **Safety rests on the sandbox:** agents run with `bypassPermissions` / `--ask-for-approval never`.
 - A launch that fails after claiming leaves the ticket in progress with a "session ended" comment; PR review comments are not fed back into the session yet.

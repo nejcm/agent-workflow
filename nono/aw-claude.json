@@ -1,0 +1,126 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nolabs-ai/nono/main/crates/nono-cli/data/nono-profile.schema.json",
+  "meta": {
+    "name": "aw-claude",
+    "version": "0.1.0",
+    "description": "aw: Claude Code in one worktree, agent-owned config dir, read-only user instructions and skills"
+  },
+  "extends": "default",
+  "groups": {
+    "include": [
+      "git_config",
+      "claude_cache_linux",
+      "mise_manager",
+      "bun_runtime",
+      "node_runtime"
+    ]
+  },
+  "workdir": {
+    "access": "none"
+  },
+  "filesystem": {
+    "allow": [
+      "$HOME/.claude-aw",
+      "$HOME/.claude-aw.lock"
+    ],
+    "read": [
+      "$HOME/.claude/skills",
+      "$HOME/.agents/skills",
+      "/usr/share/omarchy/default/agents",
+      "$HOME/.local/share/mise",
+      "$HOME/.bun"
+    ],
+    "read_file": [
+      "$HOME/.claude/CLAUDE.md",
+      "$HOME/.claude/AGENTS.md"
+    ]
+  },
+  "environment": {
+    "set_vars": {
+      "GIT_CONFIG_COUNT": "3",
+      "GIT_CONFIG_KEY_0": "credential.https://github.com.helper",
+      "GIT_CONFIG_VALUE_0": "!f() { echo username=x-access-token; echo \"password=$GITHUB_GIT_TOKEN\"; }; f",
+      "GIT_CONFIG_KEY_1": "url.https://github.com/.insteadOf",
+      "GIT_CONFIG_VALUE_1": "git@github.com:",
+      "GIT_CONFIG_KEY_2": "url.https://github.com/.insteadOf",
+      "GIT_CONFIG_VALUE_2": "ssh://git@github.com/"
+    },
+    "allow_vars": [
+      "PATH",
+      "HOME",
+      "USER",
+      "LOGNAME",
+      "SHELL",
+      "TERM",
+      "COLORTERM",
+      "LANG",
+      "LC_*",
+      "TZ",
+      "TMPDIR",
+      "XDG_RUNTIME_DIR",
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_HOME",
+      "XDG_CACHE_HOME",
+      "CLAUDE_CONFIG_DIR"
+    ]
+  },
+  "network": {
+    "network_profile": "claude-code",
+    "allow_domain": [
+      "github.com",
+      "api.github.com"
+    ],
+    "credentials": [
+      "github",
+      "github_git"
+    ],
+    "custom_credentials": {
+      "github": {
+        "upstream": "https://api.github.com",
+        "credential_key": "cmd://github",
+        "env_var": "GH_TOKEN",
+        "credential_format": "token {}",
+        "endpoint_rules": [
+          {
+            "method": "*",
+            "path": "/repos/**"
+          },
+          {
+            "method": "POST",
+            "path": "/graphql"
+          },
+          {
+            "method": "GET",
+            "path": "/user"
+          }
+        ]
+      },
+      "github_git": {
+        "upstream": "https://github.com",
+        "credential_key": "cmd://github_git",
+        "env_var": "GITHUB_GIT_TOKEN",
+        "inject_mode": "basic_auth"
+      }
+    }
+  },
+  "credential_capture": {
+    "github": {
+      "command": [
+        "gh",
+        "auth",
+        "token"
+      ],
+      "timeout_secs": 5,
+      "cache_ttl_secs": 900
+    },
+    "github_git": {
+      "command": [
+        "sh",
+        "-c",
+        "printf 'x-access-token:%s' \"$(gh auth token)\""
+      ],
+      "timeout_secs": 5,
+      "cache_ttl_secs": 900
+    }
+  }
+}

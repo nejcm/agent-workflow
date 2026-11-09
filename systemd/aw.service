@@ -1,0 +1,17 @@
+[Unit]
+Description=aw: start agent sessions for ready tickets
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Work/agent-workflow
+ExecStart=%h/.bun/bin/bun aw.ts run --config aw.json
+Environment=PATH=%h/.local/share/mise/shims:%h/.bun/bin:%h/.local/bin:/usr/local/bin:/usr/bin
+EnvironmentFile=-%h/.config/aw/env
+Restart=on-failure
+RestartSec=30
+# Only stop the poller; the tmux server and agent sessions live in this cgroup.
+KillMode=process
+
+[Install]
+WantedBy=default.target

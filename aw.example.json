@@ -1,0 +1,38 @@
+{
+  "host": "laptop",
+  "pollIntervalMs": 60000,
+  "workspaceRoot": "~/agent-ws",
+  "tmuxSession": "aw",
+  "lanes": [
+    {
+      "name": "web",
+      "tracker": "github",
+      "repo": "acme/web",
+      "repoPath": "~/Work/web",
+      "baseBranch": "main",
+      "agent": "claude",
+      "sandbox": "nono",
+      "maxConcurrent": 2,
+      "testCmd": "bun test",
+      "readyLabel": "agent-ready",
+      "inProgressLabel": "in-progress",
+      "inReviewLabel": "in-review"
+    },
+    {
+      "name": "api",
+      "tracker": "linear",
+      "team": "ENG",
+      "repo": "acme/api",
+      "repoPath": "~/Work/api",
+      "agent": "codex",
+      "sandbox": "nono",
+      "maxConcurrent": 1,
+      "testCmd": "make test",
+      "prompt": "prompts/default.md",
+      "todo": "Todo",
+      "inProgress": "In Progress",
+      "inReview": "In Review",
+      "done": ["Done", "Canceled", "Duplicate"]
+    }
+  ]
+}

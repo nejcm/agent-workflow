@@ -1,109 +1,176 @@
-# aw
+# aw — agent workflow
 
-Polls GitHub Issues or Linear for ready tickets and, per ticket, starts an interactive
-Claude Code or Codex session in tmux, in its own git worktree, optionally inside the
-[nono](https://github.com/nolabs-ai/nono) sandbox. The agent pushes `agent/<ID>` and opens
-a PR; `aw` then moves the ticket to review. No database: state is the tracker, the tmux
-windows and the worktrees. Bun + TypeScript, no dependencies.
+Move a GitHub issue or Linear ticket to **ready**, and `aw` starts a Claude Code or Codex session for it: in its own git worktree, inside the [nono](https://github.com/nolabs-ai/nono) sandbox, in a tmux window you can attach to. The agent implements the ticket, runs the tests, pushes `agent/<ID>` and opens a PR; `aw` then moves the ticket to **In Review**.
 
-## Flow (one pass, per lane)
+- **Watch and steer from anywhere.** Claude sessions run with Remote Control, so they show up on claude.ai/code and the Claude mobile app. Codex sessions are interactive, so they land in the ChatGPT/Codex app history. Locally: `tmux attach -t aw`, or open the worktree in your editor.
+- **Runs where you are.** Directly on your machine (sandboxed by nono), or on a VM (`sandbox: "none"`, the VM is the boundary). Same code, same config.
+- **No moving parts to babysit.** One Bun + TypeScript file, no dependencies, no database: state is the tracker, the tmux windows and the worktrees. Polls instead of webhooks, so nothing listens on a port.
+- **Your setup, read-only.** Agents use your `CLAUDE.md`, `AGENTS.md` and skills, but log in through their own config dirs (`~/.claude-aw`, `~/.codex-aw`) and cannot modify yours.
 
-1. Ticket closed / in a `done` state and its worktree exists: kill its window,
-   `git worktree remove` (no `--force`; on failure it is logged and kept), delete
-   `<ID>.prompt.md`, `<ID>.sh`, `<ID>.ended`.
-2. Ready tickets, while windows for the lane < `maxConcurrent`: claim (in progress +
-   comment), `git fetch`, `git worktree add <workspaceRoot>/<lane>/<ID> -b agent/<ID>`,
-   render the prompt next to the worktree, write a launcher script, `tmux new-window`.
-3. In-progress tickets claimed by this host: PR for `agent/<ID>` exists → review + PR link
-   comment. No PR and no window → comment "session ended without a PR" once.
+## How it works
 
-Ready means: GitHub open + `readyLabel` + `host:<host>`; Linear `todo` state + `agent-ready`
-+ `host:<host>`. Ticket IDs are `gh-<number>` or the Linear identifier (`ENG-42`).
-Window names are `<lane>/<ID>`. The launcher `exec`s the agent, so when the agent exits the
-window closes; that is the "ended" signal. Use `tmux attach -t aw` to watch or steer.
+Every `pollIntervalMs` (default 60 s), for each *lane* (one repo or Linear team) in `aw.json`:
+
+```
+ready ticket ──► In Progress + comment "picked up on <host>"
+             ──► git worktree add ~/agent-ws/<lane>/<ID> -b agent/<ID> origin/<base>
+             ──► tmux window <lane>/<ID>: nono run … -- claude --remote-control … "<prompt>"
+PR for agent/<ID> exists ──► In Review + comment with the PR link
+session ended, no PR     ──► one comment "session ended without a PR"
+ticket done / closed     ──► kill window, git worktree remove
+```
+
+- **Ready** = GitHub: open + `agent-ready` + `host:<host>` labels. Linear: `Todo` state + the same two labels.
+- The `host:<host>` label decides which machine takes a ticket, so a laptop and a VM never pick up the same one.
+- At most `maxConcurrent` sessions per lane. Ticket text only ever goes into the prompt file, never into a shell command.
 
 ## Setup
 
-```sh
-./setup.sh acme/web            # agent-owned ~/.claude-aw, ~/.codex-aw; prints logins + labels
-cp aw.example.json aw.json     # edit host, lanes
-bun aw.ts once --dry-run       # logs every side effect instead of doing it
+### 1. Requirements
+
+On `PATH`: `bun`, `git`, `gh` (logged in: `gh auth status`), `tmux`, and `claude` and/or `codex`. For sandboxed lanes, install nono:
+
+```bash
+curl -fsSL https://nono.sh/install.sh | sh
 ```
 
-Linear needs `LINEAR_API_KEY`. GitHub uses your authenticated `gh`.
+### 2. Agent config dirs and logins
 
-## Config
+```bash
+./setup.sh owner/repo
+```
+
+Idempotent, never overwrites real files. It creates `~/.claude-aw` and `~/.codex-aw` (symlinking your `CLAUDE.md`, `AGENTS.md`, skills), creates `~/agent-ws`, and prints the label commands for each repo you pass. Then log the agents in — these are separate from your own sessions:
+
+```bash
+CLAUDE_CONFIG_DIR=~/.claude-aw claude
+```
+
+Run `/login` inside, then exit.
+
+```bash
+CODEX_HOME=~/.codex-aw codex login
+```
+
+Trust the workspace once, so Remote Control can start there (accept the dialog, then exit):
+
+```bash
+cd ~/agent-ws && CLAUDE_CONFIG_DIR=~/.claude-aw claude
+```
+
+Check the sandbox profiles parse:
+
+```bash
+nono profile validate nono/aw-claude.json
+```
+
+```bash
+nono profile validate nono/aw-codex.json
+```
+
+### 3. Tracker
+
+**GitHub:** create the labels in each repo (`setup.sh` prints these with your host name):
+
+```bash
+for l in agent-ready in-progress in-review "host:$(hostname -s)"; do gh label create "$l" --repo owner/repo --force; done
+```
+
+**Linear:** create the labels `agent-ready` and `host:<host>` in the team, make sure it has `Todo`, `In Progress`, `In Review`, `Done` states (or set your names in the config), and export a personal API key:
+
+```bash
+export LINEAR_API_KEY=lin_api_...
+```
+
+### 4. Config
+
+```bash
+cp aw.example.json aw.json
+```
+
+Set `host` to the name in your `host:` label and one lane per repo / Linear team. `aw.json` is gitignored. See [Config reference](#config-reference).
+
+### 5. First run
+
+Dry run — logs every side effect instead of doing it:
+
+```bash
+bun aw.ts once --dry-run
+```
+
+Then label one test issue `agent-ready` + `host:<host>` and run a single real pass:
+
+```bash
+bun aw.ts once
+```
+
+```bash
+tmux attach -t aw
+```
+
+Go through the [first-run checklist](#first-run-checklist) before pointing it at real tickets.
+
+### 6. Run continuously
+
+Foreground:
+
+```bash
+bun aw.ts run
+```
+
+Or as a systemd user service (edit `WorkingDirectory` and `PATH` in the unit first; put `LINEAR_API_KEY=…` in `~/.config/aw/env`):
+
+```bash
+cp systemd/aw.service ~/.config/systemd/user/ && systemctl --user enable --now aw
+```
+
+`KillMode=process` keeps agent sessions alive when the service restarts. `bun aw.ts status` lists lanes, running windows and worktrees.
+
+### On a VM
+
+Same steps on the VM (Tailscale for access), with `"sandbox": "none"` per lane and `"host": "vm"` in `aw.json`. Tickets labelled `host:vm` go there. Connect your editor with Remote-SSH to `~/agent-ws/<lane>/<ID>`.
+
+## Config reference
 
 | key | default | |
 |---|---|---|
-| `host` | required | label `host:<host>` |
-| `pollIntervalMs` | 60000 | |
-| `workspaceRoot` | `~/agent-ws` | |
+| `host` | required | matches the `host:<host>` label |
+| `pollIntervalMs` | `60000` | min 5000 |
+| `workspaceRoot` | `~/agent-ws` | worktrees, prompts, launchers |
 | `tmuxSession` | `aw` | |
-| `lanes[].name` | required | `[a-z0-9-]` |
+| `lanes[].name` | required | `[a-z0-9-]`, unique |
 | `lanes[].tracker` | required | `github` \| `linear` |
-| `lanes[].repo` | required | GitHub `owner/name` PRs go to |
+| `lanes[].repo` | required | GitHub `owner/name` the PRs go to |
 | `lanes[].repoPath` | required | local clone |
 | `lanes[].baseBranch` | `main` | |
 | `lanes[].agent` | required | `claude` \| `codex` |
 | `lanes[].sandbox` | required | `nono` \| `none` |
-| `lanes[].maxConcurrent` | 2 | |
-| `lanes[].testCmd` | required | |
-| `lanes[].prompt` | `prompts/default.md` | relative to the config file |
-| github: `readyLabel`, `inProgressLabel`, `inReviewLabel` | `agent-ready`, `in-progress`, `in-review` | done = closed |
-| linear: `team`, `todo`, `inProgress`, `inReview`, `done` | -, `Todo`, `In Progress`, `In Review`, `[Done, Canceled, Duplicate]` | `readyLabel` also applies |
+| `lanes[].maxConcurrent` | `2` | sessions per lane |
+| `lanes[].testCmd` | required | the agent must pass it before opening a PR |
+| `lanes[].prompt` | `prompts/default.md` | template, relative to the config file |
+| GitHub: `readyLabel`, `inProgressLabel`, `inReviewLabel` | `agent-ready`, `in-progress`, `in-review` | done = issue closed |
+| Linear: `team`, `todo`, `inProgress`, `inReview`, `done` | —, `Todo`, `In Progress`, `In Review`, `[Done, Canceled, Duplicate]` | `team` is the key, e.g. `ENG` |
 
-## Running
+Prompt placeholders: `{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{testCmd}} {{repo}}`.
 
-- Foreground: `bun aw.ts run` (`once`, `status`; `--dry-run`, `--config <path>`).
-- systemd user unit: `cp systemd/aw.service ~/.config/systemd/user/ && systemctl --user enable --now aw`.
-  Adjust `WorkingDirectory` and `PATH` (gh, claude, codex, nono must be on it). Secrets go
-  in `~/.config/aw/env`. `KillMode=process` keeps tmux sessions alive across restarts.
-- VM: same unit, `"sandbox": "none"` (the VM is the boundary). Codex then runs without
-  `--no-daemon`, so it can be steered through the daemon / app.
+CLI: `bun aw.ts <run|once|status> [--dry-run] [--config aw.json]`.
 
-## Launch commands
+## First-run checklist
 
-- claude: `CLAUDE_CONFIG_DIR=$HOME/.claude-aw [nono run --profile nono/aw-claude.json --allow <wt> --allow <repoPath>/.git --] claude --remote-control "<ID>: <title>" --permission-mode bypassPermissions "$(cat <ID>.prompt.md)"`
-- codex: `CODEX_HOME=$HOME/.codex-aw [nono run --profile nono/aw-codex.json --allow … --] codex [--no-daemon] --sandbox danger-full-access --ask-for-approval never -C <wt> "$(cat <ID>.prompt.md)"`
+The nono profiles have not been run yet; prove the boundaries on a throwaway repo first.
 
-Flags checked against `claude --help` (2.1.319) and `codex --help` (codex-cli 0.167.0),
-including `--no-daemon`. Ticket text only reaches the prompt file; the title in the Remote
-Control name is reduced to `[\w .,:()#-]` and quoted.
+- [ ] Inside a sandboxed session, `cat ~/.ssh/id_*`, `ls ~/Work/<other-repo>`, `ls ~/.config` fail.
+- [ ] Writing `~/.claude/CLAUDE.md` or `~/.claude/settings.json` fails; your CLAUDE.md, AGENTS.md and skills load.
+- [ ] `env | grep -iE 'token|key'` shows only phantom values; `LINEAR_API_KEY` is absent.
+- [ ] `git push -u origin agent/<ID>` and `gh pr create` work, also with an SSH `origin`.
+- [ ] Sandboxed Codex reaches its backend (`chatgpt.com`, `auth.openai.com`).
+- [ ] Claude session is visible and steerable on claude.ai/code / mobile; Codex session is in the app history.
+- [ ] Issue → PR → `in-review`; closing the issue removes the window and the worktree.
 
-## Phase-1 manual checklist
+## Known gaps
 
-- [ ] Inside a sandboxed session: `cat ~/.ssh/id_*`, `ls ~/Work/<other-repo>`, `ls ~/.config` fail.
-- [ ] Writing `~/.claude/CLAUDE.md` and `~/.claude/settings.json` fails; reading CLAUDE.md, AGENTS.md, skills works.
-- [ ] `env | grep -i token` shows only phantom values; `LINEAR_API_KEY` is absent (profiles allow-list env vars).
-- [ ] With an SSH `origin` (`git@github.com:…`), push still goes over HTTPS via the `insteadOf` rewrite.
-- [ ] Sandboxed Codex reaches `chatgpt.com` (inference) and `auth.openai.com` (token refresh).
-- [ ] `git push -u origin agent/<ID>` and `gh pr create` work.
-- [ ] Claude session visible and steerable on claude.ai/code / mobile.
-- [ ] Codex session in ChatGPT app history.
-- [ ] Label an issue → PR → issue gets `in-review`; close it → window and worktree gone.
-
-## Unverified
-
-- nono profiles were written from nono's schema and docs, not run (`nono profile validate nono/aw-claude.json`).
-- Git push credential: the `github_git` `basic_auth` route on `https://github.com` and the
-  `GIT_CONFIG_*` credential helper reading `$GITHUB_GIT_TOKEN` are not in nono's docs.
-  Whether nono expands `$GITHUB_GIT_TOKEN` in `set_vars` (it should not) and swaps the phantom
-  in a Basic header is untested.
-- `gh` through the `github` route: `endpoint_rules` (`/repos/**`, `POST /graphql`, `GET /user`)
-  may be too tight for some `gh` calls. GraphQL cannot be path-scoped to one repo; the real
-  scope is the token, so prefer a fine-grained PAT limited to the lane repos over `gh auth token`.
-- `claude-code` / `codex` network profiles may not cover Remote Control's endpoints beyond
-  `claude.ai`; add `allow_domain` entries if the session does not show up.
-- Linear: `issue(id:)` with an identifier (`ENG-42`) and the `IssueFilter` shape used are from
-  memory of Linear's API, not tested here.
-- Remote Control trust: whether trusting `~/agent-ws` covers worktrees below it.
-- Codex `[projects."~/agent-ws"] trust_level` covering subdirectories.
-
-## Risks
-
-- `bypassPermissions` / `--ask-for-approval never` are safe only as far as the nono profile is.
-- `--allow <repoPath>/.git` is read-write (commits need it). The agent can edit `.git/hooks`
-  and `.git/config` of the main clone, which run later outside the sandbox. Treat the main
-  clone as agent-writable, or use a dedicated clone per lane.
-- A failed launch after claim leaves the ticket in progress with a "session ended" comment.
+- **Unverified:** nono's GitHub credential route for `git push`; whether `gh`'s endpoint rules are wide enough; Remote Control endpoints beyond `claude.ai` from inside the sandbox; Linear `issue(id: "ENG-42")` lookup and filter shape; whether trusting `~/agent-ws` covers worktrees below it.
+- **Main clone is agent-writable:** the sandbox grants `<repoPath>/.git` (worktree commits need it), so an agent could plant `.git/hooks` that later run outside the sandbox. Use a dedicated clone per lane.
+- **Token scope:** the GitHub credential comes from `gh auth token` (all your scopes). Prefer a fine-grained token limited to the lane repos.
+- **Safety rests on the sandbox:** agents run with `bypassPermissions` / `--ask-for-approval never`.
+- A launch that fails after claiming leaves the ticket in progress with a "session ended" comment; PR review comments are not fed back into the session yet.

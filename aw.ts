@@ -26,6 +26,7 @@ export interface Lane {
 
 export interface Config {
   host: string;
+  defaultHost: boolean;
   pollIntervalMs: number;
   workspaceRoot: string;
   tmuxSession: string;
@@ -72,6 +73,8 @@ export function parseConfig(raw: any, base: string): Config {
   check(raw && typeof raw === "object", "config must be a JSON object");
   raw ??= {};
   check(str(raw.host) && /^[A-Za-z0-9._-]+$/.test(raw.host), "host: required, [A-Za-z0-9._-]");
+  const defaultHost = raw.defaultHost ?? false;
+  check(typeof defaultHost === "boolean", "defaultHost: boolean");
   const pollIntervalMs = raw.pollIntervalMs ?? 60000;
   check(Number.isInteger(pollIntervalMs) && pollIntervalMs >= 5000, "pollIntervalMs: integer >= 5000");
   const tmuxSession = raw.tmuxSession ?? "aw";
@@ -91,7 +94,7 @@ export function parseConfig(raw: any, base: string): Config {
       maxConcurrent: r.maxConcurrent ?? 2,
       testCmd: r.testCmd,
       prompt: expand(r.prompt ?? join(AW_DIR, "prompts/default.md"), base),
-      readyLabel: r.readyLabel ?? "agent-ready",
+      readyLabel: r.readyLabel ?? "agent",
       inProgressLabel: r.inProgressLabel ?? "in-progress",
       inReviewLabel: r.inReviewLabel ?? "in-review",
       team: r.team,
@@ -119,7 +122,7 @@ export function parseConfig(raw: any, base: string): Config {
   const names = lanes.map((l) => l.name);
   check(new Set(names).size === names.length, "lane names must be unique");
   if (errs.length) throw new Error(`invalid config:\n  ${errs.join("\n  ")}`);
-  return { host: raw.host, pollIntervalMs, workspaceRoot: expand(raw.workspaceRoot ?? "~/agent-ws", base), tmuxSession, lanes };
+  return { host: raw.host, defaultHost, pollIntervalMs, workspaceRoot: expand(raw.workspaceRoot ?? "~/agent-ws", base), tmuxSession, lanes };
 }
 
 async function read(io: Io, argv: string[], cwd?: string) {
@@ -147,8 +150,13 @@ function remove(io: Io, path: string) {
   if (!io.dry) rmSync(path);
 }
 
-export function github(l: Lane, host: string, io: Io): Tracker {
+// Ours if labelled host:<host>, or (defaultHost) if no host: label at all.
+const ours = (t: Ticket, host: string, defaultHost: boolean) =>
+  !!t.labels?.includes(`host:${host}`) || (defaultHost && !t.labels?.some((x) => x.startsWith("host:")));
+
+export function github(l: Lane, host: string, io: Io, defaultHost = false): Tracker {
   const hostLabel = `host:${host}`;
+  const listMine = (labels: string[]) => defaultHost ? list(labels).then((r) => r.filter((t) => ours(t, host, true))) : list([...labels, hostLabel]);
   const list = async (labels: string[]): Promise<Ticket[]> => {
     const argv = ["gh", "issue", "list", "--repo", l.repo, "--state", "open", "--limit", "100"];
     for (const x of labels) argv.push("--label", x);
@@ -157,18 +165,18 @@ export function github(l: Lane, host: string, io: Io): Tracker {
       .filter((i) => Number.isInteger(i.number))
       .map((i) => ({ id: `gh-${i.number}`, ref: String(i.number), title: i.title ?? "", body: i.body ?? "", url: i.url ?? "", labels: (i.labels ?? []).map((x: any) => x.name) }));
   };
-  const edit = (t: Ticket, add: string, rm: string) => write(io, ["gh", "issue", "edit", t.ref, "--repo", l.repo, "--add-label", add, "--remove-label", rm]);
+  const edit = (t: Ticket, add: string, rm?: string) => write(io, ["gh", "issue", "edit", t.ref, "--repo", l.repo, "--add-label", add, ...(rm ? ["--remove-label", rm] : [])]);
   const comment = (t: Ticket, body: string) => write(io, ["gh", "issue", "comment", t.ref, "--repo", l.repo, "--body", body]);
   return {
-    listReady: async () => (await list([l.readyLabel, hostLabel])).filter((t) => !t.labels?.includes(l.inProgressLabel)),
-    listInProgress: () => list([l.inProgressLabel, hostLabel]),
+    listReady: async () => (await listMine([l.readyLabel])).filter((t) => ![l.inProgressLabel, l.inReviewLabel].some((x) => t.labels?.includes(x))),
+    listInProgress: () => listMine([l.readyLabel, l.inProgressLabel]),
     async isDone(id) {
       const n = /^gh-(\d+)$/.exec(id)?.[1];
       if (!n) throw new Error(`not a github ticket id: ${id}`);
       return JSON.parse(await read(io, ["gh", "issue", "view", n, "--repo", l.repo, "--json", "state"])).state === "CLOSED";
     },
     async claim(t) {
-      await edit(t, l.inProgressLabel, l.readyLabel);
+      await edit(t, l.inProgressLabel);
       await comment(t, `picked up on ${host}`);
     },
     async toReview(t, prUrl) {
@@ -179,7 +187,7 @@ export function github(l: Lane, host: string, io: Io): Tracker {
   };
 }
 
-export function linear(l: Lane, host: string, io: Io): Tracker {
+export function linear(l: Lane, host: string, io: Io, defaultHost = false): Tracker {
   const gql = async (query: string, variables: object, mutate = false) => {
     if (mutate) io.log(`${io.dry ? "dry: " : ""}linear ${/\{\s*(\w+)/.exec(query)?.[1]} ${JSON.stringify(variables)}`);
     if (mutate && io.dry) return {};
@@ -207,10 +215,10 @@ export function linear(l: Lane, host: string, io: Io): Tracker {
   };
   const list = async (state: string, labels: string[]): Promise<Ticket[]> => {
     const filter = { team: { key: { eq: l.team } }, state: { name: { eq: state } }, and: labels.map((n) => ({ labels: { some: { name: { eq: n } } } })) };
-    const d = await gql(`query($f: IssueFilter) { issues(filter: $f, first: 100) { nodes { id identifier title description url } } }`, { f: filter });
+    const d = await gql(`query($f: IssueFilter) { issues(filter: $f, first: 100) { nodes { id identifier title description url labels { nodes { name } } } } }`, { f: filter });
     return d.issues.nodes
       .filter((i: any) => /^[A-Z0-9]+-\d+$/.test(i.identifier))
-      .map((i: any) => ({ id: i.identifier, ref: i.id, title: i.title ?? "", body: i.description ?? "", url: i.url ?? "" }));
+      .map((i: any) => ({ id: i.identifier, ref: i.id, title: i.title ?? "", body: i.description ?? "", url: i.url ?? "", labels: (i.labels?.nodes ?? []).map((x: any) => x.name) }));
   };
   const comment = async (t: Ticket, body: string) => {
     await gql(`mutation($i: CommentCreateInput!) { commentCreate(input: $i) { success } }`, { i: { issueId: t.ref, body } }, true);
@@ -219,9 +227,10 @@ export function linear(l: Lane, host: string, io: Io): Tracker {
     await gql(`mutation($id: String!, $s: String!) { issueUpdate(id: $id, input: { stateId: $s }) { success } }`, { id: t.ref, s: await stateId(state) }, true);
   };
   const hostLabel = `host:${host}`;
+  const listMine = (state: string, labels: string[]) => defaultHost ? list(state, labels).then((r) => r.filter((t) => ours(t, host, true))) : list(state, [...labels, hostLabel]);
   return {
-    listReady: () => list(l.todo, [l.readyLabel, hostLabel]),
-    listInProgress: () => list(l.inProgress, [hostLabel]),
+    listReady: () => listMine(l.todo, [l.readyLabel]),
+    listInProgress: () => listMine(l.inProgress, [l.readyLabel]),
     async isDone(id) {
       const d = await gql(`query($id: String!) { issue(id: $id) { state { name } } }`, { id });
       return l.done.includes(d.issue?.state?.name);
@@ -263,7 +272,7 @@ async function windows(cfg: Config, io: Io) {
 
 async function findPr(l: Lane, id: string, io: Io): Promise<string | undefined> {
   const prs: any[] = JSON.parse(await read(io, ["gh", "pr", "list", "--repo", l.repo, "--head", `agent/${id}`, "--state", "all", "--json", "url,state"]));
-  return prs[0]?.url;
+  return prs.find((p) => p.state !== "CLOSED")?.url;
 }
 
 async function start(cfg: Config, l: Lane, t: Ticket, tr: Tracker, io: Io, awDir: string) {
@@ -273,6 +282,7 @@ async function start(cfg: Config, l: Lane, t: Ticket, tr: Tracker, io: Io, awDir
   const promptFile = join(dir, `${t.id}.prompt.md`);
   const script = join(dir, `${t.id}.sh`);
   await tr.claim(t);
+  remove(io, join(dir, `${t.id}.ended`));
   await write(io, ["git", "-C", l.repoPath, "fetch", "origin", l.baseBranch]);
   if (existsSync(wt)) io.log(`reuse ${wt}`);
   else {
@@ -336,8 +346,8 @@ export async function reconcileLane(cfg: Config, l: Lane, tr: Tracker, io: Io, a
   });
 }
 
-export function makeTracker(l: Lane, host: string, io: Io) {
-  return l.tracker === "github" ? github(l, host, io) : linear(l, host, io);
+export function makeTracker(l: Lane, host: string, io: Io, defaultHost = false) {
+  return l.tracker === "github" ? github(l, host, io, defaultHost) : linear(l, host, io, defaultHost);
 }
 
 export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = AW_DIR) {
@@ -346,7 +356,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
   for (const l of cfg.lanes) {
     const lio = { ...io, log: (m: string) => io.log(`[${l.name}] ${m}`) };
     try {
-      await reconcileLane(cfg, l, tracker(l, cfg.host, lio), lio, awDir);
+      await reconcileLane(cfg, l, tracker(l, cfg.host, lio, cfg.defaultHost), lio, awDir);
     } catch (e) {
       lio.log(`lane failed: ${(e as Error).message}`);
     }

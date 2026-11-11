@@ -62,7 +62,7 @@ Injection: when the state is `idle`, run `tmux load-buffer <ID>.inject` → `pas
 
 | # | idea | from | sketch |
 |---|---|---|---|
-| 5 | **Stop / cancel** | Cyrus | Ticket moves to Canceled or `agent-ready` is removed while In Progress → `send-keys C-c` twice, kill the window, keep the worktree (data). Cleanup stays tied to Done, as now. |
+| 5 | **Stop / cancel** | Cyrus | Ticket moves to Canceled while In Progress → `send-keys C-c` twice, kill the window, keep the worktree (data). Cleanup stays tied to Done, as now. |
 | 6 | **Per-repo setup / teardown hook** | Sortie workspace hooks, Cyrus `cyrus-setup.sh`, Open Session `.agents/setup`, Emdash `scripts.setup/teardown` | If `<worktree>/.aw/setup.sh` exists, run it inside the sandbox before the agent starts, with `AW_ID`, `AW_TITLE`, `AW_PORT`. Teardown is time-boxed and non-fatal before `git worktree remove`. |
 | 7 | **Port per session** | Emdash (unconfirmed how) | `AW_PORT = lane.portBase + slot`, where slot is the index of the worktree in the sorted list, so two dev servers don't collide. |
 | 8 | **Stall detection** | Sortie, Symphony | State `working` but its mtime (or tmux `#{window_activity}`) is older than `stallMinutes` (default 30) → one ticket comment with the last pane lines (`capture-pane -p -S -20`). No auto-kill. |

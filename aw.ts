@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants as C, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
@@ -45,10 +45,15 @@ export interface Ticket {
 export interface Tracker {
   listReady(): Promise<Ticket[]>;
   listInProgress(): Promise<Ticket[]>;
+  listInReview(): Promise<Ticket[]>;
   isDone(id: string): Promise<boolean>;
   claim(t: Ticket): Promise<void>;
   toReview(t: Ticket, prUrl: string): Promise<void>;
   comment(t: Ticket, body: string): Promise<void>;
+  /** Creates a sub-ticket of `parent` with no labels; returns its ref ("" in dry-run). */
+  createPhase(parent: Ticket, title: string, body: string): Promise<string>;
+  listPhases(parent: Ticket): Promise<{ ref: string; title: string }[]>;
+  setPhase(ref: string, status: "in-progress" | "done"): Promise<void>;
 }
 
 export type Run = (argv: string[], cwd?: string) => Promise<{ code: number; out: string; err: string }>;
@@ -133,15 +138,26 @@ async function read(io: Io, argv: string[], cwd?: string) {
 
 async function write(io: Io, argv: string[], cwd?: string) {
   io.log(`${io.dry ? "dry: " : ""}${argv.join(" ")}`);
-  if (!io.dry) await read(io, argv, cwd);
+  return io.dry ? "" : read(io, argv, cwd);
 }
 
 function put(io: Io, path: string, data: string, mode = 0o644) {
   io.log(`${io.dry ? "dry: " : ""}write ${path}`);
   if (io.dry) return;
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, data);
-  chmodSync(path, mode);
+  writeFileSync(`${path}.tmp`, data);
+  chmodSync(`${path}.tmp`, mode);
+  renameSync(`${path}.tmp`, path);
+}
+
+// <wt>/.aw is agent-writable: pin it by fd (no symlink) so a swap can't redirect aw outside the worktree. Linux only.
+function inAw<T>(wt: string, fn: (dir: string) => T): T {
+  const d = openSync(join(wt, ".aw"), C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
+  try {
+    return fn(`/proc/self/fd/${d}`);
+  } finally {
+    closeSync(d);
+  }
 }
 
 function remove(io: Io, path: string) {
@@ -176,6 +192,7 @@ export function github(l: Lane, host: string, io: Io, defaultHost = false): Trac
     // Excluded server-side too: claimed tickets keep the ready label and would otherwise fill the 100 limit.
     listReady: async () => (await listMine([l.readyLabel], skip.map((x) => `-label:${JSON.stringify(x)}`).join(" "))).filter((t) => !skip.some((x) => t.labels?.includes(x))),
     listInProgress: () => listMine([l.readyLabel, l.inProgressLabel]),
+    listInReview: () => listMine([l.readyLabel, l.inReviewLabel]),
     async isDone(id) {
       const n = /^gh-(\d+)$/.exec(id)?.[1];
       if (!n) throw new Error(`not a github ticket id: ${id}`);
@@ -190,6 +207,17 @@ export function github(l: Lane, host: string, io: Io, defaultHost = false): Trac
       await comment(t, `PR: ${prUrl}`);
     },
     comment,
+    async createPhase(parent, title, body) {
+      const url = await write(io, ["gh", "issue", "create", "--repo", l.repo, "--parent", parent.ref, "--title", title, "--body", body]);
+      if (io.dry) return "";
+      const n = /\/issues\/(\d+)\s*$/.exec(url)?.[1];
+      if (!n) throw new Error(`gh issue create: unexpected output ${url.slice(0, 200)}`);
+      return n;
+    },
+    listPhases: async (parent) =>
+      (JSON.parse(await read(io, ["gh", "api", `repos/${l.repo}/issues/${parent.ref}/sub_issues?per_page=100`])) as any[]).map((i) => ({ ref: String(i.number), title: i.title })),
+    setPhase: (ref, status) =>
+      write(io, status === "done" ? ["gh", "issue", "close", ref, "--repo", l.repo] : ["gh", "issue", "edit", ref, "--repo", l.repo, "--add-label", l.inProgressLabel]).then(() => {}),
   };
 }
 
@@ -209,12 +237,13 @@ export function linear(l: Lane, host: string, io: Io, defaultHost = false): Trac
     return j.data;
   };
   let states: Map<string, string> | undefined;
+  let teamId = "";
   const stateId = async (name: string) => {
-    states ??= new Map(
-      (await gql(`query($t: String!) { workflowStates(filter: { team: { key: { eq: $t } } }) { nodes { id name } } }`, { t: l.team })).workflowStates.nodes.map(
-        (s: any) => [s.name, s.id],
-      ),
-    );
+    if (!states) {
+      const nodes = (await gql(`query($t: String!) { workflowStates(filter: { team: { key: { eq: $t } } }) { nodes { id name team { id } } } }`, { t: l.team })).workflowStates.nodes;
+      states = new Map(nodes.map((s: any) => [s.name, s.id]));
+      teamId = nodes[0]?.team?.id ?? "";
+    }
     const id = states!.get(name);
     if (!id) throw new Error(`linear state "${name}" not found in team ${l.team}`);
     return id;
@@ -229,27 +258,43 @@ export function linear(l: Lane, host: string, io: Io, defaultHost = false): Trac
   const comment = async (t: Ticket, body: string) => {
     await gql(`mutation($i: CommentCreateInput!) { commentCreate(input: $i) { success } }`, { i: { issueId: t.ref, body } }, true);
   };
-  const move = async (t: Ticket, state: string) => {
-    await gql(`mutation($id: String!, $s: String!) { issueUpdate(id: $id, input: { stateId: $s }) { success } }`, { id: t.ref, s: await stateId(state) }, true);
+  const move = async (ref: string, state: string) => {
+    await gql(`mutation($id: String!, $s: String!) { issueUpdate(id: $id, input: { stateId: $s }) { success } }`, { id: ref, s: await stateId(state) }, true);
   };
   const hostLabel = `host:${host}`;
   const listMine = (state: string, labels: string[]) => defaultHost ? list(state, labels).then((r) => r.filter((t) => ours(t, host, true))) : list(state, [...labels, hostLabel]);
   return {
     listReady: () => listMine(l.todo, [l.readyLabel]),
     listInProgress: () => listMine(l.inProgress, [l.readyLabel]),
+    listInReview: () => listMine(l.inReview, [l.readyLabel]),
     async isDone(id) {
       const d = await gql(`query($id: String!) { issue(id: $id) { state { name } } }`, { id });
       return l.done.includes(d.issue?.state?.name);
     },
     async claim(t) {
-      await move(t, l.inProgress);
+      await move(t.ref, l.inProgress);
       await comment(t, `picked up on ${host}`);
     },
     async toReview(t, prUrl) {
-      await move(t, l.inReview);
+      await move(t.ref, l.inReview);
       await comment(t, `PR: ${prUrl}`);
     },
     comment,
+    async createPhase(parent, title, description) {
+      const todo = await stateId(l.todo);
+      const d = await gql(
+        `mutation($i: IssueCreateInput!) { issueCreate(input: $i) { issue { id } } }`,
+        { i: { teamId, parentId: parent.ref, stateId: todo, title, description } },
+        true,
+      );
+      if (io.dry) return "";
+      const id = d.issueCreate?.issue?.id;
+      if (typeof id !== "string" || !id) throw new Error("linear issueCreate: no id returned");
+      return id;
+    },
+    listPhases: async (parent) =>
+      (await gql(`query($id: String!) { issue(id: $id) { children(first: 100) { nodes { id title } } } }`, { id: parent.ref })).issue.children.nodes.map((i: any) => ({ ref: i.id, title: i.title })),
+    setPhase: (ref, status) => move(ref, status === "done" ? l.done[0]! : l.inProgress),
   };
 }
 
@@ -281,6 +326,84 @@ async function findPr(l: Lane, id: string, io: Io): Promise<string | undefined> 
   return prs.find((p) => p.state !== "CLOSED")?.url;
 }
 
+export type PhaseStatus = "todo" | "in-progress" | "done";
+export interface Phase {
+  key: string;
+  title: string;
+  body: string;
+  status: PhaseStatus;
+}
+const RANK: Record<PhaseStatus, number> = { todo: 0, "in-progress": 1, done: 2 };
+const MAX_PHASES = 20;
+
+/** Validates the agent-written phases file; it is untrusted, so anything off throws. */
+export function parsePhases(raw: string): Phase[] {
+  const a = JSON.parse(raw);
+  if (!Array.isArray(a) || a.length > MAX_PHASES) throw new Error(`phases: must be an array of at most ${MAX_PHASES}`);
+  const keys = new Set<string>();
+  return a.map((p, i) => {
+    const ok =
+      p && typeof p === "object" && Object.keys(p).every((k) => ["key", "title", "body", "status"].includes(k)) &&
+      typeof p.key === "string" && /^[a-z0-9][a-z0-9-]{0,39}$/.test(p.key) && !keys.has(p.key) &&
+      typeof p.title === "string" && p.title.trim().length > 0 && p.title.length <= 120 && !/[\x00-\x1f\x7f]/.test(p.title) &&
+      typeof (p.body ?? "") === "string" && (p.body ?? "").length <= 4000 && !/[\x00-\x08\x0b-\x1f\x7f]/.test(p.body ?? "") &&
+      typeof p.status === "string" && Object.hasOwn(RANK, p.status);
+    if (!ok) throw new Error(`phases[${i}]: invalid`);
+    keys.add(p.key);
+    return { key: p.key, title: p.title.trim(), body: p.body ?? "", status: p.status };
+  });
+}
+
+const MAX_PHASES_BYTES = 64 * 1024;
+
+function readPhases(wt: string): Phase[] | undefined {
+  let raw: string;
+  try {
+    raw = inAw(wt, (d) => {
+      const fd = openSync(`${d}/phases.json`, C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK);
+      try {
+        const buf = Buffer.alloc(MAX_PHASES_BYTES + 1);
+        const n = fstatSync(fd).isFile() ? readSync(fd, buf, 0, buf.length, 0) : buf.length;
+        if (n > MAX_PHASES_BYTES) throw new Error("phases: must be a regular file under 64 KiB");
+        return buf.toString("utf8", 0, n);
+      } finally {
+        closeSync(fd);
+      }
+    });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw e;
+  }
+  return parsePhases(raw);
+}
+
+// `done` is held at in-progress until `final` (PR exists) so Linear's parent auto-close can't end the session mid-work.
+async function syncPhases(t: Ticket, tr: Tracker, io: Io, dir: string, final: boolean) {
+  const phases = readPhases(join(dir, t.id));
+  if (!phases) return;
+  const sidecar = join(dir, `${t.id}.phases.json`);
+  const synced: Record<string, { ref: string; status: PhaseStatus }> = existsSync(sidecar) ? JSON.parse(readFileSync(sidecar, "utf8")) : {};
+  const save = () => put(io, sidecar, JSON.stringify(synced, null, 2));
+  for (const p of phases) {
+    let s = Object.hasOwn(synced, p.key) ? synced[p.key] : undefined;
+    if (!s) {
+      if (Object.keys(synced).length >= MAX_PHASES) throw new Error(`phases: more than ${MAX_PHASES} created for ${t.id}`);
+      const title = `${t.id}: ${p.title}`;
+      const known = new Set(Object.values(synced).map((x) => x.ref));
+      // Adopt a sub-ticket created by a run that died before saving the sidecar instead of duplicating it.
+      const orphan = (await tr.listPhases(t)).find((x) => x.title === title && !known.has(x.ref));
+      s = synced[p.key] = { ref: orphan?.ref ?? (await tr.createPhase(t, title, p.body)), status: "todo" };
+      save();
+    }
+    const want = !final && p.status === "done" ? "in-progress" : p.status;
+    if (RANK[want] < RANK[s.status]) io.log(`phase ${t.id}/${p.key}: ignoring ${s.status} -> ${want}`);
+    if (RANK[want] <= RANK[s.status]) continue;
+    await tr.setPhase(s.ref, want as "in-progress" | "done");
+    s.status = want;
+    save();
+  }
+}
+
 async function start(cfg: Config, l: Lane, t: Ticket, tr: Tracker, io: Io, awDir: string) {
   const dir = join(cfg.workspaceRoot, l.name);
   const wt = join(dir, t.id);
@@ -296,6 +419,12 @@ async function start(cfg: Config, l: Lane, t: Ticket, tr: Tracker, io: Io, awDir
     await write(io, ["git", "-C", l.repoPath, "worktree", "add", wt, ...(hasBranch ? [branch] : ["-b", branch, `origin/${l.baseBranch}`])]);
   }
   const vars = { id: t.id, title: t.title, body: t.body, url: t.url, branch, base: l.baseBranch, testCmd: l.testCmd, repo: l.repo };
+  io.log(`${io.dry ? "dry: " : ""}write ${join(wt, ".aw", ".gitignore")}`);
+  if (!io.dry) {
+    mkdirSync(join(wt, ".aw"), { recursive: true });
+    // Unlink + exclusive create: never write through a symlink or hardlink the agent left there.
+    inAw(wt, (d) => (rmSync(`${d}/.gitignore`, { force: true }), writeFileSync(`${d}/.gitignore`, "*\n", { flag: "wx" })));
+  }
   put(io, promptFile, render(readFileSync(l.prompt, "utf8"), vars));
   put(io, script, launcher(l, t, wt, promptFile, awDir), 0o755);
   await write(io, ["tmux", "new-window", "-d", "-t", `=${cfg.tmuxSession}:`, "-n", `${l.name}/${t.id}`, script]);
@@ -321,7 +450,7 @@ export async function reconcileLane(cfg: Config, l: Lane, tr: Tracker, io: Io, a
       if (w) await write(io, ["tmux", "kill-window", "-t", w]);
       wins.delete(win(id));
       await write(io, ["git", "-C", l.repoPath, "worktree", "remove", join(dir, id)]);
-      for (const ext of [".prompt.md", ".sh", ".ended"]) remove(io, join(dir, id + ext));
+      for (const ext of [".prompt.md", ".sh", ".ended", ".phases.json"]) remove(io, join(dir, id + ext));
     });
 
   let running = [...wins.keys()].filter((n) => n.startsWith(`${l.name}/`)).length;
@@ -343,12 +472,18 @@ export async function reconcileLane(cfg: Config, l: Lane, tr: Tracker, io: Io, a
       await step(`check ${t.id}`, async () => {
         if (!SAFE_ID.test(t.id)) return;
         const pr = await findPr(l, t.id, io);
+        await step(`phases ${t.id}`, () => syncPhases(t, tr, io, dir, !!pr));
         if (pr) return tr.toReview(t, pr);
         const ended = join(dir, `${t.id}.ended`);
         if (wins.has(win(t.id)) || existsSync(ended)) return;
         await tr.comment(t, "session ended without a PR");
         put(io, ended, new Date().toISOString());
       });
+  });
+
+  // Retries a final sync that failed when the parent moved to review; a no-op once in sync.
+  await step("list in-review", async () => {
+    for (const t of await tr.listInReview()) if (SAFE_ID.test(t.id)) await step(`phases ${t.id}`, () => syncPhases(t, tr, io, dir, true));
   });
 }
 

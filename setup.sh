@@ -14,6 +14,7 @@ link ~/.claude/CLAUDE.md ~/.claude-aw/CLAUDE.md
 link ~/.claude/AGENTS.md ~/.claude-aw/AGENTS.md
 link ~/.claude/skills ~/.claude-aw/skills
 link ~/.claude/AGENTS.md ~/.codex-aw/AGENTS.md
+link ~/.claude/skills ~/.codex-aw/skills
 
 if [ ! -e ~/.codex-aw/config.toml ]; then
   cat > ~/.codex-aw/config.toml <<TOML

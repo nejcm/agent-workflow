@@ -15,6 +15,7 @@ Every `pollIntervalMs` (default 60 s), for each *lane* (one repo or Linear team)
 ready ticket ──► In Progress + comment "picked up on <host>"
              ──► git worktree add ~/agent-ws/<lane>/<ID> -b agent/<ID> origin/<base>
              ──► tmux window <lane>/<ID>: nono run … -- claude --remote-control … "<prompt>"
+.aw/phases.json changed  ──► create / update phase sub-tickets
 PR for agent/<ID> exists ──► In Review + comment with the PR link
 session ended, no PR     ──► one comment "session ended without a PR"
 ticket done / closed     ──► kill window, git worktree remove
@@ -25,11 +26,21 @@ ticket done / closed     ──► kill window, git worktree remove
 - The `agent` label is never removed, as a permanent record. On GitHub a ticket is skipped while it has `in-progress` or `in-review`; to re-run one, close its old PR and remove that label.
 - At most `maxConcurrent` sessions per lane. Ticket text only ever goes into the prompt file, never into a shell command.
 
+### Phases
+
+The default prompt has the agent plan with the `agent-orchestration` skill. When it splits the work into phases it writes them to `.aw/phases.json` in its worktree (git-ignored via `.aw/.gitignore`): an array of `{ key, title, body, status }`, status `todo` → `in-progress` → `done`. The agent never talks to the tracker; on every poll, for each of its in-progress and in-review tickets, `aw` mirrors the file:
+
+- a new `key` → a sub-ticket of the parent titled `<ID>: <title>`, with no labels (GitHub: `gh issue create --parent`; Linear: child issue in `Todo`, same team);
+- `in-progress` → the `in-progress` label / `In Progress` state;
+- `done` → shown as in-progress while the parent is In Progress; closed / first `done` state once the PR exists, just before the parent moves to In Review. Closing children mid-session could trip Linear's team setting "auto-close parent when all sub-issues are done" and `aw` would then clean up the running session.
+
+Phases are history, not a gate: the same session works the ticket to the PR, and the parent's lifecycle is unchanged. Sub-tickets lack the `agent` label, so they are never picked up as work, `defaultHost` included. Created refs and synced statuses live in `<workspaceRoot>/<lane>/<ID>.phases.json`, outside the sandbox, written atomically. Before creating a sub-ticket `aw` lists the parent's existing ones and adopts one with the same `<ID>: <title>` that it has no record of, so a crash or lost response between creating and recording doesn't duplicate it. Tickets in review keep syncing every poll, so a failed final sync is retried. The file is untrusted: max 64 KiB and 20 phases, `key` `[a-z0-9-]{1,40}` starting with a letter or digit, one-line title ≤ 120, body ≤ 4000; `.aw` and the file are opened without following symlinks (the directory is pinned by fd via `/proc`, so Linux only) and anything but a regular file is rejected. An invalid file is logged and skipped for that poll, and a status moving back is ignored. Cleanup leaves sub-tickets as they are.
+
 ## Setup
 
 ### 1. Requirements
 
-On `PATH`: `bun`, `git`, `gh` (logged in: `gh auth status`), `tmux`, and `claude` and/or `codex`. For sandboxed lanes, install nono:
+On `PATH`: `bun`, `git`, `gh` (logged in: `gh auth status`), `tmux`, and `claude` and/or `codex`. The default prompt needs the `agent-orchestration` skill installed globally in `~/.claude/skills` (`setup.sh` links that dir into both agent config dirs). For sandboxed lanes, install nono:
 
 ```bash
 curl -fsSL https://nono.sh/install.sh | sh
@@ -171,7 +182,8 @@ The nono profiles have not been run yet; prove the boundaries on a throwaway rep
 
 ## Known gaps
 
-- **Unverified:** nono's GitHub credential route for `git push`; whether `gh`'s endpoint rules are wide enough; Remote Control endpoints beyond `claude.ai` from inside the sandbox; Linear `issue(id: "ENG-42")` lookup and filter shape; whether trusting `~/agent-ws` covers worktrees below it.
+- **Unverified:** nono's GitHub credential route for `git push`; whether `gh`'s endpoint rules are wide enough; Remote Control endpoints beyond `claude.ai` from inside the sandbox; Linear `issue(id: "ENG-42")` lookup and filter shape; whether trusting `~/agent-ws` covers worktrees below it; phase sub-tickets against live services (`gh issue create --parent`, `gh api …/sub_issues`, Linear `children`, Linear `issueCreate` with `parentId`, and that Linear adds no default labels to child issues); Codex picking up skills from `~/.codex-aw/skills`.
+- **Phase side effects:** with Linear's "auto-close parent when all sub-issues are done", the parent can still close when the PR opens (the final sync closes the children); `aw` then moves it to In Review, but if Linear applies the auto-close later the parent ends Done and `aw` cleans up the finished session. Turn that setting off for `aw` teams. Adopting an orphaned sub-ticket matches on title, so two phases with the same title can share one sub-ticket after a crash. On GitHub the sandboxed agent still has `gh` access, so "never touches the tracker" is a prompt rule there, not a boundary.
 - **Main clone is agent-writable:** the sandbox grants `<repoPath>/.git` (worktree commits need it), so an agent could plant `.git/hooks` that later run outside the sandbox. Use a dedicated clone per lane.
 - **Token scope:** the GitHub credential comes from `gh auth token` (all your scopes). Prefer a fine-grained token limited to the lane repos.
 - **Codex under nono runs with `--no-daemon`** (required on Linux), so sandboxed Codex sessions show in the app history but can't be live-steered; with `sandbox: "none"` they can.

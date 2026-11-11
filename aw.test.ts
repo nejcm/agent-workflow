@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Config, type Io, type Ticket, type Tracker, github, launcher, parseConfig, pass, render } from "./aw";
+import { type Config, type Io, type Ticket, type Tracker, github, launcher, linear, parseConfig, pass, render } from "./aw";
 
 let root: string;
 beforeEach(() => (root = mkdtempSync(join(tmpdir(), "aw-test-"))));
@@ -58,6 +58,7 @@ test("config: defaults applied and errors listed", () => {
   })();
   for (const k of ["host:", ".name:", ".tracker:", ".repo:", ".repoPath:", ".agent:", ".sandbox:", ".testCmd:"]) expect(err).toContain(k);
   expect(() => parseConfig({ host: "h", lanes: [lane({ tracker: "linear" })] }, root)).toThrow(/team/);
+  expect(() => parseConfig({ host: "h", defaultHost: "yes", lanes: [lane()] }, root)).toThrow(/defaultHost/);
 });
 
 test("example config validates", () => {
@@ -193,12 +194,13 @@ test("github adapter: defaultHost takes unlabelled tickets, not other hosts'", a
   const lbl = (...n: string[]) => n.map((name) => ({ name }));
   const issues = [
     { number: 1, title: "t", body: "", url: "u", labels: lbl("agent") },
-    { number: 2, title: "t", body: "", url: "u", labels: lbl("agent", "host:box") },
+    { number: 2, title: "t", body: "", url: "u", labels: lbl("agent", "host:BOX") },
     { number: 3, title: "t", body: "", url: "u", labels: lbl("agent", "host:vm") },
   ];
   const { io, cmds } = fakeIo((a) => (a[2] === "list" ? { out: JSON.stringify(issues) } : undefined));
   expect((await github(l, "box", io, true).listReady()).map((t) => t.id)).toEqual(["gh-1", "gh-2"]);
   expect(cmds[0]).not.toContain("host:");
+  expect(cmds[0]).toContain('--search -label:"in-progress" -label:"in-review"');
 });
 
 test("github adapter: in-progress list needs the agent label (defaultHost)", async () => {
@@ -206,4 +208,33 @@ test("github adapter: in-progress list needs the agent label (defaultHost)", asy
   const { io, cmds } = fakeIo((a) => (a[2] === "list" ? { out: "[]" } : undefined));
   await github(l, "box", io, true).listInProgress();
   expect(cmds[0]).toContain("--label agent --label in-progress");
+});
+
+test("linear adapter: defaultHost takes unlabelled tickets, not other hosts'", async () => {
+  const l = config({ tracker: "linear", team: "ENG" }).lanes[0]!;
+  const node = (identifier: string, ...labels: string[]) => ({ id: identifier, identifier, title: "t", description: null, url: "u", labels: { nodes: labels.map((name) => ({ name })) } });
+  const bodies: any[] = [];
+  const { io } = fakeIo();
+  io.fetch = (async (_url: string, init: any) => {
+    bodies.push(JSON.parse(init.body));
+    return Response.json({ data: { issues: { nodes: [node("ENG-1", "agent"), node("ENG-2", "agent", "host:box"), node("ENG-3", "agent", "host:other")] } } });
+  }) as any;
+  const prev = process.env.LINEAR_API_KEY;
+  process.env.LINEAR_API_KEY = "k";
+  try {
+    expect((await linear(l, "box", io, true).listReady()).map((t) => t.id)).toEqual(["ENG-1", "ENG-2"]);
+  } finally {
+    if (prev === undefined) delete process.env.LINEAR_API_KEY;
+    else process.env.LINEAR_API_KEY = prev;
+  }
+  expect(bodies[0].query).toContain("labels { nodes { name } }");
+  expect(JSON.stringify(bodies[0].variables)).not.toContain("host:");
+});
+
+test("pass hands defaultHost to the tracker factory", async () => {
+  const c = parseConfig({ host: "box", defaultHost: true, workspaceRoot: root, lanes: [lane()] }, import.meta.dir);
+  const seen: unknown[] = [];
+  const { io } = fakeIo(noPr);
+  await pass(c, io, (_l, host, _io, defaultHost) => (seen.push(host, defaultHost), fakeTracker({}).tr), "/aw");
+  expect(seen).toEqual(["box", true]);
 });

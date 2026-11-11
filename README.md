@@ -88,10 +88,10 @@ nono profile validate nono/aw-codex.json
 for l in agent in-progress in-review "host:$(hostname -s)"; do gh label create "$l" --repo owner/repo --force; done
 ```
 
-**Linear:** create the labels `agent` and `host:<host>` in the team, make sure it has `Todo`, `In Progress`, `In Review`, `Done` states (or set your names in the config), and export a personal API key:
+**Linear:** create the labels `agent` and `host:<host>` in the team, make sure it has `Todo`, `In Progress`, `In Review`, `Done` states (or set your names in the config), and put a personal API key in `.env` (gitignored, loaded by Bun from the working directory):
 
 ```bash
-export LINEAR_API_KEY=lin_api_...
+cp .env.example .env
 ```
 
 ### 4. Config
@@ -130,7 +130,7 @@ Foreground:
 bun aw.ts run
 ```
 
-Or as a systemd user service (edit `WorkingDirectory` and `PATH` in the unit first; put `LINEAR_API_KEY=…` in `~/.config/aw/env`):
+Or as a systemd user service (edit `WorkingDirectory` and `PATH` in the unit first; the unit's `WorkingDirectory` holds the `.env`):
 
 ```bash
 cp systemd/aw.service ~/.config/systemd/user/ && systemctl --user enable --now aw

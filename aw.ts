@@ -150,25 +150,31 @@ function remove(io: Io, path: string) {
   if (!io.dry) rmSync(path);
 }
 
-// Ours if labelled host:<host>, or (defaultHost) if no host: label at all.
-const ours = (t: Ticket, host: string, defaultHost: boolean) =>
-  !!t.labels?.includes(`host:${host}`) || (defaultHost && !t.labels?.some((x) => x.startsWith("host:")));
+// Ours if labelled host:<host>, or (defaultHost) if no host: label at all. Case-insensitive like GitHub's label filter.
+const ours = (t: Ticket, host: string, defaultHost: boolean) => {
+  const hosts = (t.labels ?? []).map((x) => x.toLowerCase()).filter((x) => x.startsWith("host:"));
+  return hosts.includes(`host:${host.toLowerCase()}`) || (defaultHost && !hosts.length);
+};
 
 export function github(l: Lane, host: string, io: Io, defaultHost = false): Tracker {
   const hostLabel = `host:${host}`;
-  const listMine = (labels: string[]) => defaultHost ? list(labels).then((r) => r.filter((t) => ours(t, host, true))) : list([...labels, hostLabel]);
-  const list = async (labels: string[]): Promise<Ticket[]> => {
+  const listMine = (labels: string[], search?: string) =>
+    defaultHost ? list(labels, search).then((r) => r.filter((t) => ours(t, host, true))) : list([...labels, hostLabel], search);
+  const list = async (labels: string[], search?: string): Promise<Ticket[]> => {
     const argv = ["gh", "issue", "list", "--repo", l.repo, "--state", "open", "--limit", "100"];
     for (const x of labels) argv.push("--label", x);
+    if (search) argv.push("--search", search);
     const issues: any[] = JSON.parse(await read(io, [...argv, "--json", "number,title,body,url,labels"]));
     return issues
       .filter((i) => Number.isInteger(i.number))
       .map((i) => ({ id: `gh-${i.number}`, ref: String(i.number), title: i.title ?? "", body: i.body ?? "", url: i.url ?? "", labels: (i.labels ?? []).map((x: any) => x.name) }));
   };
+  const skip = [l.inProgressLabel, l.inReviewLabel];
   const edit = (t: Ticket, add: string, rm?: string) => write(io, ["gh", "issue", "edit", t.ref, "--repo", l.repo, "--add-label", add, ...(rm ? ["--remove-label", rm] : [])]);
   const comment = (t: Ticket, body: string) => write(io, ["gh", "issue", "comment", t.ref, "--repo", l.repo, "--body", body]);
   return {
-    listReady: async () => (await listMine([l.readyLabel])).filter((t) => ![l.inProgressLabel, l.inReviewLabel].some((x) => t.labels?.includes(x))),
+    // Excluded server-side too: claimed tickets keep the ready label and would otherwise fill the 100 limit.
+    listReady: async () => (await listMine([l.readyLabel], skip.map((x) => `-label:${JSON.stringify(x)}`).join(" "))).filter((t) => !skip.some((x) => t.labels?.includes(x))),
     listInProgress: () => listMine([l.readyLabel, l.inProgressLabel]),
     async isDone(id) {
       const n = /^gh-(\d+)$/.exec(id)?.[1];

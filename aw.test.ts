@@ -48,7 +48,7 @@ test("config: defaults applied and errors listed", () => {
   const c = config();
   expect(c.pollIntervalMs).toBe(60000);
   expect(c.tmuxSession).toBe("aw");
-  expect(c.lanes[0]).toMatchObject({ baseBranch: "main", maxConcurrent: 2, readyLabel: "agent-ready", done: ["Done", "Canceled", "Duplicate"] });
+  expect(c.lanes[0]).toMatchObject({ baseBranch: "main", maxConcurrent: 2, readyLabel: "agent", done: ["Done", "Canceled", "Duplicate"] });
   const err = (() => {
     try {
       parseConfig({ host: "a b", lanes: [{ name: "Bad Name", tracker: "jira", repo: "x", agent: "gpt" }] }, root);
@@ -173,16 +173,37 @@ test("dry-run logs side effects and executes none", async () => {
 test("github adapter: ready requires host label, skips claimed, edits labels", async () => {
   const l = config().lanes[0]!;
   const issues = [
-    { number: 7, title: "t", body: null, url: "u", labels: [{ name: "agent-ready" }] },
-    { number: 8, title: "t", body: "", url: "u", labels: [{ name: "in-progress" }] },
+    { number: 7, title: "t", body: null, url: "u", labels: [{ name: "agent" }] },
+    { number: 8, title: "t", body: "", url: "u", labels: [{ name: "agent" }, { name: "in-progress" }] },
+    { number: 9, title: "t", body: "", url: "u", labels: [{ name: "agent" }, { name: "in-review" }] },
   ];
   const { io, cmds } = fakeIo((a) => (a[2] === "list" ? { out: JSON.stringify(issues) } : a[2] === "view" ? { out: '{"state":"CLOSED"}' } : undefined));
   const tr = github(l, "box", io);
   expect((await tr.listReady()).map((t) => t.id)).toEqual(["gh-7"]);
-  expect(cmds[0]).toContain("--label agent-ready --label host:box");
+  expect(cmds[0]).toContain("--label agent --label host:box");
   await tr.claim((await tr.listReady())[0]!);
-  expect(cmds).toContain("gh issue edit 7 --repo acme/web --add-label in-progress --remove-label agent-ready");
+  expect(cmds).toContain("gh issue edit 7 --repo acme/web --add-label in-progress");
   expect(cmds).toContain("gh issue comment 7 --repo acme/web --body picked up on box");
   expect(await tr.isDone("gh-7")).toBe(true);
   await expect(tr.isDone("ENG-1")).rejects.toThrow();
+});
+
+test("github adapter: defaultHost takes unlabelled tickets, not other hosts'", async () => {
+  const l = config().lanes[0]!;
+  const lbl = (...n: string[]) => n.map((name) => ({ name }));
+  const issues = [
+    { number: 1, title: "t", body: "", url: "u", labels: lbl("agent") },
+    { number: 2, title: "t", body: "", url: "u", labels: lbl("agent", "host:box") },
+    { number: 3, title: "t", body: "", url: "u", labels: lbl("agent", "host:vm") },
+  ];
+  const { io, cmds } = fakeIo((a) => (a[2] === "list" ? { out: JSON.stringify(issues) } : undefined));
+  expect((await github(l, "box", io, true).listReady()).map((t) => t.id)).toEqual(["gh-1", "gh-2"]);
+  expect(cmds[0]).not.toContain("host:");
+});
+
+test("github adapter: in-progress list needs the agent label (defaultHost)", async () => {
+  const l = config().lanes[0]!;
+  const { io, cmds } = fakeIo((a) => (a[2] === "list" ? { out: "[]" } : undefined));
+  await github(l, "box", io, true).listInProgress();
+  expect(cmds[0]).toContain("--label agent --label in-progress");
 });

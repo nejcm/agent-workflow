@@ -1,5 +1,6 @@
 {
   "host": "laptop",
+  "defaultHost": true,
   "pollIntervalMs": 60000,
   "workspaceRoot": "~/agent-ws",
   "tmuxSession": "aw",
@@ -14,7 +15,7 @@
       "sandbox": "nono",
       "maxConcurrent": 2,
       "testCmd": "bun test",
-      "readyLabel": "agent-ready",
+      "readyLabel": "agent",
       "inProgressLabel": "in-progress",
       "inReviewLabel": "in-review"
     },

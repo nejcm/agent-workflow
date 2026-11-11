@@ -45,12 +45,12 @@ Next, by hand:
 3. GitHub labels (per repo):
 MSG
 for repo in "${@:-<owner/repo>}"; do
-  for l in agent-ready in-progress in-review "host:$host"; do
+  for l in agent in-progress in-review "host:$host"; do
     echo "     gh label create '$l' --repo $repo --force"
   done
 done
 cat <<MSG
 
-4. Linear: create labels agent-ready and host:$host; export LINEAR_API_KEY.
+4. Linear: create labels agent and host:$host; export LINEAR_API_KEY.
 5. cp aw.example.json aw.json, edit, then: bun aw.ts once --dry-run
 MSG

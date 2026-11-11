@@ -20,8 +20,9 @@ session ended, no PR     ──► one comment "session ended without a PR"
 ticket done / closed     ──► kill window, git worktree remove
 ```
 
-- **Ready** = GitHub: open + `agent-ready` + `host:<host>` labels. Linear: `Todo` state + the same two labels.
-- The `host:<host>` label decides which machine takes a ticket, so a laptop and a VM never pick up the same one.
+- **Ready** = GitHub: open + `agent` + `host:<host>` labels. Linear: `Todo` state + the same two labels.
+- The `host:<host>` label decides which machine takes a ticket, so a laptop and a VM never pick up the same one. With `"defaultHost": true` this machine also takes tickets with no `host:` label at all, so on a single laptop you only need `agent`.
+- The `agent` label is never removed, as a permanent record. On GitHub a ticket is skipped while it has `in-progress` or `in-review`; to re-run one, close its old PR and remove that label.
 - At most `maxConcurrent` sessions per lane. Ticket text only ever goes into the prompt file, never into a shell command.
 
 ## Setup
@@ -73,10 +74,10 @@ nono profile validate nono/aw-codex.json
 **GitHub:** create the labels in each repo (`setup.sh` prints these with your host name):
 
 ```bash
-for l in agent-ready in-progress in-review "host:$(hostname -s)"; do gh label create "$l" --repo owner/repo --force; done
+for l in agent in-progress in-review "host:$(hostname -s)"; do gh label create "$l" --repo owner/repo --force; done
 ```
 
-**Linear:** create the labels `agent-ready` and `host:<host>` in the team, make sure it has `Todo`, `In Progress`, `In Review`, `Done` states (or set your names in the config), and export a personal API key:
+**Linear:** create the labels `agent` and `host:<host>` in the team, make sure it has `Todo`, `In Progress`, `In Review`, `Done` states (or set your names in the config), and export a personal API key:
 
 ```bash
 export LINEAR_API_KEY=lin_api_...
@@ -98,7 +99,7 @@ Dry run — logs every side effect instead of doing it:
 bun aw.ts once --dry-run
 ```
 
-Then label one test issue `agent-ready` + `host:<host>` and run a single real pass:
+Then label one test issue `agent` + `host:<host>` and run a single real pass:
 
 ```bash
 bun aw.ts once
@@ -135,6 +136,7 @@ Same steps on the VM (Tailscale for access), with `"sandbox": "none"` per lane a
 | key | default | |
 |---|---|---|
 | `host` | required | matches the `host:<host>` label |
+| `defaultHost` | `false` | also take tickets with no `host:` label (not other hosts') |
 | `pollIntervalMs` | `60000` | min 5000 |
 | `workspaceRoot` | `~/agent-ws` | worktrees, prompts, launchers |
 | `tmuxSession` | `aw` | |
@@ -148,7 +150,7 @@ Same steps on the VM (Tailscale for access), with `"sandbox": "none"` per lane a
 | `lanes[].maxConcurrent` | `2` | sessions per lane |
 | `lanes[].testCmd` | required | the agent must pass it before opening a PR |
 | `lanes[].prompt` | `prompts/default.md` | template, relative to the config file |
-| GitHub: `readyLabel`, `inProgressLabel`, `inReviewLabel` | `agent-ready`, `in-progress`, `in-review` | done = issue closed |
+| GitHub: `readyLabel`, `inProgressLabel`, `inReviewLabel` | `agent`, `in-progress`, `in-review` | done = issue closed |
 | Linear: `team`, `todo`, `inProgress`, `inReview`, `done` | —, `Todo`, `In Progress`, `In Review`, `[Done, Canceled, Duplicate]` | `team` is the key, e.g. `ENG` |
 
 Prompt placeholders: `{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{testCmd}} {{repo}}`.

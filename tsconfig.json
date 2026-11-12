@@ -8,5 +8,5 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["aw.ts", "aw.test.ts"]
+  "include": ["aw.ts", "src", "tests"]
 }

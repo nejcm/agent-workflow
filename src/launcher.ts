@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { AGENTS } from "./agents";
 import { repoDir } from "./config";
 import type { Config, Io, Repo, Source, Ticket, Tracker } from "./types";
 import { AW_DIR, inAw, put, remove, write } from "./util";
@@ -13,10 +14,7 @@ export function launcher(l: Repo, t: Ticket, wt: string, promptFile: string, awD
   const nono = l.sandbox === "nono";
   const wrap = nono ? ["nono", "run", "--no-rollback-prompt", "--profile", q(join(awDir, "nono", `aw-${l.agent}.json`)), "--allow", q(wt), "--allow", q(join(l.path, ".git")), "--"] : [];
   const title = t.title.replace(/[^\w .,:()#-]/g, "").slice(0, 60).trim();
-  const [env, cmd] =
-    l.agent === "claude"
-      ? ['export CLAUDE_CONFIG_DIR="$HOME/.claude-aw" CODEX_HOME="$HOME/.codex-aw" CLAUDE_CODE_TMPDIR="$HOME/.claude-aw/tmp"; mkdir -p "$CLAUDE_CODE_TMPDIR"', ["claude", "--remote-control", q(`${t.id}: ${title}`), "--permission-mode", "bypassPermissions", prompt]]
-      : ['export CODEX_HOME="$HOME/.codex-aw"', ["codex", ...(nono ? ["--no-daemon"] : []), "--sandbox", "danger-full-access", "--ask-for-approval", "never", "-C", q(wt), prompt]];
+  const [env, cmd] = AGENTS[l.agent].launch(q(wt), q(`${t.id}: ${title}`), prompt, nono);
   return `#!/usr/bin/env bash\ncd ${q(wt)} || exit 1\nunset LINEAR_API_KEY\n${env}\nexec ${[...wrap, ...cmd].join(" ")}\n`;
 }
 

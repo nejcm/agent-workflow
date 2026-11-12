@@ -95,7 +95,8 @@ const PR_FIELDS = "number,url,state,isDraft,isCrossRepository,baseRefName,mergea
 
 // aw merges, pinned to the head it judged (the agent's token could too; see README). "Not merged" is commented once per head SHA.
 export async function autoMerge(cfg: Config, r: Repo, t: Ticket, tr: Tracker, io: Io) {
-  const url = await findPr(r.key, t.id, io);
+  const dir = repoDir(cfg, r.key);
+  const url = await findPr(r.key, t.id, io, dir);
   const n = url && /\/pull\/(\d+)$/.exec(url)?.[1];
   if (!n) return;
   const view = async (fields = PR_FIELDS) => JSON.parse(await read(io, ["gh", "pr", "view", n, "--repo", r.key, "--json", fields]));
@@ -104,7 +105,6 @@ export async function autoMerge(cfg: Config, r: Repo, t: Ticket, tr: Tracker, io
     return !!name && sameRepo(name, r.key);
   };
   const pr = await view();
-  const dir = repoDir(cfg, r.key);
   const f = join(dir, `${t.id}.merge`);
   const held = existsSync(f) && readFileSync(f, "utf8") === pr.headRefOid;
   if (!held) remove(io, f);

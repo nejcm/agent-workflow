@@ -1,9 +1,8 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
+import { rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { dur, rows, table } from "../src/status";
-import { claudeDir } from "../src/tail";
-import { config, phase, root, useTempRoot, worktree, writePhases } from "./helpers";
+import { claudeFile, config, phase, root, useTempRoot, worktree, writePhases } from "./helpers";
 
 useTempRoot();
 
@@ -20,11 +19,9 @@ test("running, ended and orphan rows with runtime, idle, phases and PR", () => {
   at(join(dir(), "PER-2.sh"), T - 600);
   at(join(dir(), "PER-2.ended"), T - 60);
   writeFileSync(join(dir(), "PER-2.merge"), "abc123");
-  const cd = claudeDir(root, join(dir(), "PER-1"));
-  mkdirSync(cd, { recursive: true });
-  const prLink = JSON.stringify({ type: "pr-link", sessionId: "s", prNumber: 4, prUrl: "https://github.com/acme/web/pull/4", prRepository: "acme/web", timestamp: "2026-11-12T05:43:59.187Z" });
-  writeFileSync(join(cd, "s.jsonl"), `{"type":"user","cwd":"${join(dir(), "PER-1")}"}\n${prLink}\n{"type":"assistant"}\n`);
-  utimesSync(join(cd, "s.jsonl"), T - 30, T - 30);
+  const s = claudeFile(join(dir(), "PER-1"), "s.jsonl", '{"type":"assistant"}');
+  writeFileSync(join(dir(), "PER-1.pr"), "https://github.com/acme/web/pull/4");
+  utimesSync(s, T - 30, T - 30);
   writePhases("PER-1", [phase("a", "done", { title: "Fix ‮ bidi" }), phase("b", "in-progress"), phase("c", "todo")]);
 
   const rs = rows(config(), wins("PER-1", "PER-2"), root, T * 1000);
@@ -43,33 +40,36 @@ test("running, ended and orphan rows with runtime, idle, phases and PR", () => {
   expect(table([])).toBe("no worktrees");
 });
 
-test("a forged pr-link url is ignored", () => {
+test("the PR comes from <ID>.pr for any agent; a forged or oversize one is ignored", () => {
   writePhases("PER-5", "[not json");
-  const cd = claudeDir(root, join(dir(), "PER-5"));
-  mkdirSync(cd, { recursive: true });
-  writeFileSync(join(cd, "s.jsonl"), JSON.stringify({ type: "pr-link", cwd: join(dir(), "PER-5"), prUrl: "https://evil.example/\x1b[2J" }));
-  const [r5] = rows(config(), new Map(), root, T * 1000);
-  expect(r5!.pr).toBeNull();
+  for (const id of ["PER-4", "PER-6", "PER-8"]) worktree(id);
+  writeFileSync(join(dir(), "PER-4.pr"), "https://github.com/acme/web/pull/4\n");
+  writeFileSync(join(dir(), "PER-5.pr"), "https://evil.example/\x1b[2J");
+  writeFileSync(join(dir(), "PER-6.pr"), `https://github.com/acme/web/pull/6${" ".repeat(600)}`);
+  symlinkSync(join(dir(), "PER-4.pr"), join(dir(), "PER-8.pr"));
+  const c = config({ repos: [{ name: "acme/web", path: join(root, "src-web"), agent: "codex" }] });
+  expect(rows(c, new Map(), root, T * 1000).map((r) => [r.id, r.agent, r.pr])).toEqual([
+    ["PER-4", "codex", "https://github.com/acme/web/pull/4"],
+    ["PER-5", "codex", null],
+    ["PER-6", "codex", null],
+    ["PER-8", "codex", null],
+  ]);
 });
 
 test("dur", () => {
   expect([null, 5_000, 125_000, 3_725_000, 90_000_000].map(dur)).toEqual(["-", "5s", "2m", "1h02m", "1d1h"]);
 });
 
-test("status skips a FIFO transcript, scans only the tail for the PR, and sanitizes table cells", () => {
+test("status skips a FIFO transcript and sanitizes table cells", () => {
   worktree("PER-6");
   worktree("PER-7");
-  const fifo = join(claudeDir(root, join(dir(), "PER-6")), "s.jsonl");
-  mkdirSync(join(fifo, ".."), { recursive: true });
+  const fifo = claudeFile(join(dir(), "PER-6"), "s.jsonl");
+  rmSync(fifo);
   expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0);
-  const cd = claudeDir(root, join(dir(), "PER-7"));
-  mkdirSync(cd, { recursive: true });
-  const link = JSON.stringify({ type: "pr-link", cwd: join(dir(), "PER-7"), prUrl: "https://github.com/acme/web/pull/7" });
-  writeFileSync(join(cd, "s.jsonl"), `${link}\n${JSON.stringify({ type: "user", pad: "x".repeat(300 * 1024) })}\n`);
+  const s7 = claudeFile(join(dir(), "PER-7"), "s.jsonl");
   const [r6, r7] = rows(config(), new Map(), root, T * 1000);
   expect(r6!.transcript).toBeNull();
-  expect(r7!.transcript).toBe(join(cd, "s.jsonl"));
-  expect(r7!.pr).toBeNull();
+  expect(r7!.transcript).toBe(s7);
   const t = table([{ ...r7!, repo: "\x1b]52;c;ZXZpbA==\x07acme/web" }]);
   expect(t).not.toMatch(/[\x00-\x09\x0b-\x1f]/);
 });

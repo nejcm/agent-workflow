@@ -183,7 +183,7 @@ cp systemd/aw.service ~/.config/systemd/user/ && systemctl --user enable --now a
 Claude Code and Codex can't import a session while it runs, so observe it instead of resuming it:
 
 - `tmux attach -t aw`: the live terminals, one window per ticket (`owner/name/ID`). Detach with `Ctrl-b d`; typing there steers the agent.
-- `bun aw.ts status [--json]`: per worktree its agent, session (`running`: tmux window and no `<ID>.ended`; `ended`; `orphan`: neither), live state (see [Live state](#live-state)), runtime (since `<ID>.sh` was written; JSON `startedAt`, ms epoch), idle (since the transcript was last written), phases `done/total` (`.aw/phases.json`, else the `<ID>.phases.json` sidecar; JSON also lists up to 20 as `phases.items` with `key`, `title` and `status`, titled by key from the sidecar) and PR (from Claude's `pr-link` transcript entry; `held` when `<ID>.merge` records a "not auto-merged" decision). No network calls.
+- `bun aw.ts status [--json]`: per worktree its agent, session (`running`: tmux window and no `<ID>.ended`; `ended`; `orphan`: neither), live state (see [Live state](#live-state)), runtime (since `<ID>.sh` was written; JSON `startedAt`, ms epoch), idle (since the transcript was last written), phases `done/total` (`.aw/phases.json`, else the `<ID>.phases.json` sidecar; JSON also lists up to 20 as `phases.items` with `key`, `title` and `status`, titled by key from the sidecar) and PR (from `<ID>.pr`, which `aw` writes whenever a poll finds the ticket's PR: in progress, and in review via the auto-merge lookup, or once when `autoMerge` is `off`; must be a `https://github.com/<owner>/<name>/pull/<n>` URL in a regular file under 512 bytes; `held` when `<ID>.merge` records a "not auto-merged" decision). No network calls.
 - `bun aw.ts watch [--interval 2] [--plain]`: a terminal dashboard (OpenTUI), refreshed every `--interval` seconds (default 2, min 1); see below. `--plain`, or stdin/stdout not a TTY, redraws the `status` output instead until `Ctrl-C`; if OpenTUI cannot start, or `@opentui/core` is not in a `node_modules` above `src/`, it prints one line to stderr and does the same (that check assumes Bun's default auto-install, which only downloads when no `node_modules` exists; `install.auto = "force"` in a bunfig still fetches).
 - `bun aw.ts tail <ID | owner/repo/ID> [-n 20] [--no-follow]`: read-only, one line per assistant message, tool call (name, cut to 6 columns with `…`, and a short argument) or tool error from the newest transcript (last 256 KiB), then follows it. Claude's are `~/.claude-aw/projects/<cwd, non-alphanumerics as ->/*.jsonl`; Codex's are `~/.codex-aw/sessions/**/*.jsonl`; both are matched by the `cwd` they record, and symlinks and non-regular files are skipped. An ID with transcripts in several repos is refused; name the repo. Tool output is never printed; text is capped and stripped of control and escape characters. Works for a finished ticket whose worktree is gone, as long as its transcript is.
 
@@ -266,14 +266,15 @@ CLI: `bun aw.ts <run|once|status|watch|tail> [--dry-run] [--json] [--interval s]
 - `src/github.ts`, `src/linear.ts`: tracker adapters, priority, canonical-repo lookup.
 - `src/phases.ts`: `.aw/phases.json` validation and sub-ticket sync.
 - `src/merge.ts`: `.aw/merge.json`, critical paths, the merge decision and auto-merge.
+- `src/agents.ts`: the Claude and Codex adapters: launch env and command, config dirs and transcript files, live state (`claude agents --json`, bounded run and parse; the Codex hook state file).
 - `src/launcher.ts`: clone, worktree, prompt and launcher script, tmux window.
 - `src/pass.ts`: one poll: cleanup, start ready tickets by priority, reconcile.
-- `src/status.ts`: per-worktree status rows, the `claude agents` snapshot and the table.
+- `src/status.ts`: per-worktree status rows, the live-state snapshot and the table.
 - `src/dash.ts`: the `watch` dashboard (OpenTUI): keys, selection, attach/open and the renderer wiring.
 - `src/dash-view.ts`: the dashboard's pure view: palette, layout, cards, progress bars, detail and transcript rows, every screen line as styled spans.
-- `src/state.ts`: live state: `claude agents --json` (bounded run and parse), the Codex hook state file, precedence.
-- `src/tail.ts`: transcript lookup, line condensing and control-char stripping, `tail`.
-- `src/util.ts`: logged/dry-run-aware command and file helpers, the pinned `.aw` reader.
+- `src/state.ts`: live state types and precedence.
+- `src/tail.ts`: transcript lookup by recorded cwd, line condensing, `tail`.
+- `src/util.ts`: logged/dry-run-aware command and file helpers, the pinned `.aw` reader, control-char stripping.
 - `scripts/codex-hooks.sh`: installs or refreshes aw's Codex state hooks in a `config.toml`.
 - `tests/`: one file per module (launcher tests are in `pass.test.ts`); shared fakes in `tests/helpers.ts`.
 

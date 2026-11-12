@@ -1,5 +1,9 @@
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Io, Source, Ticket, Tracker } from "./types";
-import { ours, read, write } from "./util";
+import { ours, put, read, write } from "./util";
+
+export const PR_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/;
 
 export const canonCache = new Map<string, { name: string; at: number }>();
 const CANON_TTL_MS = 5 * 60_000;
@@ -86,7 +90,11 @@ export function github(l: Source, host: string, io: Io, defaultHost: boolean, re
   };
 }
 
-export async function findPr(repo: string, id: string, io: Io): Promise<string | undefined> {
+/** The ticket's open or merged PR, recorded in `<dir>/<ID>.pr` for status. */
+export async function findPr(repo: string, id: string, io: Io, dir: string): Promise<string | undefined> {
   const prs: any[] = JSON.parse(await read(io, ["gh", "pr", "list", "--repo", repo, "--head", `agent/${id}`, "--state", "all", "--json", "url,state"]));
-  return prs.find((p) => p.state !== "CLOSED")?.url;
+  const url: string | undefined = prs.find((p) => p.state !== "CLOSED")?.url;
+  const f = join(dir, `${id}.pr`);
+  if (url && (!existsSync(f) || readFileSync(f, "utf8") !== url)) put(io, f, url);
+  return url;
 }

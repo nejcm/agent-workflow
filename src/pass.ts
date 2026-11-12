@@ -99,7 +99,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
         if (!key) return;
         const w = { ...t, repo: key };
         const dir = repoDir(cfg, key);
-        const pr = await findPr(key, t.id, io);
+        const pr = await findPr(key, t.id, io, dir);
         await step(io, `phases ${t.id}`, () => syncPhases(w, tr, io, dir, !!pr));
         if (pr) return tr.toReview(w, pr);
         const ended = join(dir, `${t.id}.ended`);
@@ -115,8 +115,11 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
       const key = SAFE_ID.test(t.id) && workRepo(cfg, s, t);
       if (!key) continue;
       const w = { ...t, repo: key };
-      await step(io, `phases ${t.id}`, () => syncPhases(w, tr, io, repoDir(cfg, key), true));
+      const dir = repoDir(cfg, key);
+      await step(io, `phases ${t.id}`, () => syncPhases(w, tr, io, dir, true));
       if (cfg.repos[key]!.autoMerge !== "off") await step(io, `merge ${t.id}`, () => autoMerge(cfg, cfg.repos[key]!, w, tr, io));
+      // autoMerge looks the PR up anyway; otherwise once, for tickets that reached review before aw recorded `.pr`.
+      else if (!existsSync(join(dir, `${t.id}.pr`))) await step(io, `pr ${t.id}`, () => findPr(key, t.id, io, dir));
     }
   });
 }
@@ -155,7 +158,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
         if (w) await write(x.io, ["tmux", "kill-window", "-t", w]);
         wins.delete(winName(r.key, id));
         await write(x.io, ["git", "-C", r.path, "worktree", "remove", join(dir, id)]);
-        for (const ext of [".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".source"]) remove(x.io, join(dir, id + ext));
+        for (const ext of [".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".source"]) remove(x.io, join(dir, id + ext));
       });
     }
   }

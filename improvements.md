@@ -26,8 +26,8 @@ Injection: when the state is `idle`, run `tmux load-buffer <ID>.inject` → `pas
   - Claude: `UserPromptSubmit` → `working`; `Stop` → `idle`; `Notification` (`permission_prompt`, `idle_prompt`) → `needs-input`; `SessionEnd` → `ended`.
   - Codex: `notify = ["sh","-c",…]` (`agent-turn-complete` only) → `idle`. Codex hooks (`Stop`, `PermissionRequest`, `SessionEnd`) are richer, but non-managed hooks may need trust in `/hooks` before they run unattended.
   - Bonus: `Stop` stdin carries `last_assistant_message`. Save it, and post it in the "ended without a PR" comment instead of a bare notice.
-- **Cost:** about 25 lines across the launcher, `setup.sh` and `reconcileLane`.
-- **Risk:** the `$AW_STATE` path must be writable inside nono, so grant the single file (or `workspaceRoot/<lane>`) rather than widening the profile.
+- **Cost:** about 25 lines across the launcher, `setup.sh` and `reconcileSource`.
+- **Risk:** the `$AW_STATE` path must be writable inside nono, so grant the single file (or `workspaceRoot/<owner>/<name>`) rather than widening the profile.
 
 ### 2. PR review + CI feedback loop
 *Sortie (CI feedback, review loop), Cyrus (CYPACK-842: acts on "changes requested"), Open SWE `/baby-sit`, Orchestrator.inc, Optio.*
@@ -35,7 +35,7 @@ Injection: when the state is `idle`, run `tmux load-buffer <ID>.inject` → `pas
 - **Why:** this is the largest manual step left.
 - **Sketch:** for each In Review ticket, every tick:
   1. Run `gh pr view <branch> --json reviewDecision,reviews,comments,statusCheckRollup,mergeStateStatus,headRefOid`, plus `gh api repos/{repo}/pulls/{n}/comments` for line comments.
-  2. Collect new items after the cursor, **from allowlisted authors only** (`lanes[].feedbackAuthors`, default = the repo owner). A stranger's PR comment is a prompt-injection vector.
+  2. Collect new items after the cursor, **from allowlisted authors only** (`repos[].feedbackAuthors`, default = the repo owner). A stranger's PR comment is a prompt-injection vector.
   3. Failing checks: append `gh run view <id> --log-failed | tail -n 80`, but only once per head SHA. `mergeStateStatus == DIRTY`: add "rebase on origin/<base> and resolve conflicts".
   4. Debounce: act only when the newest item is older than ~2 min, so a reviewer who is still typing gets batched.
   5. If state is `idle`, write `feedback-<n>.md`, inject it, move the ticket back to In Progress and bump the round counter. If the window is gone, go to 3 (re-engage) with the feedback as the prompt.
@@ -64,11 +64,11 @@ Injection: when the state is `idle`, run `tmux load-buffer <ID>.inject` → `pas
 |---|---|---|---|
 | 5 | **Stop / cancel** | Cyrus | Ticket moves to Canceled while In Progress → `send-keys C-c` twice, kill the window, keep the worktree (data). Cleanup stays tied to Done, as now. |
 | 6 | **Per-repo setup / teardown hook** | Sortie workspace hooks, Cyrus `cyrus-setup.sh`, Open Session `.agents/setup`, Emdash `scripts.setup/teardown` | If `<worktree>/.aw/setup.sh` exists, run it inside the sandbox before the agent starts, with `AW_ID`, `AW_TITLE`, `AW_PORT`. Teardown is time-boxed and non-fatal before `git worktree remove`. |
-| 7 | **Port per session** | Emdash (unconfirmed how) | `AW_PORT = lane.portBase + slot`, where slot is the index of the worktree in the sorted list, so two dev servers don't collide. |
+| 7 | **Port per session** | Emdash (unconfirmed how) | `AW_PORT = repo.portBase + slot`, where slot is the index of the worktree in the sorted list, so two dev servers don't collide. |
 | 8 | **Stall detection** | Sortie, Symphony | State `working` but its mtime (or tmux `#{window_activity}`) is older than `stallMinutes` (default 30) → one ticket comment with the last pane lines (`capture-pane -p -S -20`). No auto-kill. |
 | 9 | **`needs-human` park label** | Sortie, Symphony | One label used by 2, 3, 8 and `needs-input`. aw skips parked tickets until a human removes the label. Linear: a label, not a state. |
 | 10 | **Handoff status file** | Sortie (handoff evidence) | The prompt tells the agent to write `.aw/status` = `pr` \| `blocked: <why>` \| `no-change-needed: <why>`. aw posts the reason and parks the ticket instead of "ended without a PR". It also rejects a PR with an empty diff. |
-| 11 | **Label-driven modes** | Cyrus `labelPrompts` | `agent:codex`, `agent:claude`, `model:<id>`, `mode:plan` labels override the lane's agent, model or prompt (`prompts/<mode>.md`). Labels are tracker-controlled; the values are validated against an allowlist, never interpolated. |
+| 11 | **Label-driven modes** | Cyrus `labelPrompts` | `agent:codex`, `agent:claude`, `model:<id>`, `mode:plan` labels override the repo's agent, model or prompt (`prompts/<mode>.md`). Labels are tracker-controlled; the values are validated against an allowlist, never interpolated. |
 | 12 | **Merge → Done** | Sortie | GitHub closes linked issues already (`Closes #n`). For Linear, check `gh pr view --json mergedAt`; if merged, set Done and the existing cleanup runs. |
 | 13 | **Linear: attach session + PR links** | Linear API (`attachmentLinkURL`) | On pick-up, attach the claude.ai/code session URL (if it can be read from the pane) and the PR, so the ticket links straight to the live session. A personal key is enough; no OAuth app is needed. |
 | 14 | **Attachments / images** | Cyrus | Download ticket image URLs into `<worktree>/.aw/attachments/` and list them in the prompt. GitHub user-attachment URLs need the token; skip private ones on failure. |
@@ -79,15 +79,15 @@ Injection: when the state is `idle`, run `tmux load-buffer <ID>.inject` → `pas
 - **Blocked-by** (Cyrus, Linear relations): skip tickets whose blocking issue isn't Done.
 - **`notifyUrl`** (Sortie): POST `{id, event, url}` on pick-up, review, park, ended. One `fetch`, so ntfy.sh or Slack works with no dependency.
 - **`aw status --json`** and **`aw check`** (Sortie CLI): check validates config, `gh auth`, labels, nono profiles and the Linear key; it's the first-run checklist as code.
-- **Retention sweep** (Symphony): remove worktrees of lanes that no longer exist in `aw.json` (after a dry-run listing).
+- **Retention sweep** (Symphony): remove worktrees of repos or sources that no longer exist in `aw.json` (after a dry-run listing).
 - **`allowedCreators`** (Cyrus): only take tickets created by allowlisted users. Matters once others can label issues.
 - **Verification evidence** (Ramp, Open-Inspect): a prompt-template line asking for test output and screenshots in the PR body. No code.
 
 ## Hardening (from README "Known gaps")
 
-- Dedicated clone per lane, so `.git/hooks` planted by an agent never run outside the sandbox. `setup.sh` could create it.
-- Fine-grained PAT per lane instead of `gh auth token`.
-- Make `~/.codex-aw` read-only in `nono/aw-claude.json`, writable only for what Codex needs (sessions, `*.sqlite`, log, tmp, cache, `auth.json*`), so a Claude lane can't rewrite `config.toml` for later Codex lanes. Untested whether Codex runs that way.
+- Clones are `aw`-managed (`reposRoot`), but one clone is shared by every session on that repo and by `aw`'s own `git` calls, so `.git/hooks` planted by one agent still run outside its sandbox. Next step: a clone per session, or `core.hooksPath=/dev/null` on `aw`'s git calls.
+- Fine-grained PAT per repo instead of `gh auth token`.
+- Make `~/.codex-aw` read-only in `nono/aw-claude.json`, writable only for what Codex needs (sessions, `*.sqlite`, log, tmp, cache, `auth.json*`), so a Claude session can't rewrite `config.toml` for later Codex sessions. Untested whether Codex runs that way.
 - Every injection path above (2, 4, 11, 14) adds tracker text that a session reads. Keep the rule that this text goes only into files, and author allowlists default to the owner.
 
 ## Do not copy

@@ -4,7 +4,8 @@ Bugs, gaps, accepted trade-offs and unverified assumptions in the current code. 
 
 ## Bugs
 
-- **A failed launch strands the ticket.** `launch` claims the ticket (`tr.claim`) before `git fetch`, the worktree and the tmux window (`src/launcher.ts`). If any of those fail, the ticket stays In Progress with a "session ended without a PR" comment and needs a human. Fix: claim last, or move the ticket back to ready on failure.
+- **A half-done claim strands the ticket.** `claim` sets the state or label, then comments (`src/github.ts`, `src/linear.ts`). If the comment fails, `start` kills the window but the ticket is already In Progress, so the next poll comments "session ended without a PR" and it needs a human.
+- **A failed claim can leave an unclaimed session running.** If `claim` fails and killing the window also fails (`src/launcher.ts`), the session keeps running, its ticket stays ready and is skipped while the window exists, and the window is not counted against the concurrency limits for the rest of that poll. The log names the window; kill it by hand.
 - **`aw tail` keeps following the first transcript.** With follow on, `tail` pins the path it opened (`src/tail.ts`), so a session that starts a new transcript file (restart, `/clear`) goes quiet. The dashboard already switches to the newer file.
 - **`held` can outlive a head change for one poll.** If the PR head moves between `autoMerge`'s two `gh pr view` calls, the old `<ID>.merge` stays until the next poll clears it.
 - **`<ID>.pr` is never refreshed with `autoMerge: off`.** An In Review ticket looks up its PR only while `<ID>.pr` is missing, so a replaced PR keeps showing the old link.

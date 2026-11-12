@@ -14,9 +14,9 @@ Move a GitHub issue or Linear ticket to **ready**, and `aw` starts a Claude Code
 ```
 ready ticket ──► resolve its repo; not in `repos`, or GitHub redirects it ──► one comment, skipped
              ──► gh repo clone <owner>/<name> ~/agent-repos/<owner>/<name>.tmp-…, then rename   (first time only)
-             ──► In Progress + comment "aw: picked up on <host>"
              ──► git worktree add ~/agent-ws/<owner>/<name>/<ID> -b agent/<ID> origin/<base>
              ──► tmux window <owner>/<name>/<ID>: nono run … -- claude --remote-control … "<prompt>"
+             ──► In Progress + comment "aw: picked up on <host>"   (fails ──► window killed, retried next poll)
 .aw/phases.json changed  ──► create / update phase sub-tickets
 .aw/question.md changed  ──► comment "aw: question from agent: …"; first reply by a feedbackAuthor ──► .aw/answer.md + one pasted line, once idle
 PR for agent/<ID> exists ──► In Review + comment with the PR link

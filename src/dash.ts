@@ -6,7 +6,8 @@ import { repoDir } from "./config";
 import { type Line, type Pane, palette, screen, sortRows } from "./dash-view";
 import { PR_URL } from "./github";
 import { type Row, snapshot } from "./status";
-import { clean, reader } from "./tail";
+import { reader } from "./tail";
+import { clean } from "./util";
 import type { Config, Io } from "./types";
 
 export type Action = "down" | "up" | "first" | "last" | "focus" | "tab" | "back" | "attach" | "open" | "refresh" | "help" | "quit";

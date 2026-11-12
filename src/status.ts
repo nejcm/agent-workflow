@@ -1,14 +1,16 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { AGENTS, type Lookup } from "./agents";
 import { repoDir } from "./config";
 import { PR_URL } from "./github";
 import { windows, winName } from "./launcher";
 import { worktreeIds } from "./pass";
 import { phaseProgress, type PhaseStatus } from "./phases";
-import { claudeAgents, codexState, type Live, parseAgents, resolve, type State } from "./state";
-import { clean, mtime, transcript, withFile } from "./tail";
+import { resolve, type State } from "./state";
+import { mtime, transcript, withFile } from "./tail";
 import type { Config, Io, Repo } from "./types";
+import { clean } from "./util";
 
 export interface Row {
   id: string;
@@ -49,8 +51,8 @@ function savedPr(dir: string, id: string) {
   return url && PR_URL.test(url) ? url : null;
 }
 
-/** `claude`: live Claude sessions by cwd (undefined: feed unavailable, so Claude rows are unknown). */
-export function rows(cfg: Config, wins: Map<string, string>, home = homedir(), now = Date.now(), claude?: Map<string, Live>): Row[] {
+/** `feeds`: each agent's state lookup (missing: that agent's running rows are unknown). */
+export function rows(cfg: Config, wins: Map<string, string>, home = homedir(), now = Date.now(), feeds: Partial<Record<Repo["agent"], Lookup>> = {}): Row[] {
   return Object.values(cfg.repos).flatMap((r) => {
     const dir = repoDir(cfg, r.key);
     return worktreeIds(dir).sort().map((id): Row => {
@@ -60,7 +62,7 @@ export function rows(cfg: Config, wins: Map<string, string>, home = homedir(), n
       const t = transcript(wt, r.agent, home, started) ?? null;
       const session = ended !== undefined ? "ended" : wins.has(winName(r.key, id)) ? "running" : "orphan";
       const idleMs = t ? Math.max(0, now - (mtime(t) ?? now)) : null;
-      const live = resolve(session, r.agent === "claude" ? claude?.get(wt) : codexState(wt, started ?? 0, now), idleMs, now);
+      const live = resolve(session, feeds[r.agent]?.(wt, started ?? 0, now), idleMs, now);
       return {
         id,
         repo: r.key,
@@ -82,11 +84,11 @@ export function rows(cfg: Config, wins: Map<string, string>, home = homedir(), n
   });
 }
 
-/** Rows with live state; asks `claude agents` (once) only while a Claude repo has a tmux window. */
-export async function snapshot(cfg: Config, io: Io, agents = claudeAgents, home = homedir(), now = Date.now()) {
+/** Rows with live state; prepares an agent's feed (once) only while one of its repos has a tmux window. */
+export async function snapshot(cfg: Config, io: Io, home = homedir(), now = Date.now(), prepare = (a: Repo["agent"]) => AGENTS[a].live(home)) {
   const wins = await windows(cfg, io);
-  const claudeUp = [...wins.keys()].some((w) => cfg.repos[w.slice(0, w.lastIndexOf("/"))]?.agent === "claude");
-  return rows(cfg, wins, home, now, claudeUp ? parseAgents(await agents(home)) : undefined);
+  const up = new Set([...wins.keys()].flatMap((w) => cfg.repos[w.slice(0, w.lastIndexOf("/"))]?.agent ?? []));
+  return rows(cfg, wins, home, now, Object.fromEntries(await Promise.all([...up].map(async (a) => [a, await prepare(a)]))));
 }
 
 export const dur = (ms: number | null) => {

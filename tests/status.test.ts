@@ -1,9 +1,8 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { dur, rows, table } from "../src/status";
-import { claudeDir } from "../src/tail";
-import { config, phase, root, useTempRoot, worktree, writePhases } from "./helpers";
+import { claudeFile, config, phase, root, useTempRoot, worktree, writePhases } from "./helpers";
 
 useTempRoot();
 
@@ -20,11 +19,9 @@ test("running, ended and orphan rows with runtime, idle, phases and PR", () => {
   at(join(dir(), "PER-2.sh"), T - 600);
   at(join(dir(), "PER-2.ended"), T - 60);
   writeFileSync(join(dir(), "PER-2.merge"), "abc123");
-  const cd = claudeDir(root, join(dir(), "PER-1"));
-  mkdirSync(cd, { recursive: true });
-  writeFileSync(join(cd, "s.jsonl"), `{"type":"user","cwd":"${join(dir(), "PER-1")}"}\n{"type":"assistant"}\n`);
+  const s = claudeFile(join(dir(), "PER-1"), "s.jsonl", '{"type":"assistant"}');
   writeFileSync(join(dir(), "PER-1.pr"), "https://github.com/acme/web/pull/4");
-  utimesSync(join(cd, "s.jsonl"), T - 30, T - 30);
+  utimesSync(s, T - 30, T - 30);
   writePhases("PER-1", [phase("a", "done", { title: "Fix ‮ bidi" }), phase("b", "in-progress"), phase("c", "todo")]);
 
   const rs = rows(config(), wins("PER-1", "PER-2"), root, T * 1000);
@@ -66,15 +63,13 @@ test("dur", () => {
 test("status skips a FIFO transcript and sanitizes table cells", () => {
   worktree("PER-6");
   worktree("PER-7");
-  const fifo = join(claudeDir(root, join(dir(), "PER-6")), "s.jsonl");
-  mkdirSync(join(fifo, ".."), { recursive: true });
+  const fifo = claudeFile(join(dir(), "PER-6"), "s.jsonl");
+  rmSync(fifo);
   expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0);
-  const cd = claudeDir(root, join(dir(), "PER-7"));
-  mkdirSync(cd, { recursive: true });
-  writeFileSync(join(cd, "s.jsonl"), `${JSON.stringify({ type: "user", cwd: join(dir(), "PER-7") })}\n`);
+  const s7 = claudeFile(join(dir(), "PER-7"), "s.jsonl");
   const [r6, r7] = rows(config(), new Map(), root, T * 1000);
   expect(r6!.transcript).toBeNull();
-  expect(r7!.transcript).toBe(join(cd, "s.jsonl"));
+  expect(r7!.transcript).toBe(s7);
   const t = table([{ ...r7!, repo: "\x1b]52;c;ZXZpbA==\x07acme/web" }]);
   expect(t).not.toMatch(/[\x00-\x09\x0b-\x1f]/);
 });

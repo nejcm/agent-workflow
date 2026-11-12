@@ -266,14 +266,15 @@ CLI: `bun aw.ts <run|once|status|watch|tail> [--dry-run] [--json] [--interval s]
 - `src/github.ts`, `src/linear.ts`: tracker adapters, priority, canonical-repo lookup.
 - `src/phases.ts`: `.aw/phases.json` validation and sub-ticket sync.
 - `src/merge.ts`: `.aw/merge.json`, critical paths, the merge decision and auto-merge.
+- `src/agents.ts`: the Claude and Codex adapters: launch env and command, config dirs and transcript files, live state (`claude agents --json`, bounded run and parse; the Codex hook state file).
 - `src/launcher.ts`: clone, worktree, prompt and launcher script, tmux window.
 - `src/pass.ts`: one poll: cleanup, start ready tickets by priority, reconcile.
-- `src/status.ts`: per-worktree status rows, the `claude agents` snapshot and the table.
+- `src/status.ts`: per-worktree status rows, the live-state snapshot and the table.
 - `src/dash.ts`: the `watch` dashboard (OpenTUI): keys, selection, attach/open and the renderer wiring.
 - `src/dash-view.ts`: the dashboard's pure view: palette, layout, cards, progress bars, detail and transcript rows, every screen line as styled spans.
-- `src/state.ts`: live state: `claude agents --json` (bounded run and parse), the Codex hook state file, precedence.
-- `src/tail.ts`: transcript lookup, line condensing and control-char stripping, `tail`.
-- `src/util.ts`: logged/dry-run-aware command and file helpers, the pinned `.aw` reader.
+- `src/state.ts`: live state types and precedence.
+- `src/tail.ts`: transcript lookup by recorded cwd, line condensing, `tail`.
+- `src/util.ts`: logged/dry-run-aware command and file helpers, the pinned `.aw` reader, control-char stripping.
 - `scripts/codex-hooks.sh`: installs or refreshes aw's Codex state hooks in a `config.toml`.
 - `tests/`: one file per module (launcher tests are in `pass.test.ts`); shared fakes in `tests/helpers.ts`.
 

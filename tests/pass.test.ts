@@ -32,6 +32,25 @@ test("launcher: codex without sandbox keeps the daemon", () => {
   expect(launcher(web(config({ repos: [{ name: "acme/web", agent: "codex" }] })), ticket(2), "/w", "/p", "/aw")).toContain("-- codex --no-daemon ");
 });
 
+test("launcher scripts are byte-for-byte stable for each agent, with and without nono", () => {
+  const head = String.raw`#!/usr/bin/env bash
+cd '/ws/it'\''s' || exit 1
+unset LINEAR_API_KEY
+`;
+  const claudeEnv = String.raw`export CLAUDE_CONFIG_DIR="$HOME/.claude-aw" CODEX_HOME="$HOME/.codex-aw" CLAUDE_CODE_TMPDIR="$HOME/.claude-aw/tmp"; mkdir -p "$CLAUDE_CODE_TMPDIR"
+`;
+  const nono = (a: string) => String.raw`nono run --no-rollback-prompt --profile '/aw/nono/aw-${a}.json' --allow '/ws/it'\''s' --allow '/src/web/.git' -- `;
+  const claude = String.raw`claude --remote-control 'gh-3: Its (x)' --permission-mode bypassPermissions "$(cat '/ws/p.md')"
+`;
+  const codex = (d: string) => String.raw`codex ${d}--sandbox danger-full-access --ask-for-approval never -C '/ws/it'\''s' "$(cat '/ws/p.md')"
+`;
+  const s = (agent: string, sandbox: string) => launcher(web(config({ repos: [{ name: "acme/web", path: "/src/web", agent, sandbox }] })), { ...ticket(3), title: "It's $(x) ✓" }, "/ws/it's", "/ws/p.md", "/aw");
+  expect(s("claude", "nono")).toBe(`${head}${claudeEnv}exec ${nono("claude")}${claude}`);
+  expect(s("claude", "none")).toBe(`${head}${claudeEnv}exec ${claude}`);
+  expect(s("codex", "nono")).toBe(`${head}export CODEX_HOME="$HOME/.codex-aw"\nexec ${nono("codex")}${codex("--no-daemon ")}`);
+  expect(s("codex", "none")).toBe(`${head}export CODEX_HOME="$HOME/.codex-aw"\nexec ${codex("")}`);
+});
+
 test("starts ready tickets up to maxConcurrent", async () => {
   const c = config({ maxConcurrent: 2 });
   const { tr, calls } = fakeTracker({ ready: [ticket(1), ticket(2), ticket(3)] });

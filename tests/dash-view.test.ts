@@ -1,13 +1,14 @@
 import { expect, test } from "bun:test";
 import { bar, card, chips, clip, counts, cut, detail, event, layout, type Line, type Model, palette, screen, scroll, segments, sortRows, tailView, wrap } from "../src/dash-view";
 import { statusRow as row } from "./helpers";
+import type { PhaseItem } from "../src/status";
 
 const C = palette({});
 const M = palette({ NO_COLOR: "1" });
 const text = (l: Line) => l.map((x) => x.t).join("");
 const W = (l: Line) => Bun.stringWidth(text(l));
 const ctx = { now: Date.UTC(2026, 10, 12, 12), wt: "/home/u/agent-ws/acme/web/PER-1", home: "/home/u" };
-const items = (n: number, done: number) => Array.from({ length: n }, (_, i) => ({ key: `p${i}`, title: `Phase ${i}`, status: i < done ? "done" : i === done ? "in-progress" : "todo" }));
+const items = (n: number, done: number): PhaseItem[] => Array.from({ length: n }, (_, i) => ({ key: `p${i}`, title: `Phase ${i}`, status: i < done ? "done" : i === done ? "in-progress" : "todo" }));
 const model = (over: Partial<Model> = {}): Model => ({ rs: [row()], sel: 0, pane: "list", max: false, help: false, back: 0, host: "box", at: "12:00:00", every: 2, msg: "", events: [], empty: "no transcript yet", ctx, ...over });
 
 test("NO_COLOR drops every colour", () => {

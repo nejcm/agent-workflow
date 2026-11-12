@@ -1,10 +1,10 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { repoDir } from "./config";
 import { windows, winName } from "./launcher";
 import { worktreeIds } from "./pass";
-import { readPhases } from "./phases";
+import { phaseProgress, type PhaseStatus } from "./phases";
 import { claudeAgents, codexState, type Live, parseAgents, resolve, type State } from "./state";
 import { clean, lines, mtime, transcript, withFile } from "./tail";
 import type { Config, Io, Repo } from "./types";
@@ -33,22 +33,14 @@ export interface Row {
 export interface PhaseItem {
   key: string;
   title: string;
-  status: string;
+  status: PhaseStatus;
 }
 
 export const PR_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/;
 
-// The sidecar keeps no titles, so its phases are listed by key.
-function progress(wt: string, sidecar: string) {
-  try {
-    const live = readPhases(wt)?.map(({ key, title, status }) => ({ key, title, status }));
-    const all = live ?? (existsSync(sidecar) ? Object.entries(JSON.parse(readFileSync(sidecar, "utf8")) as Record<string, { status: string }>).map(([key, s]) => ({ key, title: key, status: String(s?.status) })) : undefined);
-    if (!all) return null;
-    const items = all.slice(0, 20).map((p) => ({ key: clean(p.key, 40), title: clean(p.title, 120), status: clean(p.status, 20) }));
-    return { done: all.filter((p) => p.status === "done").length, total: all.length, items };
-  } catch {
-    return null;
-  }
+function progress(dir: string, id: string) {
+  const p = phaseProgress(dir, id);
+  return p && { ...p, items: p.items.map((x) => ({ key: clean(x.key, 40), title: clean(x.title, 120), status: x.status })) };
 }
 
 // shortcut: scans only the transcript's last 256 KiB, so an older pr-link is missed; remember it per file if that bites.
@@ -88,7 +80,7 @@ export function rows(cfg: Config, wins: Map<string, string>, home = homedir(), n
         startedAt: started ?? null,
         runtimeMs: started === undefined ? null : Math.max(0, (ended ?? now) - started),
         idleMs,
-        phases: progress(wt, join(dir, `${id}.phases.json`)),
+        phases: progress(dir, id),
         pr: t ? prOf(t) : null,
         merge: existsSync(join(dir, `${id}.merge`)) ? "held" : null,
         transcript: t,

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync
 import { join } from "node:path";
 import { github } from "../src/github";
 import { pass } from "../src/pass";
-import { parsePhases } from "../src/phases";
+import { parsePhases, phaseProgress } from "../src/phases";
 import { config, fakeIo, fakeTracker, noPr, phase, root, ticket, useTempRoot, windowsOut, worktree, writePhases } from "./helpers";
 
 useTempRoot();
@@ -136,4 +136,23 @@ test("phases: dry-run creates nothing and writes no sidecar", async () => {
   expect(logs.some((l) => l.includes("dry: gh issue create --repo acme/web --parent 1"))).toBe(true);
   expect(logs.some((l) => l.includes("dry: gh issue close  --repo acme/web"))).toBe(true);
   expect(existsSync(join(root, "acme/web/gh-1.phases.json"))).toBe(false);
+});
+
+test("phaseProgress: agent file, sidecar fallback titled by key, invalid either way is null", () => {
+  const dir = join(root, "acme/web");
+  const side = (id: string, v: unknown) => writeFileSync(join(dir, `${id}.phases.json`), JSON.stringify(v));
+  writePhases("gh-1", [phase("a", "done"), phase("b", "todo")]);
+  side("gh-1", { z: { ref: "1", status: "done" } });
+  expect(phaseProgress(dir, "gh-1")).toEqual({ done: 1, total: 2, items: [{ key: "a", title: "Do a", status: "done" }, { key: "b", title: "Do b", status: "todo" }] });
+  worktree("gh-2");
+  expect(phaseProgress(dir, "gh-2")).toBeNull();
+  side("gh-2", { a: { ref: "1", status: "done" }, b: { ref: "2", status: "in-progress" } });
+  expect(phaseProgress(dir, "gh-2")).toEqual({ done: 1, total: 2, items: [{ key: "a", title: "a", status: "done" }, { key: "b", title: "b", status: "in-progress" }] });
+  for (const bad of [{ a: { ref: "1" } }, { a: { ref: "1", status: "blocked" } }, { "Bad key": { ref: "1", status: "done" } }, [], null]) {
+    side("gh-2", bad);
+    expect(phaseProgress(dir, "gh-2")).toBeNull();
+  }
+  writePhases("gh-3", "[not json");
+  side("gh-3", { a: { ref: "1", status: "done" } });
+  expect(phaseProgress(dir, "gh-3")).toBeNull();
 });

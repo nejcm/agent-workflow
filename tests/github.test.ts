@@ -20,7 +20,7 @@ test("github adapter: ready requires host label, skips claimed, edits labels", a
   expect(cmds[1]).toContain("--label agent --label host:box");
   await tr.claim((await tr.listReady())[0]!);
   expect(cmds).toContain("gh issue edit 7 --repo acme/web --add-label in-progress");
-  expect(cmds).toContain("gh issue comment 7 --repo acme/web --body picked up on box");
+  expect(cmds).toContain("gh issue comment 7 --repo acme/web --body aw: picked up on box");
   expect(await tr.isDone("gh-7", "acme/web")).toBe(true);
   expect(cmds).toContain("gh issue view 7 --repo acme/web --json state");
   await expect(tr.isDone("ENG-1", "acme/web")).rejects.toThrow();
@@ -33,7 +33,7 @@ test("github adapter: polls every repo of the source and tags tickets with it", 
   expect(tickets.map((t) => `${t.repo}#${t.id}`)).toEqual(["acme/web#gh-12", "acme/api#gh-12"]);
   expect(cmds.filter((x) => x.startsWith("gh issue list")).map((x) => x.split(" ")[4])).toEqual(["acme/web", "acme/api"]);
   await github(c.sources[0]!, "box", io, false, []).comment(tickets[1]!, "hi");
-  expect(cmds.at(-1)).toBe("gh issue comment 12 --repo acme/api --body hi");
+  expect(cmds.at(-1)).toBe("gh issue comment 12 --repo acme/api --body aw: hi");
 });
 
 test("github adapter: defaultHost takes unlabelled tickets, not other hosts'", async () => {

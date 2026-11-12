@@ -1,4 +1,4 @@
-import { chmodSync, closeSync, constants as C, existsSync, fstatSync, mkdirSync, openSync, readSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants as C, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Io, Ticket } from "./types";
 
@@ -56,14 +56,14 @@ export const ours = (t: Ticket, host: string, defaultHost: boolean) => {
   return hosts.includes(`host:${host.toLowerCase()}`) || (defaultHost && !hosts.length);
 };
 
-export function readAw(wt: string, name: string, max: number): string | undefined {
+export function readAw(wt: string, file: string, max: number): string | undefined {
   try {
     return inAw(wt, (d) => {
-      const fd = openSync(`${d}/${name}.json`, C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK);
+      const fd = openSync(`${d}/${file}`, C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK);
       try {
         const buf = Buffer.alloc(max + 1);
         const n = fstatSync(fd).isFile() ? readSync(fd, buf, 0, buf.length, 0) : buf.length;
-        if (n > max) throw new Error(`${name}: must be a regular file under ${max / 1024} KiB`);
+        if (n > max) throw new Error(`${file}: must be a regular file under ${max / 1024} KiB`);
         return buf.toString("utf8", 0, n);
       } finally {
         closeSync(fd);
@@ -72,5 +72,34 @@ export function readAw(wt: string, name: string, max: number): string | undefine
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") return;
     throw e;
+  }
+}
+
+// A fresh temp file renamed over the target: a hard link there is replaced, never written through.
+export function writeAw(wt: string, file: string, text: string) {
+  inAw(wt, (d) => {
+    const target = `${d}/${file}`;
+    const tmp = `${d}/.${file}.tmp`;
+    const st = lstatSync(target, { throwIfNoEntry: false });
+    if (st && !st.isFile()) throw new Error(`${file}: must be a regular file`);
+    rmSync(tmp, { force: true });
+    const fd = openSync(tmp, C.O_WRONLY | C.O_CREAT | C.O_EXCL | C.O_NOFOLLOW, 0o644);
+    try {
+      writeFileSync(fd, text);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(tmp, target);
+  });
+}
+
+export function removeAw(wt: string, file: string) {
+  try {
+    inAw(wt, (d) => {
+      if (!lstatSync(`${d}/${file}`).isFile()) throw new Error(`${file}: must be a regular file`);
+      unlinkSync(`${d}/${file}`);
+    });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
 }

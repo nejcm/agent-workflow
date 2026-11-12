@@ -66,3 +66,11 @@ test("config: explicit null autoMerge or criticalPaths is rejected, not defaulte
   expect(() => config({ repos: [{ name: "acme/web", criticalPaths: null }] })).toThrow("criticalPaths: array of non-empty glob strings");
   expect(() => config({ repos: [{ name: "acme/web", autoMerge: null }] })).toThrow(`autoMerge: "off" | "intelligent" | "all"`);
 });
+
+test("config: feedbackAuthors defaults to [], from defaults or per repo, validated", () => {
+  expect(web(config()).feedbackAuthors).toEqual([]);
+  const c = config({ defaults: { agent: "claude", sandbox: "nono", testCmd: "t", feedbackAuthors: ["lead"] }, repos: ["acme/web", { name: "acme/api", feedbackAuthors: ["octocat", "a@b.c"] }] });
+  expect(web(c).feedbackAuthors).toEqual(["lead"]);
+  expect(c.repos["acme/api"]!.feedbackAuthors).toEqual(["octocat", "a@b.c"]);
+  for (const v of ["octocat", [1], [""], {}]) expect(() => config({ repos: [{ name: "acme/web", feedbackAuthors: v }] })).toThrow(`repos[0] (acme/web).feedbackAuthors: array of non-empty strings`);
+});

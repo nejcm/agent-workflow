@@ -131,3 +131,15 @@ test("linear repo: project label and label groups", () => {
   expect(linearTicket(node([], [{ name: "acme/web", parent: { name: "other" } }])).repo).toBeUndefined();
   expect(LINEAR_ISSUES).toContain("project { description content labels { nodes { name parent { name } } } }");
 });
+
+test("linear adapter: every comment starts with aw:", async () => {
+  const l = config({ sources: [src({ tracker: "linear", team: "ENG" })] }).sources[0]!;
+  const bodies: any[] = [];
+  const { io } = fakeIo();
+  io.fetch = (async (_url: string, init: any) => {
+    bodies.push(JSON.parse(init.body));
+    return Response.json({ data: { commentCreate: { success: true } } });
+  }) as any;
+  await withLinearKey(() => linear(l, "box", io, false).comment({ id: "ENG-1", ref: "u-1", title: "", body: "", url: "" }, "hi"));
+  expect(bodies[0].variables.i).toEqual({ issueId: "u-1", body: "aw: hi" });
+});

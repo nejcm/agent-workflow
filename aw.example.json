@@ -10,7 +10,8 @@
     "baseBranch": "main",
     "agent": "claude",
     "sandbox": "nono",
-    "testCmd": "bun test"
+    "testCmd": "bun test",
+    "autoMerge": "off"
   },
   "repos": [
     "acme/web",
@@ -19,7 +20,9 @@
       "agent": "codex",
       "testCmd": "make test",
       "maxConcurrent": 1,
-      "prompt": "prompts/default.md"
+      "prompt": "prompts/default.md",
+      "autoMerge": "intelligent",
+      "criticalPaths": ["src/billing/**"]
     }
   ],
   "sources": [

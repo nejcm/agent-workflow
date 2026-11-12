@@ -95,7 +95,7 @@ test("render is single-pass so ticket text cannot expand placeholders", () => {
 test("launcher: claude under nono, ticket text never in shell", () => {
   const c = config();
   const s = launcher(c.lanes[0]!, { ...ticket(1), title: "x'; rm -rf / $(id) `id`" }, "/ws/web/gh-1", "/ws/web/gh-1.prompt.md", "/aw");
-  expect(s).toContain("export CLAUDE_CONFIG_DIR=\"$HOME/.claude-aw\"");
+  expect(s).toContain("export CLAUDE_CONFIG_DIR=\"$HOME/.claude-aw\" CODEX_HOME=\"$HOME/.codex-aw\"");
   expect(s).toContain("exec nono run --profile '/aw/nono/aw-claude.json' --allow '/ws/web/gh-1' --allow '/src/web/.git' -- claude --remote-control");
   expect(s).toContain(`--permission-mode bypassPermissions "$(cat '/ws/web/gh-1.prompt.md')"`);
   expect(s).not.toMatch(/\$\(id\)|`id`|'; rm/);

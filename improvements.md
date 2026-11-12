@@ -87,6 +87,7 @@ Injection: when the state is `idle`, run `tmux load-buffer <ID>.inject` → `pas
 
 - Dedicated clone per lane, so `.git/hooks` planted by an agent never run outside the sandbox. `setup.sh` could create it.
 - Fine-grained PAT per lane instead of `gh auth token`.
+- Make `~/.codex-aw` read-only in `nono/aw-claude.json`, writable only for what Codex needs (sessions, `*.sqlite`, log, tmp, cache, `auth.json*`), so a Claude lane can't rewrite `config.toml` for later Codex lanes. Untested whether Codex runs that way.
 - Every injection path above (2, 4, 11, 14) adds tracker text that a session reads. Keep the rule that this text goes only into files, and author allowlists default to the owner.
 
 ## Do not copy

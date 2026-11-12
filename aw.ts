@@ -309,7 +309,7 @@ export function launcher(l: Lane, t: Ticket, wt: string, promptFile: string, awD
   const title = t.title.replace(/[^\w .,:()#-]/g, "").slice(0, 60).trim();
   const [env, cmd] =
     l.agent === "claude"
-      ? ['export CLAUDE_CONFIG_DIR="$HOME/.claude-aw"', ["claude", "--remote-control", q(`${t.id}: ${title}`), "--permission-mode", "bypassPermissions", prompt]]
+      ? ['export CLAUDE_CONFIG_DIR="$HOME/.claude-aw" CODEX_HOME="$HOME/.codex-aw"', ["claude", "--remote-control", q(`${t.id}: ${title}`), "--permission-mode", "bypassPermissions", prompt]]
       : ['export CODEX_HOME="$HOME/.codex-aw"', ["codex", ...(nono ? ["--no-daemon"] : []), "--sandbox", "danger-full-access", "--ask-for-approval", "never", "-C", q(wt), prompt]];
   return `#!/usr/bin/env bash\ncd ${q(wt)} || exit 1\nunset LINEAR_API_KEY\n${env}\nexec ${[...wrap, ...cmd].join(" ")}\n`;
 }

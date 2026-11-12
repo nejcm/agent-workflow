@@ -4,7 +4,7 @@ Move a GitHub issue or Linear ticket to **ready**, and `aw` starts a Claude Code
 
 - **Watch and steer from anywhere.** Claude sessions run with Remote Control, so they show up on claude.ai/code and the Claude mobile app. Codex sessions are interactive, so they land in the ChatGPT/Codex app history. Locally: `tmux attach -t aw`, or open the worktree in your editor.
 - **Runs where you are.** Directly on your machine (sandboxed by nono), or on a VM (`sandbox: "none"`, the VM is the boundary). Same code, same config.
-- **No moving parts to babysit.** One Bun + TypeScript file, no dependencies, no database: state is the tracker, the tmux windows and the worktrees. Polls instead of webhooks, so nothing listens on a port.
+- **No moving parts to babysit.** A small Bun + TypeScript program, no database: state is the tracker, the tmux windows and the worktrees. Polls instead of webhooks, so nothing listens on a port.
 - **Your setup, read-only.** Agents use your `CLAUDE.md`, `AGENTS.md` and skills, but log in through their own config dirs (`~/.claude-aw`, `~/.codex-aw`) and cannot modify yours.
 
 ## How it works
@@ -27,7 +27,7 @@ ticket done / closed     ──► kill window, git worktree remove
 - **Ready** = GitHub: open + `agent` + `host:<host>` labels. Linear: `Todo` state + the same two labels.
 - The `host:<host>` label decides which machine takes a ticket, so a laptop and a VM never pick up the same one. With `"defaultHost": true` this machine also takes tickets with no `host:` label at all, so on a single laptop you only need `agent`. Set it on one machine only: claiming is not atomic, so two default hosts can both start the same unlabelled ticket.
 - The `agent` label is never removed, as a permanent record. On GitHub a ticket is skipped while it has `in-progress` or `in-review`; to re-run one, close its old PR and remove that label.
-- Ready tickets from all sources are started most urgent first: Linear's priority (Urgent, High, Medium, Low), or on GitHub an optional label `priority:urgent|high|medium|low` (case-insensitive; the most urgent wins if several). No priority goes last; ties keep source order from `aw.json`, then tracker order. `setup.sh` does not create the `priority:*` labels.
+- Ready tickets from all sources are started most urgent first: Linear's priority (Urgent, High, Medium, Low), or on GitHub an optional label `priority:urgent|high|medium|low` (case-insensitive; the most urgent wins if several). No priority goes last; ties keep source order from `aw.json`, then tracker order. `scripts/setup.sh` does not create the `priority:*` labels.
 - At most `maxConcurrent` sessions in total, and at most `repos[].maxConcurrent` per repo. Ticket text only ever goes into the prompt file, never into a shell command.
 
 ### Which repo a ticket goes to
@@ -64,17 +64,17 @@ Pending checks or unknown mergeability wait silently. A merge is `gh pr merge <n
 ## Quick start
 
 ```bash
-./setup.sh owner/repo   # config dirs, nono, labels, .env and aw.json from the examples, login check
-./run.sh                # preflight (dry run), then poll in the foreground
+scripts/setup.sh owner/repo   # config dirs, nono, labels, .env and aw.json from the examples, login check
+scripts/run.sh                # preflight (dry run), then poll in the foreground
 ```
 
-The same are available as `bun run setup owner/repo`, `bun run start`, `bun run once`, `bun run service`, `bun run status`, `bun run dry`, `bun run test` and `bun run typecheck` (`tsc --noEmit`; run `bun install` once for the dev-only `typescript` and `bun-types`). Edit `repos` and `sources` in `aw.json` before running. `./run.sh once` does a single pass; `./run.sh service` installs and starts the systemd user unit. The agent logins and the workspace trust dialog below are interactive; `setup.sh` prints what is still missing.
+The same are available as `bun run setup owner/repo`, `bun run start`, `bun run once`, `bun run service`, `bun run status`, `bun run watch`, `bun run dry`, `bun run test` and `bun run typecheck` (`tsc --noEmit`; run `bun install` once for the dev-only `typescript` and `bun-types`). Edit `repos` and `sources` in `aw.json` before running. `scripts/run.sh once` does a single pass; `scripts/run.sh service` installs and starts the systemd user unit. The agent logins and the workspace trust dialog below are interactive; `scripts/setup.sh` prints what is still missing.
 
 ## Setup
 
 ### 1. Requirements
 
-On `PATH`: `bun`, `git`, `gh` (logged in: `gh auth status`), `tmux`, and `claude` and/or `codex`. The default prompt needs the `agent-orchestration` skill installed globally in `~/.claude/skills` (`setup.sh` links that dir into both agent config dirs). For sandboxed repos, install nono:
+On `PATH`: `bun`, `git`, `gh` (logged in: `gh auth status`), `tmux`, and `claude` and/or `codex`. The default prompt needs the `agent-orchestration` skill installed globally in `~/.claude/skills` (`scripts/setup.sh` links that dir into both agent config dirs). For sandboxed repos, install nono:
 
 ```bash
 curl -fsSL https://nono.sh/install.sh | sh
@@ -83,7 +83,7 @@ curl -fsSL https://nono.sh/install.sh | sh
 ### 2. Agent config dirs and logins
 
 ```bash
-./setup.sh owner/repo
+scripts/setup.sh owner/repo
 ```
 
 Idempotent, never overwrites real files. It creates `~/.claude-aw` and `~/.codex-aw` (symlinking your `CLAUDE.md`, `AGENTS.md`, skills), creates `~/agent-ws` and `~/agent-repos`, and creates the labels for each repo you pass. Then log the agents in — these are separate from your own sessions:
@@ -116,7 +116,7 @@ nono profile validate nono/aw-codex.json
 
 ### 3. Tracker
 
-**GitHub:** create the labels in each repo (`setup.sh` prints these with your host name):
+**GitHub:** create the labels in each repo (`scripts/setup.sh` prints these with your host name):
 
 ```bash
 for l in agent in-progress in-review "host:$(hostname -s)"; do gh label create "$l" --repo owner/repo --force; done
@@ -174,7 +174,16 @@ Or as a systemd user service (edit `WorkingDirectory` and `PATH` in the unit fir
 cp systemd/aw.service ~/.config/systemd/user/ && systemctl --user enable --now aw
 ```
 
-`KillMode=process` keeps agent sessions alive when the service restarts. `bun aw.ts status` lists sources, repos (with their `autoMerge`), running windows and worktrees.
+`KillMode=process` keeps agent sessions alive when the service restarts. `bun aw.ts status` lists sources, repos (with their `autoMerge`) and one row per worktree; see [Watching sessions](#watching-sessions).
+
+### Watching sessions
+
+Claude Code and Codex can't import a session while it runs, so observe it instead of resuming it:
+
+- `tmux attach -t aw`: the live terminals, one window per ticket (`owner/name/ID`). Detach with `Ctrl-b d`; typing there steers the agent.
+- `bun aw.ts status [--json]`: per worktree its agent, state (`running`: tmux window and no `<ID>.ended`; `ended`; `orphan`: neither), runtime (since `<ID>.sh` was written), idle (since the transcript was last written), phases `done/total` (`.aw/phases.json`, else the `<ID>.phases.json` sidecar) and PR (from Claude's `pr-link` transcript entry; `held` when `<ID>.merge` records a "not auto-merged" decision). No network calls.
+- `bun aw.ts watch [--interval 5]`: the same, redrawn every few seconds until `Ctrl-C`.
+- `bun aw.ts tail <ID | owner/repo/ID> [-n 20] [--no-follow]`: read-only, one line per assistant message, tool call (name and a short argument) or tool error from the newest transcript (last 256 KiB), then follows it. Claude's are `~/.claude-aw/projects/<cwd, non-alphanumerics as ->/*.jsonl`; Codex's are `~/.codex-aw/sessions/**/*.jsonl`; both are matched by the `cwd` they record, and symlinks and non-regular files are skipped. An ID with transcripts in several repos is refused; name the repo. Tool output is never printed; text is capped and stripped of control and escape characters. Works for a finished ticket whose worktree is gone, as long as its transcript is.
 
 ### On a VM
 
@@ -216,11 +225,11 @@ Prompt placeholders: `{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{te
 
 `lanes` is rejected at startup. Move each lane's `repo` into `repos` (with its `repoPath` as `path`, plus `baseBranch`, `agent`, `sandbox`, `testCmd`, `maxConcurrent`, `prompt`) and keep the rest (`name`, `tracker`, labels, Linear states and `team`) as a source; Linear tickets or projects must now name their repo. Worktrees in the old `<workspaceRoot>/<lane>/<ID>` layout are not seen any more: finish or close those tickets first, or remove them by hand (`git -C <clone> worktree remove <workspaceRoot>/<lane>/<ID>`, then the `<ID>.*` files).
 
-CLI: `bun aw.ts <run|once|status> [--dry-run] [--config aw.json]`.
+CLI: `bun aw.ts <run|once|status|watch|tail> [--dry-run] [--json] [--interval s] [-n N] [--no-follow] [--config aw.json]`.
 
 ## Code layout
 
-- `aw.ts`: CLI entry (`run`, `once`, `status`).
+- `aw.ts`: CLI entry (`run`, `once`, `status`, `watch`, `tail`).
 - `src/types.ts`: shared types (`Config`, `Repo`, `Source`, `Ticket`, `Tracker`, `Io`).
 - `src/config.ts`: `aw.json` parsing and the repo allowlist.
 - `src/github.ts`, `src/linear.ts`: tracker adapters, priority, canonical-repo lookup.
@@ -228,6 +237,8 @@ CLI: `bun aw.ts <run|once|status> [--dry-run] [--config aw.json]`.
 - `src/merge.ts`: `.aw/merge.json`, critical paths, the merge decision and auto-merge.
 - `src/launcher.ts`: clone, worktree, prompt and launcher script, tmux window.
 - `src/pass.ts`: one poll: cleanup, start ready tickets by priority, reconcile.
+- `src/status.ts`: per-worktree status rows and the table.
+- `src/tail.ts`: transcript lookup, line condensing and control-char stripping, `tail`.
 - `src/util.ts`: logged/dry-run-aware command and file helpers, the pinned `.aw` reader.
 - `tests/`: one file per module (launcher tests are in `pass.test.ts`); shared fakes in `tests/helpers.ts`.
 

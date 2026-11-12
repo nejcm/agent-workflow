@@ -2,11 +2,12 @@
   "name": "aw",
   "private": true,
   "scripts": {
-    "setup": "./setup.sh",
-    "start": "./run.sh",
-    "once": "./run.sh once",
-    "service": "./run.sh service",
+    "setup": "scripts/setup.sh",
+    "start": "scripts/run.sh",
+    "once": "scripts/run.sh once",
+    "service": "scripts/run.sh service",
     "status": "bun aw.ts status",
+    "watch": "bun aw.ts watch",
     "dry": "bun aw.ts once --dry-run",
     "test": "bun test",
     "typecheck": "tsc --noEmit"

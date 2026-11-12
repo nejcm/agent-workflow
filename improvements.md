@@ -22,11 +22,11 @@ Injection: when the state is `idle`, run `tmux load-buffer <ID>.inject` → `pas
 *Emdash (marker-tagged hooks that do nothing outside its sessions), Ramp Inspect (working/done status), Claude Code and Codex hooks.*
 
 - **Why:** aw currently infers "finished" from "window gone + no PR". It can't tell idle from working from stuck-on-a-prompt, and that is the precondition for safe injection (2, 3).
-- **Sketch:** `setup.sh` writes hooks into `~/.claude-aw/settings.json` and `~/.codex-aw/config.toml`. Each hook is a single shell line that exits immediately unless `$AW_STATE` is set. The launcher exports `AW_STATE` (and allows it in nono `allow_vars`).
+- **Sketch:** `scripts/setup.sh` writes hooks into `~/.claude-aw/settings.json` and `~/.codex-aw/config.toml`. Each hook is a single shell line that exits immediately unless `$AW_STATE` is set. The launcher exports `AW_STATE` (and allows it in nono `allow_vars`).
   - Claude: `UserPromptSubmit` → `working`; `Stop` → `idle`; `Notification` (`permission_prompt`, `idle_prompt`) → `needs-input`; `SessionEnd` → `ended`.
   - Codex: `notify = ["sh","-c",…]` (`agent-turn-complete` only) → `idle`. Codex hooks (`Stop`, `PermissionRequest`, `SessionEnd`) are richer, but non-managed hooks may need trust in `/hooks` before they run unattended.
   - Bonus: `Stop` stdin carries `last_assistant_message`. Save it, and post it in the "ended without a PR" comment instead of a bare notice.
-- **Cost:** about 25 lines across the launcher, `setup.sh` and `reconcileSource`.
+- **Cost:** about 25 lines across the launcher, `scripts/setup.sh` and `reconcileSource`.
 - **Risk:** the `$AW_STATE` path must be writable inside nono, so grant the single file (or `workspaceRoot/<owner>/<name>`) rather than widening the profile.
 
 ### 2. PR review + CI feedback loop
@@ -117,7 +117,7 @@ Injection: when the state is `idle`, run `tmux load-buffer <ID>.inject` → `pas
 
 ## Suggested order
 
-1 → 2 → 3 → 9 → 10 → 4 → 6, then the rest on demand. Items 1–3 together turn aw from "starts work" into "carries a ticket to an approved PR", at roughly 150 lines and still no dependencies.
+1 → 2 → 3 → 9 → 10 → 4 → 6, then the rest on demand. Items 1–3 together turn aw from "starts work" into "carries a ticket to an approved PR", at roughly 150 lines.
 
 ## Sources
 

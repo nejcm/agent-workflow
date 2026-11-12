@@ -33,7 +33,7 @@ export function parsePhases(raw: string): Phase[] {
 
 const MAX_PHASES_BYTES = 64 * 1024;
 
-function readPhases(wt: string): Phase[] | undefined {
+export function readPhases(wt: string): Phase[] | undefined {
   const raw = readAw(wt, "phases", MAX_PHASES_BYTES);
   return raw === undefined ? undefined : parsePhases(raw);
 }

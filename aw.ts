@@ -293,14 +293,23 @@ export function github(l: Source, host: string, io: Io, defaultHost: boolean, re
 
 const REPO_LINE = /^repo:[ \t]*([^\r\n]*?)[ \t\r]*$/im;
 
-/** Untrusted repo string for a Linear issue: `repo:` label, then a `repo:` line in the description, project summary, then project overview. */
-export function linearRepo(labels: string[], texts: (string | null | undefined)[]) {
-  const label = labels.find((x) => /^repo:/i.test(x));
-  if (label !== undefined) return label.slice(5).trim();
-  for (const t of texts) {
-    const m = REPO_LINE.exec(t ?? "");
-    if (m) return m[1];
-  }
+const repoLabel = (labels: string[]) => labels.find((x) => /^repo:/i.test(x))?.slice(5).trim();
+const repoLine = (t?: string | null) => REPO_LINE.exec(t ?? "")?.[1];
+
+/** Untrusted repo string: ticket `repo:` label, `repo:` line in the description, project `repo:` label, then project summary and overview lines. */
+export function linearRepo(labels: string[], texts: (string | null | undefined)[], projectLabels: string[] = []) {
+  return repoLabel(labels) ?? repoLine(texts[0]) ?? repoLabel(projectLabels) ?? texts.slice(1).map(repoLine).find((x) => x !== undefined);
+}
+
+// A label inside a Linear label group is named `<group>:<name>`, so a `repo` group holding `owner/name` reads `repo:owner/name`.
+const labelNames = (c: any): string[] => (c?.nodes ?? []).map((x: any) => (x.parent?.name ? `${x.parent.name}:${x.name}` : x.name));
+
+export const LINEAR_ISSUES = `query($f: IssueFilter) { issues(filter: $f, first: 100) { nodes { id identifier title description url labels { nodes { name parent { name } } } project { description content labels { nodes { name parent { name } } } } } } }`;
+
+export function linearTicket(i: any): Ticket {
+  const labels = labelNames(i.labels);
+  const repo = linearRepo(labels, [i.description, i.project?.description, i.project?.content], labelNames(i.project?.labels));
+  return { id: i.identifier, ref: i.id, title: i.title ?? "", body: i.description ?? "", url: i.url ?? "", labels, repo };
 }
 
 export function linear(l: Source, host: string, io: Io, defaultHost = false): Tracker {
@@ -332,14 +341,8 @@ export function linear(l: Source, host: string, io: Io, defaultHost = false): Tr
   };
   const list = async (state: string, labels: string[]): Promise<Ticket[]> => {
     const filter = { team: { key: { eq: l.team } }, state: { name: { eq: state } }, and: labels.map((n) => ({ labels: { some: { name: { eq: n } } } })) };
-    const d = await gql(`query($f: IssueFilter) { issues(filter: $f, first: 100) { nodes { id identifier title description url labels { nodes { name } } project { description content } } } }`, { f: filter });
-    return d.issues.nodes
-      .filter((i: any) => /^[A-Z0-9]+-\d+$/.test(i.identifier))
-      .map((i: any) => {
-        const labels: string[] = (i.labels?.nodes ?? []).map((x: any) => x.name);
-        const repo = linearRepo(labels, [i.description, i.project?.description, i.project?.content]);
-        return { id: i.identifier, ref: i.id, title: i.title ?? "", body: i.description ?? "", url: i.url ?? "", labels, repo };
-      });
+    const d = await gql(LINEAR_ISSUES, { f: filter });
+    return d.issues.nodes.filter((i: any) => /^[A-Z0-9]+-\d+$/.test(i.identifier)).map(linearTicket);
   };
   const comment = async (t: Ticket, body: string) => {
     await gql(`mutation($i: CommentCreateInput!) { commentCreate(input: $i) { success } }`, { i: { issueId: t.ref, body } }, true);

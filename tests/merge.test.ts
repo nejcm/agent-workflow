@@ -26,6 +26,7 @@ test("merge decision: hard blockers hold back any size and any mode but off", ()
     expect(m({ isCrossRepository: true }, undefined, s).reason).toBe("PR is from a fork");
     expect(m({ baseRefName: "release" }, undefined, s).reason).toBe("PR targets release, not main");
     expect(m({ mergeable: "CONFLICTING" }, undefined, s).reason).toBe("PR has merge conflicts");
+    expect(m({ reviewDecision: "CHANGES_REQUESTED" }, undefined, s).reason).toBe("changes requested in review");
     expect(m({ labels: [{ name: "No-AutoMerge" }] }, undefined, s).reason).toBe("labelled no-automerge");
     expect(m({}, undefined, s, ["no-automerge"]).reason).toBe("labelled no-automerge");
     expect(m({ statusCheckRollup: [ok, { status: "COMPLETED", conclusion: "FAILURE" }] }, undefined, s).reason).toBe("1 check(s) failed");

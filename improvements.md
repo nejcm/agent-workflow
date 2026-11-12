@@ -14,7 +14,7 @@ Most items below are built from three small pieces, all stored as files next to 
 | `<ID>.cursor` | aw | last forwarded comment id, head SHA, round counter, attempt counter |
 | `<ID>.feedback-<n>.md` | aw | text to hand to the session (it never goes into keystrokes or a shell command) |
 
-*Built for agent questions* ([docs/agent-questions.md](docs/agent-questions.md), `src/question.ts`): the `<ID>.question` sidecar is the cursor, the live state from `aw status` is the idle gate, the text goes to `.aw/answer.md`, and the pointer line goes in as a bracketed paste (`set-buffer` + `paste-buffer -p`) plus a separate `Enter` to the first pane's `%id` of the window. Items 2 and 4 should reuse it rather than the buffer variant below.
+*Built for agent questions* ([docs/agent-questions.md](docs/agent-questions.md), `src/question.ts`): the `<ID>.question` sidecar is the cursor, the live state from `aw status` is the idle gate, the text goes to `.aw/answer.md`, and the pointer line goes in as a bracketed paste (`set-buffer` + `paste-buffer -p`) plus a separate `Enter` to the first pane's `%id` of the window. Item 2 reuses it (`src/feedback.ts`); item 4 should too, rather than the buffer variant below.
 
 Injection: when the state is `idle`, run `tmux load-buffer <ID>.inject` → `paste-buffer -p -t <window>` → `send-keys Enter`. The pasted line is just `Address the feedback in <path>`. The same path works for Claude and Codex, and survives an aw restart because the cursor is a file.
 
@@ -35,6 +35,8 @@ Injection: when the state is `idle`, run `tmux load-buffer <ID>.inject` → `pas
 
 ### 2. PR review + CI feedback loop
 *Sortie (CI feedback, review loop), Cyrus (CYPACK-842: acts on "changes requested"), Open SWE `/baby-sit`, Orchestrator.inc, Optio.*
+
+*Mostly done* (README "PR feedback", `src/feedback.ts`): steps 1–4 and the idle-gated delivery in 5 through the answers primitive (`.aw/feedback.md`, cursor `<ID>.feedback`), and the round limit in 6 as one comment. Not done: re-engaging a dead session with the feedback (needs 3), the `needs-human` label (9), and moving the ticket back to In Progress, left out on purpose: the next poll finds the PR and moves it to In Review again with a second PR-link comment.
 
 - **Why:** this is the largest manual step left.
 - **Sketch:** for each In Review ticket, every tick:

@@ -20,11 +20,17 @@ export interface QuestionSidecar {
   answeredAt?: number;
 }
 
+/** A comment by a listed author (case-insensitive) that aw did not post. */
+export function byOperator(authors: string[]) {
+  const allowed = new Set(authors.map((a) => a.toLowerCase()));
+  return (c: TicketComment) => !!c.author && allowed.has(c.author.toLowerCase()) && !/^\s*aw:/i.test(c.body);
+}
+
 /** The operator's answer: the earliest comment after postedAt (ms epoch) by a listed author that aw did not post. */
 export function pickAnswer(comments: TicketComment[], postedAt: number, authors: string[]): TicketComment | undefined {
-  const allowed = new Set(authors.map((a) => a.toLowerCase()));
+  const ok = byOperator(authors);
   return comments
-    .filter((c) => Date.parse(c.createdAt) > postedAt && !!c.author && allowed.has(c.author.toLowerCase()) && !/^\s*aw:/i.test(c.body))
+    .filter((c) => Date.parse(c.createdAt) > postedAt && ok(c))
     .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))[0];
 }
 
@@ -74,6 +80,20 @@ export function liveStates(home = homedir(), prepare = (a: Repo["agent"]) => AGE
   };
 }
 
+/** The launcher's own pane by id, not the window's active one; none while in copy mode, where keys would run as bindings. */
+export async function agentPane(io: Io, win: string) {
+  const panes = (await read(io, ["tmux", "list-panes", "-t", win, "-F", "#{pane_index} #{pane_id} #{pane_in_mode}"])).split("\n").filter(Boolean).map((l) => l.split(" "));
+  const [, pane, mode] = panes.sort((x, y) => Number(x[0]) - Number(y[0]))[0] ?? [];
+  return pane && /^%\d+$/.test(pane) && mode === "0" ? pane : undefined;
+}
+
+// A bracketed paste: Codex reads fast typed keys as a paste and turns the Enter after them into a newline.
+export async function paste(io: Io, id: string, pane: string, line: string) {
+  await write(io, ["tmux", "set-buffer", "-b", `aw-${id}`, "--", line]);
+  await write(io, ["tmux", "paste-buffer", "-p", "-d", "-b", `aw-${id}`, "-t", pane]);
+  await write(io, ["tmux", "send-keys", "-t", pane, "Enter"]);
+}
+
 export function answerFrame(c: TicketComment, id: string) {
   const body = c.body.length > MAX_ANSWER_CHARS ? `${c.body.slice(0, MAX_ANSWER_CHARS)}\n[truncated]` : c.body;
   return `<answer from="${c.author}" ticket="${id}">\n${body.replaceAll("</answer", "&lt;/answer")}\n</answer>\n`;
@@ -86,18 +106,13 @@ export async function deliverAnswer(t: Ticket, tr: Tracker, io: Io, dir: string,
   if (!q || q.answerId !== undefined || !authors.length || !/^@\d+$/.test(win)) return;
   const a = pickAnswer(await tr.comments(t, q.postedAt), q.postedAt, authors);
   if (!a || (await state()) !== "idle") return;
-  // The launcher's own pane by id, not the window's active one; in copy mode the keys would run as bindings.
-  const panes = (await read(io, ["tmux", "list-panes", "-t", win, "-F", "#{pane_index} #{pane_id} #{pane_in_mode}"])).split("\n").filter(Boolean).map((l) => l.split(" "));
-  const [, pane, mode] = panes.sort((x, y) => Number(x[0]) - Number(y[0]))[0] ?? [];
-  if (!pane || !/^%\d+$/.test(pane) || mode !== "0") return;
+  const pane = await agentPane(io, win);
+  if (!pane) return;
   put(io, file, JSON.stringify({ ...q, answerId: a.id, answeredAt: Date.parse(a.createdAt) } satisfies QuestionSidecar));
   const wt = join(dir, t.id);
   io.log(`${io.dry ? "dry: " : ""}answer ${t.id} from ${a.author} to ${wt}/.aw/answer.md`);
   if (!io.dry) writeAw(wt, "answer.md", answerFrame(a, t.id));
-  // A bracketed paste: Codex reads fast typed keys as a paste and turns the Enter after them into a newline.
-  await write(io, ["tmux", "set-buffer", "-b", `aw-${t.id}`, "--", POINTER]);
-  await write(io, ["tmux", "paste-buffer", "-p", "-d", "-b", `aw-${t.id}`, "-t", pane]);
-  await write(io, ["tmux", "send-keys", "-t", pane, "Enter"]);
+  await paste(io, t.id, pane, POINTER);
   // A question rewritten since it was posted is a new round; leave it for syncQuestion.
   const text = readQuestion(wt);
   if (!io.dry && text && hashOf(text) === q.hash) removeAw(wt, "question.md");

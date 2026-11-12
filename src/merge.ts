@@ -48,12 +48,13 @@ export interface PrFacts {
   files: { path: string; changeType?: string }[];
   statusCheckRollup: any[];
   labels: { name: string }[];
+  reviewDecision?: string;
 }
 
 const OPT_OUT = "no-automerge";
 
 // CheckRun has status + conclusion; StatusContext has state.
-const checkState = (c: any) =>
+export const checkState = (c: any) =>
   c?.state !== undefined
     ? c.state === "SUCCESS" ? "success" : ["PENDING", "EXPECTED"].includes(c.state) ? "pending" : "failed"
     : c?.status !== "COMPLETED" ? "pending" : c.conclusion === "SUCCESS" ? "success" : ["NEUTRAL", "SKIPPED"].includes(c.conclusion) ? "neutral" : "failed";
@@ -68,6 +69,7 @@ export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Re
   if (pr.isDraft) return no("PR is a draft");
   if ([...pr.labels.map((l) => l.name), ...ticketLabels].some((x) => x.toLowerCase() === OPT_OUT)) return no(`labelled ${OPT_OUT}`);
   if (pr.mergeable === "CONFLICTING") return no("PR has merge conflicts");
+  if (pr.reviewDecision === "CHANGES_REQUESTED") return no("changes requested in review");
   const checks = pr.statusCheckRollup.map(checkState);
   const failed = checks.filter((x) => x === "failed").length;
   if (failed) return no(`${failed} check(s) failed`);
@@ -91,7 +93,7 @@ export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Re
   return { merge: true, reason: s.autoMerge === "all" ? "autoMerge all" : `${tier} change${a ? `; agent: ${a.reason}` : ""}` };
 }
 
-const PR_FIELDS = "number,url,state,isDraft,isCrossRepository,baseRefName,mergeable,additions,deletions,changedFiles,files,statusCheckRollup,labels,headRefOid";
+const PR_FIELDS = "number,url,state,isDraft,isCrossRepository,baseRefName,mergeable,additions,deletions,changedFiles,files,statusCheckRollup,labels,headRefOid,reviewDecision";
 
 // aw merges, pinned to the head it judged (the agent's token could too; see README). "Not merged" is commented once per head SHA.
 export async function autoMerge(cfg: Config, r: Repo, t: Ticket, tr: Tracker, io: Io) {

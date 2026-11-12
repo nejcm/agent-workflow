@@ -8,7 +8,7 @@ Bugs, gaps, accepted trade-offs and unverified assumptions in the current code. 
 - **A failed claim can leave an unclaimed session running.** If `claim` fails and killing the window also fails (`src/launcher.ts`), the session keeps running, its ticket stays ready and is skipped while the window exists, and the window is not counted against the concurrency limits for the rest of that poll. The log names the window; kill it by hand.
 - **`aw tail` keeps following the first transcript.** With follow on, `tail` pins the path it opened (`src/tail.ts`), so a session that starts a new transcript file (restart, `/clear`) goes quiet. The dashboard already switches to the newer file.
 - **`held` can outlive a head change for one poll.** If the PR head moves between `autoMerge`'s two `gh pr view` calls, the old `<ID>.merge` stays until the next poll clears it.
-- **`<ID>.pr` is never refreshed with `autoMerge: off`.** An In Review ticket looks up its PR only while `<ID>.pr` is missing, so a replaced PR keeps showing the old link.
+- **`<ID>.pr` is not refreshed with `autoMerge: off` once the session is gone.** An In Review ticket with no tmux window looks up its PR only while `<ID>.pr` is missing, so a replaced PR keeps showing the old link.
 - **`unknown` has two colours in the dashboard.** The state badge uses `bad`, the progress bar `idle` (`src/dash-view.ts`, `TONE` vs `barTone`). Undecided whether that is intended.
 
 ## Gaps
@@ -27,12 +27,20 @@ Bugs, gaps, accepted trade-offs and unverified assumptions in the current code. 
 - **Questions, clock skew:** `postedAt` is the local clock, `createdAt` the tracker's. A local clock behind the tracker can make an answer picked but not yet delivered (session busy) count for a new question too. A delivered answer is safe: `postedAt` never moves back, so every later round starts at or after its `createdAt`.
 - **Questions, clock ahead:** with the local clock N seconds ahead of the tracker, an answer posted within N seconds of the question is missed (Linear also filters it out server-side); reply again.
 - **Questions, Linear window:** `comments(filter: createdAt > postedAt, last: 100)`; more than 100 non-answer comments after a question would hide the answer.
-- **No review feedback:** PR review comments are not fed back into the session yet (see improvements.md, item 2).
+- **PR feedback, self-feedback:** on GitHub the agent shares the operator's `gh` login, so a PR comment it posts counts as the operator's and is fed back to it as a new round (bounded by the 3-round limit). Not replying on the PR is a prompt rule.
+- **PR feedback, dead sessions:** feedback reaches only a session whose window exists; a crashed or closed session gets nothing and nothing is logged (improvements.md, item 3).
+- **PR feedback, windows:** only the first 100 line comments (`gh api …/pulls/<n>/comments?per_page=100`) are read. A comment edited after delivery, or created at the same millisecond as the cursor, is not sent. A conflict that appears for a head SHA already reported as conflicting is not sent again; only the last 10 reported SHAs are remembered.
+- **PR feedback, round limit:** 3 rounds per ticket, a constant (`MAX_ROUNDS` in `src/feedback.ts`), never reset; after the "human is needed" comment the ticket gets no more feedback until its `<ID>.feedback` is deleted.
 
 ## Accepted trade-offs
 
 - A row's PR appears only after the next poll finds it (`<ID>.pr`), not the moment the agent opens it.
 - With `autoMerge: off`, an In Review ticket without a PR costs one `gh pr list` per poll until it has one.
+- An In Review ticket with a live window costs one `gh pr list` and one `gh pr view` per poll, plus one `gh api` for line comments when `feedbackAuthors` is set; `gh run view --log-failed` only on delivery.
+- Auto-merge holds on any reviewer's "changes requested" (`reviewDecision`), but not on undelivered plain comments: an allowlisted PR comment on a green PR can be merged past; add `no-automerge` to stop it.
+- A failed CI log fetch (or a gh error, masked by the `tail` pipe) shows as "(log unavailable)".
+- PR feedback is pasted at most once per round, like answers: a crash or failed write or paste after the cursor is recorded loses that round.
+- Checks are reported only when none is pending, so a slow check delays the failed ones on the same head; a check that fails after a re-run on the same head SHA is not reported again.
 - `aw tail` and `status` read only the last 256 KiB of a transcript.
 - An answer is pasted at most once: a crash or failed write or `send-keys` after its id is recorded loses the paste. The question file is still there, so the next poll posts it again as a new round and the previous answer does not count for it.
 - A crash between the paste and removing `.aw/question.md` reposts the question once, although the agent got the answer.
@@ -52,6 +60,7 @@ Never exercised end-to-end: the nono profiles (run the README's first-run checkl
 - Phase sub-tickets: `gh issue create --parent`, `gh api …/sub_issues`, Linear `children`, Linear `issueCreate` with `parentId`, and that Linear adds no default labels to child issues.
 - Codex picking up skills from `~/.codex-aw/skills`.
 - Questions: that `gh issue view --json comments` returns every comment; Linear's `last` ordering on `comments`. (Checked live: the bracketed paste plus `Enter` submits in Claude Code and Codex; plain `send-keys -l` plus an immediate `Enter` does not submit in Codex.)
+- PR feedback: `mergeStateStatus` reaching `DIRTY` for a conflicting PR; `gh run view --log-failed` output on a finished run; checks outside GitHub Actions (no run id, so no log). Checked live against a public PR: `reviews[]` (`id`, `author.login`, `body`, `state`, `submittedAt`), `comments[]` (`createdAt`, `author.login`), CheckRun `detailsUrl` `…/actions/runs/<id>/job/<id>`, REST line comments (`id`, `user.login`, `created_at`, `path`, `line`/`original_line`). The full loop (paste, agent pushes a fix) has not run end-to-end.
 - Auto-merge: `statusCheckRollup` item shapes (CheckRun `status`/`conclusion`, StatusContext `state`), `mergeable` turning `UNKNOWN` → `MERGEABLE`, and `gh issue close` on an issue `Closes #n` already closed.
 
 ## Tests

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type PrFacts, isCritical, mergeDecision, parseAssessment } from "../src/merge";
 import { pass } from "../src/pass";
@@ -192,4 +192,25 @@ test("auto-merge pass: re-checks the PR right before merging, confirms it merged
   for (const over of [{ isCrossRepository: true }, { baseRefName: "release" }]) expect((await run([{ ...pr, ...over, state: "MERGED" }])).calls).not.toContain("done gh-1");
   expect((await run([{ ...pr, state: "MERGED" }], "MERGED", "evil/web")).calls).toEqual([]);
   expect((await run([{ ...pr, state: "MERGED" }])).calls).toEqual(["done gh-1"]);
+});
+
+test("in review: .pr comes from autoMerge's lookup, else one lookup when off; unchanged is not rewritten, dry run writes none", async () => {
+  let url = "https://github.com/acme/web/pull/7";
+  const f = join(root, "acme/web/gh-1.pr");
+  const respond = (a: string[]) => (a[1] === "pr" && a[2] === "list" ? { out: JSON.stringify([{ url, state: "OPEN" }]) } : a[1] === "pr" ? { out: JSON.stringify({ ...prFacts(), number: 7, url, headRefOid: "a" }) } : undefined);
+  const run = async (autoMerge: string, dry = false) => {
+    const x = fakeIo(respond, dry);
+    await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge }] }), x.io, () => fakeTracker({ inReview: [ticket(1)] }).tr, "/aw");
+    return { lookups: x.cmds.filter((c) => c.startsWith("gh pr list")).length, writes: x.logs.filter((l) => l.endsWith(`write ${f}`)).length };
+  };
+  worktree("gh-1");
+  expect(await run("all", true)).toMatchObject({ lookups: 1, writes: 1 });
+  expect(existsSync(f)).toBe(false);
+  expect(await run("off")).toEqual({ lookups: 1, writes: 1 });
+  expect(readFileSync(f, "utf8")).toBe(url);
+  expect(await run("off")).toEqual({ lookups: 0, writes: 0 });
+  expect(await run("intelligent")).toEqual({ lookups: 1, writes: 0 });
+  url = "https://github.com/acme/web/pull/8";
+  expect(await run("intelligent")).toEqual({ lookups: 1, writes: 1 });
+  expect(readFileSync(f, "utf8")).toBe(url);
 });

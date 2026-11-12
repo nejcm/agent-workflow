@@ -1,12 +1,13 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { repoDir } from "./config";
+import { PR_URL } from "./github";
 import { windows, winName } from "./launcher";
 import { worktreeIds } from "./pass";
 import { phaseProgress, type PhaseStatus } from "./phases";
 import { claudeAgents, codexState, type Live, parseAgents, resolve, type State } from "./state";
-import { clean, lines, mtime, transcript, withFile } from "./tail";
+import { clean, mtime, transcript, withFile } from "./tail";
 import type { Config, Io, Repo } from "./types";
 
 export interface Row {
@@ -36,25 +37,16 @@ export interface PhaseItem {
   status: PhaseStatus;
 }
 
-export const PR_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/;
-
 function progress(dir: string, id: string) {
   const p = phaseProgress(dir, id);
   return p && { ...p, items: p.items.map((x) => ({ key: clean(x.key, 40), title: clean(x.title, 120), status: x.status })) };
 }
 
-// shortcut: scans only the transcript's last 256 KiB, so an older pr-link is missed; remember it per file if that bites.
-function prOf(file: string) {
-  const text = withFile(file, (fd, st) => lines(fd, st.size, 0).text) ?? "";
-  const i = text.lastIndexOf('"type":"pr-link"');
-  if (i < 0) return null;
-  const end = text.indexOf("\n", i);
-  try {
-    const url = JSON.parse(text.slice(text.lastIndexOf("\n", i) + 1, end < 0 ? undefined : end)).prUrl;
-    return typeof url === "string" && PR_URL.test(url) ? url : null;
-  } catch {
-    return null;
-  }
+const MAX_PR_BYTES = 512;
+
+function savedPr(dir: string, id: string) {
+  const url = withFile(join(dir, `${id}.pr`), (fd, st) => (st.size <= MAX_PR_BYTES ? readFileSync(fd, "utf8").trim() : undefined));
+  return url && PR_URL.test(url) ? url : null;
 }
 
 /** `claude`: live Claude sessions by cwd (undefined: feed unavailable, so Claude rows are unknown). */
@@ -81,7 +73,7 @@ export function rows(cfg: Config, wins: Map<string, string>, home = homedir(), n
         runtimeMs: started === undefined ? null : Math.max(0, (ended ?? now) - started),
         idleMs,
         phases: progress(dir, id),
-        pr: t ? prOf(t) : null,
+        pr: savedPr(dir, id),
         merge: existsSync(join(dir, `${id}.merge`)) ? "held" : null,
         transcript: t,
         window: session === "running" ? wins.get(winName(r.key, id)) ?? null : null,

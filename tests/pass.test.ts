@@ -94,7 +94,7 @@ test("done: kills window, removes worktree and files; keeps files when remove fa
   const c = config();
   for (const id of ["gh-1", "gh-2", "gh-3"]) {
     mkdirSync(join(root, "acme/web", id), { recursive: true });
-    for (const ext of [".prompt.md", ".sh", ".ended", ".pr"]) writeFileSync(join(root, "acme/web", id + ext), "");
+    for (const ext of [".prompt.md", ".sh", ".ended", ".pr", ".question"]) writeFileSync(join(root, "acme/web", id + ext), "");
     writeFileSync(join(root, "acme/web", `${id}.source`), "web\n");
   }
   const { tr } = fakeTracker({ done: ["gh-1", "gh-2"] });
@@ -108,6 +108,7 @@ test("done: kills window, removes worktree and files; keeps files when remove fa
   expect(existsSync(join(root, "acme/web/gh-1.sh"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.source"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.pr"))).toBe(false);
+  expect(existsSync(join(root, "acme/web/gh-1.question"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-2.sh"))).toBe(true);
   expect(existsSync(join(root, "acme/web/gh-3.sh"))).toBe(true);
   expect(logs.some((l) => l.includes("[web] cleanup acme/web/gh-2 failed"))).toBe(true);

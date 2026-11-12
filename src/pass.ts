@@ -6,6 +6,7 @@ import { start, windows, winName } from "./launcher";
 import { linear } from "./linear";
 import { autoMerge } from "./merge";
 import { syncPhases } from "./phases";
+import { syncQuestion } from "./question";
 import type { Config, Io, Source, Ticket, Tracker } from "./types";
 import { AW_DIR, put, remove, write } from "./util";
 
@@ -103,7 +104,8 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
         await step(io, `phases ${t.id}`, () => syncPhases(w, tr, io, dir, !!pr));
         if (pr) return tr.toReview(w, pr);
         const ended = join(dir, `${t.id}.ended`);
-        if (wins.has(winName(key, t.id)) || existsSync(ended)) return;
+        if (wins.has(winName(key, t.id))) return step(io, `question ${t.id}`, () => syncQuestion(w, tr, io, dir, join(dir, t.id)));
+        if (existsSync(ended)) return;
         await tr.comment(w, "session ended without a PR");
         put(io, ended, new Date().toISOString());
       });
@@ -158,7 +160,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
         if (w) await write(x.io, ["tmux", "kill-window", "-t", w]);
         wins.delete(winName(r.key, id));
         await write(x.io, ["git", "-C", r.path, "worktree", "remove", join(dir, id)]);
-        for (const ext of [".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".source"]) remove(x.io, join(dir, id + ext));
+        for (const ext of [".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".source"]) remove(x.io, join(dir, id + ext));
       });
     }
   }

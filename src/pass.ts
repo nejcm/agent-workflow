@@ -6,7 +6,7 @@ import { start, windows, winName } from "./launcher";
 import { linear } from "./linear";
 import { autoMerge } from "./merge";
 import { syncPhases } from "./phases";
-import { syncQuestion } from "./question";
+import { deliverAnswer, liveStates, syncQuestion } from "./question";
 import type { Config, Io, Source, Ticket, Tracker } from "./types";
 import { AW_DIR, put, remove, write } from "./util";
 
@@ -92,7 +92,7 @@ async function startReady(cfg: Config, s: Source, tr: Tracker, io: Io, t: Ticket
   });
 }
 
-async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins: Map<string, string>) {
+async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins: Map<string, string>, state: ReturnType<typeof liveStates>) {
   await step(io, "list in-progress", async () => {
     for (const t of await tr.listInProgress())
       await step(io, `check ${t.id}`, async () => {
@@ -104,7 +104,11 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
         await step(io, `phases ${t.id}`, () => syncPhases(w, tr, io, dir, !!pr));
         if (pr) return tr.toReview(w, pr);
         const ended = join(dir, `${t.id}.ended`);
-        if (wins.has(winName(key, t.id))) return step(io, `question ${t.id}`, () => syncQuestion(w, tr, io, dir, join(dir, t.id)));
+        const win = wins.get(winName(key, t.id));
+        if (win) {
+          await step(io, `question ${t.id}`, () => syncQuestion(w, tr, io, dir, join(dir, t.id)));
+          return step(io, `answer ${t.id}`, () => deliverAnswer(w, tr, io, dir, cfg.repos[key]!.feedbackAuthors, win, () => state(cfg.repos[key]!, dir, t.id)));
+        }
         if (existsSync(ended)) return;
         await tr.comment(w, "session ended without a PR");
         put(io, ended, new Date().toISOString());
@@ -134,7 +138,7 @@ export function makeTracker(s: Source, host: string, io: Io, defaultHost: boolea
 
 const warned = new Set<string>();
 
-export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = AW_DIR) {
+export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = AW_DIR, state = liveStates()) {
   if ((await io.run(["tmux", "has-session", "-t", `=${cfg.tmuxSession}`])).code !== 0)
     await write(io, ["tmux", "new-session", "-d", "-s", cfg.tmuxSession]).catch((e) => io.log(`tmux: ${e.message}`));
   const srcs = new Map(
@@ -183,7 +187,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
   }
   for (const { s, io: sio, tr } of srcs.values()) {
     try {
-      await reconcileSource(cfg, s, tr, sio, wins);
+      await reconcileSource(cfg, s, tr, sio, wins, state);
     } catch (e) {
       sio.log(`source failed: ${(e as Error).message}`);
     }

@@ -16,14 +16,33 @@ export const mtime = (p: string) => {
   }
 };
 
-// Transcripts are untrusted: drop ESC sequences, C0/C1 controls and bidi overrides so nothing reaches the terminal raw.
+// Untrusted text: drop ESC sequences and invisible chars, blank controls and bidi; ZWJ/ZWNJ stay (emoji, Persian, Indic).
 export const clean = (s: string, max = MAX) =>
   s
     .replace(/\x1b(\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(\x07|\x1b\\)?|[@-_])?/g, "")
-    .replace(/[\x00-\x1f\x7f-\x9f‎‏‪-‮⁦-⁩]+/g, " ")
+    .replace(/[\u00ad\u200b\u2060\ufeff\ufff9-\ufffb\u{e0000}-\u{e007f}]/gu, "")
+    .replace(/[\p{Cc}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, max);
+
+const seg = new Intl.Segmenter();
+
+/** `s` truncated (with …) or padded to exactly `w` terminal columns. */
+export function fit(s: string, w: number) {
+  if (w <= 0) return "";
+  const sw = Bun.stringWidth(s);
+  if (sw <= w) return s + " ".repeat(w - sw);
+  let out = "";
+  let n = 0;
+  for (const { segment } of seg.segment(s)) {
+    const cw = Bun.stringWidth(segment);
+    if (n + cw > w - 1) break;
+    out += segment;
+    n += cw;
+  }
+  return out + "…" + " ".repeat(w - 1 - n);
+}
 
 // Transcript dirs are agent-writable: never follow a symlink or block on a FIFO; undefined if gone, unreadable or not a regular file.
 export function withFile<T>(path: string, fn: (fd: number, st: Stats) => T): T | undefined {
@@ -78,6 +97,8 @@ export function argSummary(input: unknown): string {
 
 const textOf = (c: unknown): string => (typeof c === "string" ? c : Array.isArray(c) ? c.map((b) => (typeof b?.text === "string" ? b.text : "")).join(" ") : "");
 
+export const KIND = 6;
+
 const hhmmss = (ts: unknown) => {
   const d = new Date(typeof ts === "string" ? ts : NaN);
   return isNaN(d.getTime()) ? "--:--:--" : d.toTimeString().slice(0, 8);
@@ -95,7 +116,7 @@ export function events(line: string): string[] {
 function lineEvents(o: any): string[] {
   if (!o || typeof o !== "object") return [];
   const at = hhmmss(o.timestamp);
-  const ev = (kind: string, detail: string) => `${at} ${clean(kind, 24).padEnd(6)} ${detail}`;
+  const ev = (kind: string, detail: string) => `${at} ${fit(clean(kind, 24), KIND)} ${detail}`;
   const out: string[] = [];
   const content = o.message?.content;
   if ((o.type === "assistant" || o.type === "user") && Array.isArray(content)) {
@@ -169,7 +190,8 @@ export function worktreesFor(cfg: Config, id: string) {
   return (onDisk.length ? onDisk : Object.keys(cfg.repos)).map((k) => ({ key: k, wt: join(repoDir(cfg, k), id) }));
 }
 
-function reader(path: string) {
+/** Incremental event reader for one transcript: each call returns the events written since the last. */
+export function reader(path: string) {
   let pos = 0;
   let file = "";
   return () =>

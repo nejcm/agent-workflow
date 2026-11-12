@@ -2,31 +2,50 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { repoDir } from "./config";
-import { winName } from "./launcher";
+import { windows, winName } from "./launcher";
 import { worktreeIds } from "./pass";
 import { readPhases } from "./phases";
+import { claudeAgents, codexState, type Live, parseAgents, resolve, type State } from "./state";
 import { clean, lines, mtime, transcript, withFile } from "./tail";
-import type { Config, Repo } from "./types";
+import type { Config, Io, Repo } from "./types";
 
 export interface Row {
   id: string;
   repo: string;
   agent: Repo["agent"];
-  state: "running" | "ended" | "orphan";
+  /** tmux/marker view: `running` has a window, `ended` an `<ID>.ended`, `orphan` neither. */
+  session: "running" | "ended" | "orphan";
+  state: State;
+  stateSince: number | null;
+  waitingFor: string | null;
   runtimeMs: number | null;
   idleMs: number | null;
-  phases: { done: number; total: number } | null;
+  startedAt: number | null;
+  phases: { done: number; total: number; items: PhaseItem[] } | null;
   pr: string | null;
   /** "held": aw decided not to auto-merge the PR's current head (the `<ID>.merge` marker). */
   merge: "held" | null;
   transcript: string | null;
+  /** tmux window id (`@3`) while `running`. */
+  window: string | null;
 }
 
+export interface PhaseItem {
+  key: string;
+  title: string;
+  status: string;
+}
+
+export const PR_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/;
+
+// The sidecar keeps no titles, so its phases are listed by key.
 function progress(wt: string, sidecar: string) {
   try {
-    const live = readPhases(wt)?.map((p) => p.status);
-    const st = live ?? (existsSync(sidecar) ? Object.values(JSON.parse(readFileSync(sidecar, "utf8")) as Record<string, { status: string }>).map((s) => s.status) : undefined);
-    return st ? { done: st.filter((s) => s === "done").length, total: st.length } : null;
+    const live = readPhases(wt)?.map(({ key, title, status }) => ({ key, title, status }));
+    const all = live ?? (existsSync(sidecar) ? Object.entries(JSON.parse(readFileSync(sidecar, "utf8")) as Record<string, { status: string }>).map(([key, s]) => ({ key, title: key, status: String(s?.status) })) : undefined);
+    if (!all) return null;
+    const items = all.slice(0, 20).map((p) => ({ key: clean(p.key, 40), title: clean(p.title, 120), status: clean(p.status, 20) }));
+    return { done: all.filter((p) => p.status === "done").length, total: all.length, items };
   } catch {
     return null;
   }
@@ -40,13 +59,14 @@ function prOf(file: string) {
   const end = text.indexOf("\n", i);
   try {
     const url = JSON.parse(text.slice(text.lastIndexOf("\n", i) + 1, end < 0 ? undefined : end)).prUrl;
-    return typeof url === "string" && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/.test(url) ? url : null;
+    return typeof url === "string" && PR_URL.test(url) ? url : null;
   } catch {
     return null;
   }
 }
 
-export function rows(cfg: Config, wins: Map<string, string>, home = homedir(), now = Date.now()): Row[] {
+/** `claude`: live Claude sessions by cwd (undefined: feed unavailable, so Claude rows are unknown). */
+export function rows(cfg: Config, wins: Map<string, string>, home = homedir(), now = Date.now(), claude?: Map<string, Live>): Row[] {
   return Object.values(cfg.repos).flatMap((r) => {
     const dir = repoDir(cfg, r.key);
     return worktreeIds(dir).sort().map((id): Row => {
@@ -54,20 +74,35 @@ export function rows(cfg: Config, wins: Map<string, string>, home = homedir(), n
       const started = mtime(join(dir, `${id}.sh`)) ?? mtime(wt);
       const ended = mtime(join(dir, `${id}.ended`));
       const t = transcript(wt, r.agent, home, started) ?? null;
+      const session = ended !== undefined ? "ended" : wins.has(winName(r.key, id)) ? "running" : "orphan";
+      const idleMs = t ? Math.max(0, now - (mtime(t) ?? now)) : null;
+      const live = resolve(session, r.agent === "claude" ? claude?.get(wt) : codexState(wt, started ?? 0, now), idleMs, now);
       return {
         id,
         repo: r.key,
         agent: r.agent,
-        state: ended !== undefined ? "ended" : wins.has(winName(r.key, id)) ? "running" : "orphan",
+        session,
+        state: live.state,
+        stateSince: live.since,
+        waitingFor: live.waitingFor,
+        startedAt: started ?? null,
         runtimeMs: started === undefined ? null : Math.max(0, (ended ?? now) - started),
-        idleMs: t ? Math.max(0, now - (mtime(t) ?? now)) : null,
+        idleMs,
         phases: progress(wt, join(dir, `${id}.phases.json`)),
         pr: t ? prOf(t) : null,
         merge: existsSync(join(dir, `${id}.merge`)) ? "held" : null,
         transcript: t,
+        window: session === "running" ? wins.get(winName(r.key, id)) ?? null : null,
       };
     });
   });
+}
+
+/** Rows with live state; asks `claude agents` (once) only while a Claude repo has a tmux window. */
+export async function snapshot(cfg: Config, io: Io, agents = claudeAgents, home = homedir(), now = Date.now()) {
+  const wins = await windows(cfg, io);
+  const claudeUp = [...wins.keys()].some((w) => cfg.repos[w.slice(0, w.lastIndexOf("/"))]?.agent === "claude");
+  return rows(cfg, wins, home, now, claudeUp ? parseAgents(await agents(home)) : undefined);
 }
 
 export const dur = (ms: number | null) => {
@@ -79,19 +114,25 @@ export const dur = (ms: number | null) => {
   return `${Math.floor(s / 86400)}d${Math.floor((s % 86400) / 3600)}h`;
 };
 
+/** `state`, except a session with neither tmux window nor `.ended` marker shows as `orphan`. */
+export const label = (r: Pick<Row, "session" | "state">) => (r.session === "orphan" ? "orphan" : r.state);
+
+export const prLabel = (r: Row) => [r.pr && `#${/\d+$/.exec(r.pr)![0]}`, r.merge].filter(Boolean).join(" ") || "-";
+
 export function table(rs: Row[]) {
   if (!rs.length) return "no worktrees";
   const cells = rs.map((r) => [
     r.id,
     r.repo,
     r.agent,
-    r.state,
+    r.session,
+    r.waitingFor ? `${r.state}: ${r.waitingFor}` : label(r),
     dur(r.runtimeMs),
     dur(r.idleMs),
     r.phases ? `${r.phases.done}/${r.phases.total}` : "-",
-    [r.pr && `#${/\d+$/.exec(r.pr)![0]}`, r.merge].filter(Boolean).join(" ") || "-",
+    prLabel(r),
   ]);
-  const all = [["ID", "REPO", "AGENT", "STATE", "RUNTIME", "IDLE", "PHASES", "PR"], ...cells].map((c) => c.map((x) => clean(x, 80)));
+  const all = [["ID", "REPO", "AGENT", "SESSION", "STATE", "RUNTIME", "IDLE", "PHASES", "PR"], ...cells].map((c) => c.map((x, i) => clean(x, i === 4 ? 30 : 80)));
   const w = all[0]!.map((_, i) => Math.max(...all.map((c) => c[i]!.length)));
   return all.map((c) => c.map((x, i) => x.padEnd(w[i]!)).join("  ").trimEnd()).join("\n");
 }

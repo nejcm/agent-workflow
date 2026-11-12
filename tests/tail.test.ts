@@ -44,7 +44,8 @@ test("claude lines: text, tool use, tool error; tool output, thinking and prompt
 test("codex lines: assistant text and tool calls; developer messages and outputs are skipped", () => {
   expect(events(codexSay)[0]).toEndWith("say    rc=1 rc2=0");
   expect(events(codexCustom)[0]).toContain("exec   const r = await tools.exec_command");
-  expect(events(codexFn)[0]).toEndWith("exec_command ls -la");
+  expect(events(codexFn)[0]).toEndWith("exec_… ls -la");
+  expect(events(JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "漢字テスト", input: {} }] } }))[0]).toBe("--:--:-- 漢字…  {}");
   for (const l of [codexMeta("/w"), codexDev, codexOut]) expect(events(l)).toEqual([]);
 });
 
@@ -57,6 +58,13 @@ test("malformed and unknown lines yield nothing", () => {
 test("clean strips escapes, controls and bidi, collapses whitespace and caps length", () => {
   expect(clean("a\x1b[31mred\x1b[0m\x1b]0;title\x07b\x07\x00c\r\nd‮e\x9bf")).toBe("aredb c d e f");
   expect(clean("x".repeat(500))).toHaveLength(200);
+  const blanked = { c0: "\x01\x1f\x7f", c1: "\x80\x85\x9b\x9f", bidi: "\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069" };
+  const deleted = { zeroWidth: "\u200b\u2060\ufeff\u00ad", annotation: "\ufff9\ufffa\ufffb", tags: "\u{e0000}\u{e0001}\u{e0041}\u{e007f}" };
+  for (const [name, chars] of Object.entries(blanked)) for (const c of chars) expect([name, clean(`a${c}b`)]).toEqual([name, "a b"]);
+  for (const [name, chars] of Object.entries(deleted)) for (const c of chars) expect([name, clean(`a${c}b`)]).toEqual([name, "ab"]);
+  // ZWJ and ZWNJ are kept on purpose: they join emoji and shape Persian and Indic text.
+  for (const ok of ["👩\u200d💻", "می\u200cروم", "क्\u200dष", "❤\ufe0f"]) expect(clean(ok)).toBe(ok);
+  expect(clean("PER-1  漢字 ok")).toBe("PER-1 漢字 ok");
   expect(events(JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "\x1b[2JBash", input: { command: "rm\x1b[2J -rf" } }] } }))[0]).not.toContain("\x1b");
 });
 

@@ -49,12 +49,13 @@ test("clip, cut and wrap work in display columns", () => {
   expect(wrap("abc", 0)).toEqual([]);
 });
 
-test("sorting puts waiting first and orders by state then ID; counts label orphans apart", () => {
-  const rs = [row({ id: "B", state: "ended", session: "ended" }), row({ id: "C", state: "ended", session: "orphan" }), row({ id: "Z", state: "waiting" }), row({ id: "A", state: "idle" }), row({ id: "B", state: "working" }), row({ id: "A", state: "working" }), row({ id: "U", state: "unknown" })];
-  expect(sortRows(rs).map((r) => `${r.id}:${r.session === "orphan" ? "orphan" : r.state}`)).toEqual(["Z:waiting", "A:working", "B:working", "A:idle", "U:unknown", "C:orphan", "B:ended"]);
-  expect(counts(rs)).toEqual({ waiting: 1, working: 2, idle: 1, unknown: 1, orphan: 1, ended: 1 });
-  expect(text(chips(rs, C, false))).toBe(" ◆ 1 waiting  ● 2 working  ○ 1 idle  ? 1 unknown  ◌ 1 orphan  ✕ 1 ended ");
+test("sorting puts waiting then question first and orders by state then ID; counts label orphans apart", () => {
+  const rs = [row({ id: "Q", state: "question" }), row({ id: "B", state: "ended", session: "ended" }), row({ id: "C", state: "ended", session: "orphan" }), row({ id: "Z", state: "waiting" }), row({ id: "A", state: "idle" }), row({ id: "B", state: "working" }), row({ id: "A", state: "working" }), row({ id: "U", state: "unknown" })];
+  expect(sortRows(rs).map((r) => `${r.id}:${r.session === "orphan" ? "orphan" : r.state}`)).toEqual(["Z:waiting", "Q:question", "A:working", "B:working", "A:idle", "U:unknown", "C:orphan", "B:ended"]);
+  expect(counts(rs)).toEqual({ waiting: 1, question: 1, working: 2, idle: 1, unknown: 1, orphan: 1, ended: 1 });
+  expect(text(chips(rs, C, false))).toBe(" ◆ 1 waiting  ◇ 1 question  ● 2 working  ○ 1 idle  ? 1 unknown  ◌ 1 orphan  ✕ 1 ended ");
   expect(text(chips([], C, true))).toBe(" ◆0  ●0  ○0  ◌0  ✕0 ");
+  expect(text(chips([row({ state: "question" })], C, true))).toBe(" ◆0  ◇1  ●0  ○0  ◌0  ✕0 ");
   const waiting = chips([row({ state: "waiting" })], C, false)[0]!;
   expect([waiting.bg, waiting.b]).toEqual([C.warn, true]);
 });

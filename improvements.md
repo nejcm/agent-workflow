@@ -14,6 +14,8 @@ Most items below are built from three small pieces, all stored as files next to 
 | `<ID>.cursor` | aw | last forwarded comment id, head SHA, round counter, attempt counter |
 | `<ID>.feedback-<n>.md` | aw | text to hand to the session (it never goes into keystrokes or a shell command) |
 
+*Built for agent questions* ([docs/agent-questions.md](docs/agent-questions.md), `src/question.ts`): the `<ID>.question` sidecar is the cursor, the live state from `aw status` is the idle gate, the text goes to `.aw/answer.md`, and the pointer line goes in as a bracketed paste (`set-buffer` + `paste-buffer -p`) plus a separate `Enter` to the first pane's `%id` of the window. Items 2 and 4 should reuse it rather than the buffer variant below.
+
 Injection: when the state is `idle`, run `tmux load-buffer <ID>.inject` → `paste-buffer -p -t <window>` → `send-keys Enter`. The pasted line is just `Address the feedback in <path>`. The same path works for Claude and Codex, and survives an aw restart because the cursor is a file.
 
 ## Tier 1 — do next
@@ -37,7 +39,7 @@ Injection: when the state is `idle`, run `tmux load-buffer <ID>.inject` → `pas
 - **Why:** this is the largest manual step left.
 - **Sketch:** for each In Review ticket, every tick:
   1. Run `gh pr view <branch> --json reviewDecision,reviews,comments,statusCheckRollup,mergeStateStatus,headRefOid`, plus `gh api repos/{repo}/pulls/{n}/comments` for line comments.
-  2. Collect new items after the cursor, **from allowlisted authors only** (`repos[].feedbackAuthors`, default = the repo owner). A stranger's PR comment is a prompt-injection vector.
+  2. Collect new items after the cursor, **from allowlisted authors only** (`repos[].feedbackAuthors`, already used for questions; default empty = none). A stranger's PR comment is a prompt-injection vector.
   3. Failing checks: append `gh run view <id> --log-failed | tail -n 80`, but only once per head SHA. `mergeStateStatus == DIRTY`: add "rebase on origin/<base> and resolve conflicts".
   4. Debounce: act only when the newest item is older than ~2 min, so a reviewer who is still typing gets batched.
   5. If state is `idle`, write `feedback-<n>.md`, inject it, move the ticket back to In Progress and bump the round counter. If the window is gone, go to 3 (re-engage) with the feedback as the prompt.

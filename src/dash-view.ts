@@ -40,9 +40,9 @@ export type Palette = { mono: boolean } & Partial<Record<Tone, string>>;
 /** Truecolor palette, or none at all (bold/dim/reverse only) under NO_COLOR. */
 export const palette = (env: Record<string, string | undefined> = process.env): Palette => (env.NO_COLOR ? { mono: true } : { mono: false, ...COLORS });
 
-const TONE: Record<Look, Tone> = { working: "accent", waiting: "warn", idle: "idle", unknown: "bad", orphan: "orphan", ended: "gone" };
-const GLYPH: Record<Look, string> = { working: "●", waiting: "◆", idle: "○", unknown: "?", orphan: "◌", ended: "✕" };
-const ORDER: Look[] = ["waiting", "working", "idle", "unknown", "orphan", "ended"];
+const TONE: Record<Look, Tone> = { working: "accent", waiting: "warn", question: "warn", idle: "idle", unknown: "bad", orphan: "orphan", ended: "gone" };
+const GLYPH: Record<Look, string> = { working: "●", waiting: "◆", question: "◇", idle: "○", unknown: "?", orphan: "◌", ended: "✕" };
+const ORDER: Look[] = ["waiting", "question", "working", "idle", "unknown", "orphan", "ended"];
 
 const s = (P: Palette, tone: Tone, t: string, x: Omit<Span, "t"> = {}): Span => ({ t, fg: P[tone], d: P.mono && (tone === "dim" || tone === "faint" || tone === "gone") ? true : undefined, ...x });
 const w = (l: Line) => l.reduce((n, x) => n + Bun.stringWidth(x.t), 0);
@@ -105,7 +105,7 @@ export function bar(done: number, total: number, width: number) {
   return "█".repeat(full) + part + " ".repeat(width - full - (part ? 1 : 0));
 }
 
-const barTone = (r: Row): Tone => (r.phases && r.phases.total > 0 && r.phases.done >= r.phases.total ? "ok" : ({ working: "accent", waiting: "warn", idle: "idle", unknown: "idle", orphan: "gone", ended: "gone" } as const)[label(r)]);
+const barTone = (r: Row): Tone => (r.phases && r.phases.total > 0 && r.phases.done >= r.phases.total ? "ok" : ({ working: "accent", waiting: "warn", question: "warn", idle: "idle", unknown: "idle", orphan: "gone", ended: "gone" } as const)[label(r)]);
 
 function barSpan(P: Palette, r: Row, width: number, bg?: string): Span {
   const p = r.phases ?? { done: 0, total: 0 };
@@ -207,7 +207,7 @@ export function chips(rs: Row[], P: Palette, compact: boolean): Line {
   const c = counts(rs);
   const out: Line = [];
   for (const k of ORDER) {
-    if (k === "unknown" && !c[k]) continue;
+    if ((k === "unknown" || k === "question") && !c[k]) continue;
     const text = compact ? `${GLYPH[k]}${c[k]}` : `${GLYPH[k]} ${c[k]} ${k}`;
     if (k === "waiting" && c[k]) out.push(P.mono ? { t: ` ${text} `, b: true, r: true } : { t: ` ${text} `, fg: P.ink, bg: P.warn, b: true });
     else if (!c[k]) out.push(s(P, "faint", ` ${text} `, { bg: P.head }));

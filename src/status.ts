@@ -7,6 +7,7 @@ import { PR_URL } from "./github";
 import { windows, winName } from "./launcher";
 import { worktreeIds } from "./pass";
 import { phaseProgress, type PhaseStatus } from "./phases";
+import { openQuestion } from "./question";
 import { resolve, type State } from "./state";
 import { transcript, withFile } from "./tail";
 import type { Config, Io, Repo } from "./types";
@@ -62,7 +63,10 @@ export function rows(cfg: Config, wins: Map<string, string>, home = homedir(), n
       const t = transcript(wt, r.agent, home, started) ?? null;
       const session = ended !== undefined ? "ended" : wins.has(winName(r.key, id)) ? "running" : "orphan";
       const idleMs = t ? Math.max(0, now - (mtime(t) ?? now)) : null;
-      const live = resolve(session, feeds[r.agent]?.(wt, started ?? 0, now), idleMs, now);
+      const resolved = resolve(session, feeds[r.agent]?.(wt, started ?? 0, now), idleMs, now);
+      const pr = savedPr(dir, id);
+      // Answers are only delivered before a PR exists, so an open question after it is not news.
+      const live = resolved.state === "idle" && !pr && openQuestion(dir, id) ? { ...resolved, state: "question" as const } : resolved;
       return {
         id,
         repo: r.key,
@@ -75,7 +79,7 @@ export function rows(cfg: Config, wins: Map<string, string>, home = homedir(), n
         runtimeMs: started === undefined ? null : Math.max(0, (ended ?? now) - started),
         idleMs,
         phases: progress(dir, id),
-        pr: savedPr(dir, id),
+        pr,
         merge: existsSync(join(dir, `${id}.merge`)) ? "held" : null,
         transcript: t,
         window: session === "running" ? wins.get(winName(r.key, id)) ?? null : null,

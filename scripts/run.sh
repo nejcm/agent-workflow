@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Usage: ./run.sh [once|service]   Preflight, then poll in the foreground; "service" installs the systemd user unit.
+# Usage: scripts/run.sh [once|service]   Preflight, then poll in the foreground; "service" installs the systemd user unit.
 set -euo pipefail
-cd "$(dirname "$(readlink -f "$0")")"
+cd "$(dirname "$(readlink -f "$0")")/.."
 export PATH="$HOME/.local/bin:$PATH"
 
-[ -e aw.json ] || { echo "aw.json missing: run ./setup.sh first"; exit 1; }
-for c in bun git gh tmux nono; do command -v "$c" >/dev/null || { echo "MISSING: $c (run ./setup.sh)"; exit 1; }; done
+[ -e aw.json ] || { echo "aw.json missing: run scripts/setup.sh first"; exit 1; }
+for c in bun git gh tmux nono; do command -v "$c" >/dev/null || { echo "MISSING: $c (run scripts/setup.sh)"; exit 1; }; done
 bun aw.ts once --dry-run >/dev/null
 
 case "${1:-run}" in

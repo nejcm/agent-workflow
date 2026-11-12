@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Usage: ./setup.sh [owner/repo ...]   Idempotent; never overwrites real files. Creates labels for the repos given.
+# Usage: scripts/setup.sh [owner/repo ...]   Idempotent; never overwrites real files. Creates labels for the repos given.
 set -euo pipefail
+cd "$(dirname "$(readlink -f "$0")")/.."
 
 link() {
   if [ -L "$2" ]; then echo "ok   $2"; return; fi
@@ -56,5 +57,5 @@ todo=0
 CLAUDE_CONFIG_DIR=~/.claude-aw claude auth status 2>/dev/null | grep -q '"loggedIn": true' || { todo=1; echo "TODO: CLAUDE_CONFIG_DIR=~/.claude-aw claude   # then /login"; }
 CODEX_HOME=~/.codex-aw codex login status >/dev/null 2>&1 || { todo=1; echo "TODO: CODEX_HOME=~/.codex-aw codex login"; }
 echo "Linear sources: create labels agent and host:$host in the team."
-[ "$todo" = 0 ] && echo "Setup done. Next: ./run.sh"
+[ "$todo" = 0 ] && echo "Setup done. Next: scripts/run.sh"
 exit 0

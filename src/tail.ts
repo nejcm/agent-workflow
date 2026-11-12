@@ -26,6 +26,24 @@ export const clean = (s: string, max = MAX) =>
     .trim()
     .slice(0, max);
 
+const seg = new Intl.Segmenter();
+
+/** `s` truncated (with …) or padded to exactly `w` terminal columns. */
+export function fit(s: string, w: number) {
+  if (w <= 0) return "";
+  const sw = Bun.stringWidth(s);
+  if (sw <= w) return s + " ".repeat(w - sw);
+  let out = "";
+  let n = 0;
+  for (const { segment } of seg.segment(s)) {
+    const cw = Bun.stringWidth(segment);
+    if (n + cw > w - 1) break;
+    out += segment;
+    n += cw;
+  }
+  return out + "…" + " ".repeat(w - 1 - n);
+}
+
 // Transcript dirs are agent-writable: never follow a symlink or block on a FIFO; undefined if gone, unreadable or not a regular file.
 export function withFile<T>(path: string, fn: (fd: number, st: Stats) => T): T | undefined {
   let fd: number;
@@ -79,6 +97,8 @@ export function argSummary(input: unknown): string {
 
 const textOf = (c: unknown): string => (typeof c === "string" ? c : Array.isArray(c) ? c.map((b) => (typeof b?.text === "string" ? b.text : "")).join(" ") : "");
 
+export const KIND = 6;
+
 const hhmmss = (ts: unknown) => {
   const d = new Date(typeof ts === "string" ? ts : NaN);
   return isNaN(d.getTime()) ? "--:--:--" : d.toTimeString().slice(0, 8);
@@ -96,7 +116,7 @@ export function events(line: string): string[] {
 function lineEvents(o: any): string[] {
   if (!o || typeof o !== "object") return [];
   const at = hhmmss(o.timestamp);
-  const ev = (kind: string, detail: string) => `${at} ${clean(kind, 24).padEnd(6)} ${detail}`;
+  const ev = (kind: string, detail: string) => `${at} ${fit(clean(kind, 24), KIND)} ${detail}`;
   const out: string[] = [];
   const content = o.message?.content;
   if ((o.type === "assistant" || o.type === "user") && Array.isArray(content)) {

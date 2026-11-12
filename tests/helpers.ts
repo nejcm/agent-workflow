@@ -1,3 +1,4 @@
+import type { Row } from "../src/status";
 import { afterEach, beforeEach } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -95,3 +96,22 @@ export const noPr = (argv: string[]) => (argv[1] === "pr" ? { out: "[]" } : unde
 
 export const two = (over: object = {}) =>
   config({ maxConcurrent: 4, repos: [{ name: "acme/web", path: join(root, "src-web") }, { name: "acme/api", path: join(root, "src-api"), ...over }], sources: [src({ name: "gh" }), src({ name: "lin", tracker: "linear", team: "ENG" })] });
+
+export const statusRow = (over: Partial<Row> = {}): Row => ({
+  id: "PER-1",
+  repo: "acme/web",
+  agent: "claude",
+  session: "running",
+  state: "working",
+  stateSince: null,
+  waitingFor: null,
+  startedAt: null,
+  runtimeMs: 3_600_000,
+  idleMs: 5_000,
+  phases: { done: 1, total: 3, items: [{ key: "a", title: "Do a", status: "done" }, { key: "b", title: "Do b", status: "in-progress" }, { key: "c", title: "Do c", status: "todo" }] },
+  pr: "https://github.com/acme/web/pull/4",
+  merge: null,
+  transcript: null,
+  window: "@1",
+  ...over,
+});

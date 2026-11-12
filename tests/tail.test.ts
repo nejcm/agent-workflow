@@ -44,7 +44,8 @@ test("claude lines: text, tool use, tool error; tool output, thinking and prompt
 test("codex lines: assistant text and tool calls; developer messages and outputs are skipped", () => {
   expect(events(codexSay)[0]).toEndWith("say    rc=1 rc2=0");
   expect(events(codexCustom)[0]).toContain("exec   const r = await tools.exec_command");
-  expect(events(codexFn)[0]).toEndWith("exec_command ls -la");
+  expect(events(codexFn)[0]).toEndWith("exec_… ls -la");
+  expect(events(JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "漢字テスト", input: {} }] } }))[0]).toBe("--:--:-- 漢字…  {}");
   for (const l of [codexMeta("/w"), codexDev, codexOut]) expect(events(l)).toEqual([]);
 });
 

@@ -2,46 +2,43 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { action, attachCmd, exclusive, fit, installed, layout, lines, openable, reduce, reselect, scroll, type View, watch } from "../src/dash";
-import type { Row } from "../src/status";
+import { action, attachCmd, exclusive, installed, openable, reduce, reselect, type View, watch } from "../src/dash";
+import { statusRow as row } from "./helpers";
 
-const row = (over: Partial<Row> = {}): Row => ({
-  id: "PER-1",
-  repo: "acme/web",
-  agent: "claude",
-  session: "running",
-  state: "working",
-  stateSince: null,
-  waitingFor: null,
-  runtimeMs: 3_600_000,
-  idleMs: 5_000,
-  phases: { done: 1, total: 3 },
-  pr: "https://github.com/acme/web/pull/4",
-  merge: null,
-  transcript: null,
-  window: "@1",
-  ...over,
-});
-const v = (over: Partial<View> = {}): View => ({ sel: 0, focus: false, help: false, ...over });
+const v = (over: Partial<View> = {}): View => ({ sel: 0, pane: "list", max: false, help: false, back: 0, ...over });
 
 test("keys map to actions; unknown, ctrl and meta combos do nothing", () => {
   const k = (name: string, o = {}) => action({ name, ...o });
-  expect([k("j"), k("down"), k("k"), k("up"), k("g"), k("g", { shift: true }), k("return"), k("a"), k("o"), k("r"), k("?"), k("q"), k("c", { ctrl: true })]).toEqual([
-    "down", "down", "up", "up", "first", "last", "focus", "attach", "open", "refresh", "help", "quit", "quit",
+  expect([k("j"), k("down"), k("k"), k("up"), k("g"), k("g", { shift: true }), k("return"), k("tab"), k("escape"), k("a"), k("o"), k("r"), k("?"), k("q"), k("c", { ctrl: true })]).toEqual([
+    "down", "down", "up", "up", "first", "last", "focus", "tab", "back", "attach", "open", "refresh", "help", "quit", "quit",
   ]);
   expect([k("x"), k("toString"), k("__proto__"), k("j", { ctrl: true }), k("q", { meta: true })]).toEqual([undefined, undefined, undefined, undefined, undefined]);
 });
 
-test("reduce clamps selection, toggles focus and help, and leaves selection alone while focused", () => {
+test("reduce clamps selection, resets the scroll on a move, and toggles panes, maximise and help", () => {
   expect(reduce(v(), "up", 3).sel).toBe(0);
   expect(reduce(v({ sel: 2 }), "down", 3).sel).toBe(2);
   expect(reduce(v(), "last", 3).sel).toBe(2);
-  expect(reduce(v({ sel: 2 }), "first", 3).sel).toBe(0);
+  expect(reduce(v({ sel: 2, back: 4 }), "first", 3)).toEqual(v({ sel: 0 }));
   expect(reduce(v(), "down", 0).sel).toBe(0);
-  expect(reduce(v(), "focus", 3)).toEqual(v({ focus: true }));
+  expect(reduce(v(), "focus", 3)).toEqual(v({ max: true, pane: "tail" }));
+  expect(reduce(v({ max: true, pane: "tail" }), "focus", 3)).toEqual(v());
+  expect(reduce(v(), "tab", 3)).toEqual(v({ pane: "tail" }));
+  expect(reduce(v({ pane: "tail", max: true }), "tab", 3)).toEqual(v());
   expect(reduce(v({ help: true }), "help", 3).help).toBe(false);
-  expect(reduce(v({ focus: true, sel: 1 }), "down", 3).sel).toBe(1);
+  expect(reduce(v({ help: true, max: true }), "back", 3)).toEqual(v({ max: true }));
+  expect(reduce(v({ max: true, pane: "tail" }), "back", 3)).toEqual(v());
   expect(reduce(v(), "quit", 3)).toEqual(v());
+});
+
+test("movement scrolls the transcript within its range while it has focus", () => {
+  const t = v({ pane: "tail", sel: 1 });
+  expect(reduce(t, "up", 3, 5)).toEqual({ ...t, back: 1 });
+  expect(reduce({ ...t, back: 5 }, "up", 3, 5).back).toBe(5);
+  expect(reduce(t, "down", 3, 5).back).toBe(0);
+  expect(reduce(t, "first", 3, 5).back).toBe(5);
+  expect(reduce({ ...t, back: 3 }, "last", 3, 5).back).toBe(0);
+  expect(reduce(t, "up", 3, 0).back).toBe(0);
 });
 
 test("reselect follows the ticket across refreshes, else clamps", () => {
@@ -49,45 +46,6 @@ test("reselect follows the ticket across refreshes, else clamps", () => {
   expect(reselect("acme/web/C", rs, 0)).toBe(2);
   expect(reselect("acme/web/Z", rs, 7)).toBe(2);
   expect(reselect(undefined, [], 3)).toBe(0);
-});
-
-test("fit truncates and pads by display width, wide chars included", () => {
-  expect(fit("abc", 5)).toBe("abc  ");
-  expect(fit("abcdef", 4)).toBe("abc…");
-  expect(fit("漢字テスト", 5)).toBe("漢字…");
-  expect(fit("漢字テスト", 6)).toBe("漢字… ");
-  expect(Bun.stringWidth(fit("漢字テスト", 5))).toBe(5);
-  expect(fit("x", 0)).toBe("");
-});
-
-test("table lines are exactly the width, stripped of controls, with the selected row marked", () => {
-  const hostile = row({ id: "PER-2", repo: "\x1b]52;c;ZXZpbA==\x07acme/web‮", state: "waiting", waitingFor: "permission " + "漢".repeat(50), pr: null, merge: "held" });
-  for (const width of [120, 60, 40, 10]) {
-    const ls = lines([row(), hostile], width, 1);
-    expect(ls).toHaveLength(3);
-    for (const l of ls) {
-      expect(Bun.stringWidth(l)).toBe(width);
-      expect(l).not.toMatch(/[\x00-\x1f\x7f-\x9f‪-‮]/);
-    }
-  }
-  const [head, a, b] = lines([row(), hostile], 120, 1);
-  expect(head).toMatch(/^ {2}ID\s+REPO\s+AGENT\s+STATE\s+IDLE\s+RUNTIME\s+PHASES\s+PR\s*$/);
-  expect(a).toMatch(/^ {2}PER-1\s+acme\/web\s+claude\s+working\s+5s\s+1h00m\s+1\/3\s+#4\s*$/);
-  expect(b).toMatch(/^> PER-2 .*waiting: permission 漢.*held\s*$/);
-});
-
-test("layout and scroll fit small terminals", () => {
-  expect(layout(10, 5, false)).toEqual({ table: 4, tail: 4 });
-  expect(layout(30, 3, false)).toEqual({ table: 4, tail: 24 });
-  expect(layout(10, 5, true)).toEqual({ table: 0, tail: 8 });
-  for (const h of [0, 1, 2, 3]) {
-    const l = layout(h, 5, false);
-    expect(l.table + l.tail).toBe(Math.max(0, h - 2));
-    expect(Math.min(l.table, l.tail)).toBeGreaterThanOrEqual(0);
-  }
-  expect(scroll(0, 5, 3)).toBe(0);
-  expect(scroll(4, 5, 3)).toBe(2);
-  expect(scroll(2, 10, 3)).toBe(1);
 });
 
 test("attach targets the window id, switches inside tmux and suspends outside", () => {
@@ -160,11 +118,12 @@ test.skipIf(!Bun.which("tmux"))("dashboard starts, moves and quits cleanly in a 
       for (let i = 0; i < 100 && !ok(); i++) await Bun.sleep(50);
       return ok();
     };
-    expect(await until(() => /refreshed \d/.test(pane()))).toBe(true);
-    expect(pane()).toMatch(/> PER-1\s+acme\/web/);
+    const ready = /\d\d:\d\d:\d\d · every/;
+    expect(await until(() => ready.test(pane()))).toBe(true);
+    expect(pane()).toMatch(/▌. PER-1\s+acme\/web/);
     tmux("send-keys", "j");
-    expect(await until(() => /> PER-2\s+acme\/web/.test(pane()))).toBe(true);
-    expect(pane()).toMatch(/^ {2}PER-1\s+acme\/web/m);
+    expect(await until(() => /▌. PER-2\s+acme\/web/.test(pane()))).toBe(true);
+    expect(pane()).toMatch(/│ . PER-1\s+acme\/web/);
     const restored = async (status: string) => {
       expect(await until(() => out().includes("icanon"))).toBe(true);
       expect(out()).toStartWith(status);
@@ -176,7 +135,7 @@ test.skipIf(!Bun.which("tmux"))("dashboard starts, moves and quits cleanly in a 
     await restored("EXIT=0");
     rmSync(join(dir, "out"));
     tmux("respawn-pane", "-k", cmd);
-    expect(await until(() => /refreshed \d/.test(pane()))).toBe(true);
+    expect(await until(() => ready.test(pane()))).toBe(true);
     const pid = Bun.spawnSync(["pgrep", "-f", `^${process.execPath} ${join(repo, "aw.ts")} watch --config ${dir}/`]).stdout.toString().trim();
     expect(pid).toMatch(/^\d+$/);
     process.kill(Number(pid), "SIGTERM");
@@ -186,7 +145,7 @@ test.skipIf(!Bun.which("tmux"))("dashboard starts, moves and quits cleanly in a 
     writeFileSync(join(dir, "bin/tmux"), `#!/bin/sh\n[ "$1" = list-windows ] && { echo "@1 acme/web/PER-1"; exit 0; }\nexec sleep 31.7\n`, { mode: 0o755 });
     rmSync(join(dir, "out"));
     tmux("respawn-pane", "-k", `env -u TMUX ${cmd}`);
-    expect(await until(() => /> PER-1 .*claude\s+unknown/.test(pane()))).toBe(true);
+    expect(await until(() => /PER-1 +acme\/web +claude +\? unknown/.test(pane()))).toBe(true);
     const sleeping = () => Bun.spawnSync(["pgrep", "-f", "^sleep 31.7$"]).stdout.toString().trim();
     tmux("send-keys", "a");
     expect(await until(() => sleeping() !== "")).toBe(true);

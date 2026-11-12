@@ -20,7 +20,8 @@ export interface Row {
   waitingFor: string | null;
   runtimeMs: number | null;
   idleMs: number | null;
-  phases: { done: number; total: number } | null;
+  startedAt: number | null;
+  phases: { done: number; total: number; items: PhaseItem[] } | null;
   pr: string | null;
   /** "held": aw decided not to auto-merge the PR's current head (the `<ID>.merge` marker). */
   merge: "held" | null;
@@ -29,13 +30,22 @@ export interface Row {
   window: string | null;
 }
 
+export interface PhaseItem {
+  key: string;
+  title: string;
+  status: string;
+}
+
 export const PR_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/;
 
+// The sidecar keeps no titles, so its phases are listed by key.
 function progress(wt: string, sidecar: string) {
   try {
-    const live = readPhases(wt)?.map((p) => p.status);
-    const st = live ?? (existsSync(sidecar) ? Object.values(JSON.parse(readFileSync(sidecar, "utf8")) as Record<string, { status: string }>).map((s) => s.status) : undefined);
-    return st ? { done: st.filter((s) => s === "done").length, total: st.length } : null;
+    const live = readPhases(wt)?.map(({ key, title, status }) => ({ key, title, status }));
+    const all = live ?? (existsSync(sidecar) ? Object.entries(JSON.parse(readFileSync(sidecar, "utf8")) as Record<string, { status: string }>).map(([key, s]) => ({ key, title: key, status: String(s?.status) })) : undefined);
+    if (!all) return null;
+    const items = all.slice(0, 20).map((p) => ({ key: clean(p.key, 40), title: clean(p.title, 120), status: clean(p.status, 20) }));
+    return { done: all.filter((p) => p.status === "done").length, total: all.length, items };
   } catch {
     return null;
   }
@@ -75,6 +85,7 @@ export function rows(cfg: Config, wins: Map<string, string>, home = homedir(), n
         state: live.state,
         stateSince: live.since,
         waitingFor: live.waitingFor,
+        startedAt: started ?? null,
         runtimeMs: started === undefined ? null : Math.max(0, (ended ?? now) - started),
         idleMs,
         phases: progress(wt, join(dir, `${id}.phases.json`)),
@@ -103,6 +114,9 @@ export const dur = (ms: number | null) => {
   return `${Math.floor(s / 86400)}d${Math.floor((s % 86400) / 3600)}h`;
 };
 
+/** `state`, except a session with neither tmux window nor `.ended` marker shows as `orphan`. */
+export const label = (r: Pick<Row, "session" | "state">) => (r.session === "orphan" ? "orphan" : r.state);
+
 export const prLabel = (r: Row) => [r.pr && `#${/\d+$/.exec(r.pr)![0]}`, r.merge].filter(Boolean).join(" ") || "-";
 
 export function table(rs: Row[]) {
@@ -112,7 +126,7 @@ export function table(rs: Row[]) {
     r.repo,
     r.agent,
     r.session,
-    r.waitingFor ? `${r.state}: ${r.waitingFor}` : r.state,
+    r.waitingFor ? `${r.state}: ${r.waitingFor}` : label(r),
     dur(r.runtimeMs),
     dur(r.idleMs),
     r.phases ? `${r.phases.done}/${r.phases.total}` : "-",

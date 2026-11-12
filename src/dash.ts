@@ -1,16 +1,21 @@
 import { statSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { KeyEvent } from "@opentui/core";
-import type { State } from "./state";
-import { dur, PR_URL, prLabel, type Row, snapshot } from "./status";
+import { repoDir } from "./config";
+import { type Line, type Pane, palette, screen, sortRows } from "./dash-view";
+import { PR_URL, type Row, snapshot } from "./status";
 import { clean, reader } from "./tail";
 import type { Config, Io } from "./types";
 
-export type Action = "down" | "up" | "first" | "last" | "focus" | "attach" | "open" | "refresh" | "help" | "quit";
+export type Action = "down" | "up" | "first" | "last" | "focus" | "tab" | "back" | "attach" | "open" | "refresh" | "help" | "quit";
 export interface View {
   sel: number;
-  focus: boolean;
+  pane: Pane;
+  max: boolean;
   help: boolean;
+  /** Transcript rows scrolled up from the end; 0 follows new events. */
+  back: number;
 }
 
 const KEYS = new Map<string, Action>([
@@ -20,6 +25,8 @@ const KEYS = new Map<string, Action>([
   ["up", "up"],
   ["return", "focus"],
   ["linefeed", "focus"],
+  ["tab", "tab"],
+  ["escape", "back"],
   ["a", "attach"],
   ["o", "open"],
   ["r", "refresh"],
@@ -34,15 +41,22 @@ export function action(k: { name: string; shift?: boolean; ctrl?: boolean; meta?
   return KEYS.get(k.name);
 }
 
-/** Selection, focus and help after `a` on `n` rows; the selection stays put while the tail is focused. */
-export function reduce(v: View, a: Action, n: number): View {
+/** The view after `a` on `n` rows; movement scrolls the transcript (up to `maxBack`) while it has focus. */
+export function reduce(v: View, a: Action, n: number, maxBack = Infinity): View {
   const last = Math.max(0, n - 1);
-  const sel = (i: number) => (v.focus ? v : { ...v, sel: Math.max(0, Math.min(last, i)) });
-  if (a === "down") return sel(v.sel + 1);
-  if (a === "up") return sel(v.sel - 1);
-  if (a === "first") return sel(0);
-  if (a === "last") return sel(last);
-  if (a === "focus") return { ...v, focus: !v.focus };
+  const move = (i: number) => {
+    const sel = Math.max(0, Math.min(last, i));
+    return sel === v.sel ? v : { ...v, sel, back: 0 };
+  };
+  const scrollTo = (b: number) => ({ ...v, back: Math.max(0, Math.min(maxBack, b)) });
+  const tail = v.pane === "tail";
+  if (a === "down") return tail ? scrollTo(v.back - 1) : move(v.sel + 1);
+  if (a === "up") return tail ? scrollTo(v.back + 1) : move(v.sel - 1);
+  if (a === "first") return tail ? scrollTo(maxBack) : move(0);
+  if (a === "last") return tail ? scrollTo(0) : move(last);
+  if (a === "focus") return v.max ? { ...v, max: false, pane: "list" } : { ...v, max: true, pane: "tail" };
+  if (a === "tab") return { ...v, max: false, pane: tail ? "list" : "tail" };
+  if (a === "back") return v.help ? { ...v, help: false } : v.max ? { ...v, max: false, pane: "list" } : v;
   if (a === "help") return { ...v, help: !v.help };
   return v;
 }
@@ -54,60 +68,6 @@ export function reselect(prev: string | undefined, next: Row[], sel: number) {
   const i = next.findIndex((r) => key(r) === prev);
   return i >= 0 ? i : Math.max(0, Math.min(next.length - 1, sel));
 }
-
-const seg = new Intl.Segmenter();
-
-/** `s` truncated (with …) or padded to exactly `w` terminal columns. */
-export function fit(s: string, w: number) {
-  if (w <= 0) return "";
-  const sw = Bun.stringWidth(s);
-  if (sw <= w) return s + " ".repeat(w - sw);
-  let out = "";
-  let n = 0;
-  for (const { segment } of seg.segment(s)) {
-    const cw = Bun.stringWidth(segment);
-    if (n + cw > w - 1) break;
-    out += segment;
-    n += cw;
-  }
-  return out + "…" + " ".repeat(w - 1 - n);
-}
-
-const HEAD = ["ID", "REPO", "AGENT", "STATE", "IDLE", "RUNTIME", "PHASES", "PR"];
-const FLEX = [0, 1, 3];
-const GAP = "  ";
-
-const cells = (r: Row) =>
-  [r.id, r.repo, r.agent, r.waitingFor ? `${r.state}: ${r.waitingFor}` : r.state, dur(r.idleMs), dur(r.runtimeMs), r.phases ? `${r.phases.done}/${r.phases.total}` : "-", prLabel(r)].map((x) => clean(x, 80));
-
-/** Column widths for `all` (header first) within `width`, shrinking ID, REPO and STATE first. */
-export function widths(all: string[][], width: number) {
-  const w = HEAD.map((_, i) => Math.max(...all.map((c) => Bun.stringWidth(c[i] ?? ""))));
-  let over = w.reduce((a, b) => a + b, 0) + GAP.length * (w.length - 1) - width;
-  while (over-- > 0) {
-    const i = FLEX.reduce((a, b) => (w[b]! > w[a]! ? b : a));
-    if (w[i]! <= 4) break;
-    w[i]!--;
-  }
-  return w;
-}
-
-/** One table line per row (header first), each exactly `width` columns; "> " marks the selected row. */
-export function lines(rs: Row[], width: number, sel: number) {
-  const all = [HEAD, ...rs.map(cells)];
-  const w = widths(all, width - 2);
-  return all.map((c, i) => fit((i - 1 === sel ? "> " : "  ") + c.map((x, j) => fit(x, w[j]!)).join(GAP).trimEnd(), width));
-}
-
-/** Heights of the table (header included) and tail pane; header and footer lines take the rest. */
-export function layout(h: number, n: number, focus: boolean) {
-  const body = Math.max(0, h - 2);
-  const table = focus ? 0 : Math.min(n + 1, Math.max(2, Math.ceil(body / 2)), body);
-  return { table, tail: body - table };
-}
-
-/** First row index to show so `sel` stays visible in `visible` lines. */
-export const scroll = (sel: number, n: number, visible: number) => Math.max(0, Math.min(sel - Math.floor(visible / 2), n - visible));
 
 /** tmux argv to show window `win` of `session`: a client switch inside tmux, else an attach the dashboard suspends for. */
 export function attachCmd(session: string, win: string | null, inTmux: boolean) {
@@ -144,11 +104,7 @@ export async function watch(o: { plain: boolean; tty: boolean; dash: () => Promi
   return o.fallback();
 }
 
-const COLOR: Record<State, string> = { waiting: "#e3b341", working: "#7ee787", idle: "#8b949e", ended: "#6e7681", unknown: "#b56a6a" };
-const DIM = "#8b949e";
-const SEL_BG = "#30363d";
 const MAX_TAIL = 500;
-const HELP = "j/k move  g/G first/last  Enter focus tail  a attach  o open PR  r refresh  ? help  q quit";
 
 const SIGNALS = new Map<NodeJS.Signals, number>([["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129], ["SIGQUIT", 131], ["SIGPIPE", 141]]);
 
@@ -169,7 +125,7 @@ export async function dashboard(cfg: Config, io: Io, interval: number) {
   let msgTimer: ReturnType<typeof setTimeout> | undefined;
   let child: Bun.Subprocess | undefined;
   if (!installed()) throw new Error("@opentui/core is not installed (run bun install)");
-  const { BoxRenderable, ScrollBoxRenderable, TextRenderable, createCliRenderer } = await import("@opentui/core");
+  const { RGBA, StyledText, TextAttributes: A, TextRenderable, createCliRenderer } = await import("@opentui/core");
   const r = await createCliRenderer({ exitOnCtrlC: true, exitSignals: [], targetFps: 30, onDestroy: () => void exit(0) });
 
   async function exit(code: number, err?: unknown) {
@@ -194,26 +150,30 @@ export async function dashboard(cfg: Config, io: Io, interval: number) {
   for (const [sig, code] of SIGNALS) process.on(sig, () => void exit(code));
 
   let rs: Row[] = [];
-  let view: View = { sel: 0, focus: false, help: false };
+  let view: View = { sel: 0, pane: "list", max: false, help: false, back: 0 };
+  let maxBack = 0;
   let at = "--:--:--";
   let msg = "";
   let tail: { path: string | null; next?: () => string[]; lines: string[] } = { path: null, lines: [] };
+  const P = palette();
+  const home = homedir();
+  const memo = new Map<string, Line[]>();
 
-  const header = new TextRenderable(r, { id: "header", content: "", height: 1, fg: DIM, wrapMode: "none" });
-  const table = new BoxRenderable(r, { id: "table", flexDirection: "column", flexShrink: 0 });
-  const pane = new ScrollBoxRenderable(r, { id: "tail", flexGrow: 1, stickyScroll: true, stickyStart: "bottom", rootOptions: { border: true, borderColor: DIM } });
-  const tailText = new TextRenderable(r, { id: "tail-text", content: "", wrapMode: "word" });
-  const footer = new TextRenderable(r, { id: "footer", content: "", height: 1, fg: DIM, wrapMode: "none" });
-  pane.add(tailText);
   r.root.flexDirection = "column";
-  for (const x of [header, table, pane, footer]) r.root.add(x);
   const pool: InstanceType<typeof TextRenderable>[] = [];
-
   const shown = new WeakMap<object, string>();
-  const styled = new WeakMap<object, string>();
-  const set = (t: InstanceType<typeof TextRenderable>, s: string) => {
-    if (shown.get(t) !== s) shown.set(t, (t.content = s));
-  };
+  const rgba = new Map<string, InstanceType<typeof RGBA>>();
+  const color = (hex: string | undefined) => (hex === undefined ? undefined : rgba.get(hex) ?? rgba.set(hex, RGBA.fromHex(hex)).get(hex));
+  const styled = (l: Line) =>
+    new StyledText(
+      l.map((x) => ({
+        __isChunk: true as const,
+        text: x.t,
+        fg: color(x.fg),
+        bg: color(x.bg),
+        attributes: (x.b ? A.BOLD : 0) | (x.d ? A.DIM : 0) | (x.u ? A.UNDERLINE : 0) | (x.r ? A.INVERSE : 0),
+      })),
+    );
 
   function say(m: string) {
     msg = clean(m, 300);
@@ -225,50 +185,49 @@ export async function dashboard(cfg: Config, io: Io, interval: number) {
   function pump() {
     const p = rs[view.sel]?.transcript ?? null;
     if (p !== tail.path) tail = { path: p, next: p ? reader(p) : undefined, lines: [] };
-    const add = tail.next?.() ?? [];
     // events() already clean()s every field; cleaning again would collapse its column padding.
+    const add = tail.next?.() ?? [];
     if (add.length) tail.lines = [...tail.lines, ...add].slice(-MAX_TAIL);
-    set(tailText, tail.lines.length ? tail.lines.join("\n") : p ? "no events yet" : "no transcript yet");
-    const sel = rs[view.sel];
-    const title = ` ${sel ? clean(`${sel.repo}/${sel.id}`, 120) : "transcript"}${view.focus ? " (focused)" : ""} `;
-    if (pane.title !== title) pane.title = title;
   }
 
   function paint() {
     if (exiting) return;
-    const { width, height } = r;
-    const lay = layout(height, rs.length, view.focus);
-    table.height = lay.table;
-    table.visible = lay.table > 0;
-    while (pool.length < lay.table) {
-      const t = new TextRenderable(r, { id: `row-${pool.length}`, content: "", height: 1, wrapMode: "none" });
-      pool.push(t);
-      table.add(t);
-    }
-    // Rows are hidden, not removed: OpenTUI keeps removed renderables registered until destroyed.
-    pool.forEach((t, i) => (t.visible = i < lay.table));
-    const all = lines(rs, width, view.sel);
-    const start = scroll(view.sel, rs.length, lay.table - 1);
-    pool.slice(0, lay.table).forEach((t, i) => {
-      const ri = i === 0 ? -1 : start + i - 1;
-      set(t, i === 0 ? all[0]! : all[ri + 1] ?? "");
-      const look = `${i === 0 ? DIM : COLOR[rs[ri]?.state ?? "unknown"]} ${i > 0 && ri === view.sel ? SEL_BG : "transparent"}`;
-      if (styled.get(t) !== look) [t.fg, t.bg] = look.split(" ") as [string, string];
-      styled.set(t, look);
-    });
-    const running = rs.filter((x) => x.session === "running").length;
-    set(header, fit(`aw ${clean(cfg.host, 40)}  ${rs.length} sessions, ${running} running  refreshed ${at}  every ${interval}s  ? help  q quit`, width));
-    set(footer, fit(msg || (view.help ? HELP : rs.length ? "" : "no worktrees"), width));
     pump();
+    if (memo.size > 4 * MAX_TAIL) memo.clear();
+    const { width, height } = r;
+    const sel = rs[view.sel];
+    const out = screen(
+      { ...view, rs, host: cfg.host, at, every: interval, msg, events: tail.lines, empty: tail.path ? "no events yet" : "no transcript yet", ctx: { now: Date.now(), home, wt: sel ? join(repoDir(cfg, sel.repo), sel.id) : "" } },
+      width,
+      height,
+      P,
+      memo,
+    );
+    maxBack = out.maxBack;
+    while (pool.length < out.lines.length) {
+      const t = new TextRenderable(r, { id: `line-${pool.length}`, content: "", height: 1, flexShrink: 0, wrapMode: "none", fg: RGBA.defaultForeground() });
+      pool.push(t);
+      r.root.add(t);
+    }
+    // Lines are hidden, not removed: OpenTUI keeps removed renderables registered until destroyed.
+    pool.forEach((t, i) => {
+      const l = out.lines[i];
+      if (t.visible !== !!l) t.visible = !!l;
+      const k = l ? JSON.stringify(l) : "";
+      if (l && shown.get(t) !== k) {
+        shown.set(t, k);
+        t.content = styled(l);
+      }
+    });
   }
 
   const refresh = exclusive(async () => {
     try {
       const next = await snapshot(cfg, io);
       const prev = key(rs[view.sel]);
-      rs = next;
+      rs = sortRows(next);
       view = { ...view, sel: reselect(prev, rs, view.sel) };
-      at = new Date().toLocaleTimeString();
+      at = new Date().toTimeString().slice(0, 8);
     } catch (e) {
       say(`refresh failed: ${(e as Error).message}`);
     }
@@ -324,12 +283,7 @@ export async function dashboard(cfg: Config, io: Io, interval: number) {
     if (a === "attach") return void attach();
     if (a === "open") return open();
     if (a === "refresh") return void refresh().then((ran) => ran || say("refresh already running"));
-    if (view.focus && (a === "down" || a === "up" || a === "first" || a === "last")) {
-      if (a === "first" || a === "last") pane.scrollTo(a === "first" ? 0 : pane.scrollHeight);
-      else pane.scrollBy(a === "down" ? 1 : -1);
-      return;
-    }
-    view = reduce(view, a, rs.length);
+    view = reduce(view, a, rs.length, maxBack);
     paint();
   });
   r.on("resize", paint);

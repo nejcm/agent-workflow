@@ -178,31 +178,40 @@ cp systemd/aw.service ~/.config/systemd/user/ && systemctl --user enable --now a
 
 ### Watching sessions
 
+![aw watch: ticket list with phase progress bars, selected ticket detail and live transcript](docs/dashboard.png)
+
 Claude Code and Codex can't import a session while it runs, so observe it instead of resuming it:
 
 - `tmux attach -t aw`: the live terminals, one window per ticket (`owner/name/ID`). Detach with `Ctrl-b d`; typing there steers the agent.
-- `bun aw.ts status [--json]`: per worktree its agent, session (`running`: tmux window and no `<ID>.ended`; `ended`; `orphan`: neither), live state (see [Live state](#live-state)), runtime (since `<ID>.sh` was written), idle (since the transcript was last written), phases `done/total` (`.aw/phases.json`, else the `<ID>.phases.json` sidecar) and PR (from Claude's `pr-link` transcript entry; `held` when `<ID>.merge` records a "not auto-merged" decision). No network calls.
+- `bun aw.ts status [--json]`: per worktree its agent, session (`running`: tmux window and no `<ID>.ended`; `ended`; `orphan`: neither), live state (see [Live state](#live-state)), runtime (since `<ID>.sh` was written; JSON `startedAt`, ms epoch), idle (since the transcript was last written), phases `done/total` (`.aw/phases.json`, else the `<ID>.phases.json` sidecar; JSON also lists up to 20 as `phases.items` with `key`, `title` and `status`, titled by key from the sidecar) and PR (from Claude's `pr-link` transcript entry; `held` when `<ID>.merge` records a "not auto-merged" decision). No network calls.
 - `bun aw.ts watch [--interval 2] [--plain]`: a terminal dashboard (OpenTUI), refreshed every `--interval` seconds (default 2, min 1); see below. `--plain`, or stdin/stdout not a TTY, redraws the `status` output instead until `Ctrl-C`; if OpenTUI cannot start, or `@opentui/core` is not in a `node_modules` above `src/`, it prints one line to stderr and does the same (that check assumes Bun's default auto-install, which only downloads when no `node_modules` exists; `install.auto = "force"` in a bunfig still fetches).
-- `bun aw.ts tail <ID | owner/repo/ID> [-n 20] [--no-follow]`: read-only, one line per assistant message, tool call (name and a short argument) or tool error from the newest transcript (last 256 KiB), then follows it. Claude's are `~/.claude-aw/projects/<cwd, non-alphanumerics as ->/*.jsonl`; Codex's are `~/.codex-aw/sessions/**/*.jsonl`; both are matched by the `cwd` they record, and symlinks and non-regular files are skipped. An ID with transcripts in several repos is refused; name the repo. Tool output is never printed; text is capped and stripped of control and escape characters. Works for a finished ticket whose worktree is gone, as long as its transcript is.
+- `bun aw.ts tail <ID | owner/repo/ID> [-n 20] [--no-follow]`: read-only, one line per assistant message, tool call (name, cut to 6 columns with `…`, and a short argument) or tool error from the newest transcript (last 256 KiB), then follows it. Claude's are `~/.claude-aw/projects/<cwd, non-alphanumerics as ->/*.jsonl`; Codex's are `~/.codex-aw/sessions/**/*.jsonl`; both are matched by the `cwd` they record, and symlinks and non-regular files are skipped. An ID with transcripts in several repos is refused; name the repo. Tool output is never printed; text is capped and stripped of control and escape characters. Works for a finished ticket whose worktree is gone, as long as its transcript is.
 
-The dashboard shows a header (host, sessions, last refresh), one row per worktree (ID, repo, agent, state coloured by [live state](#live-state), idle, runtime, phases, PR) and, below, the live `tail` of the selected ticket's transcript, read incrementally and only for that ticket. Keys:
+The dashboard has a header (host, a count per state: `◆ waiting` highlighted since it needs you, `● working`, `○ idle`, `◌ orphan`, `✕ ended`, plus `? unknown` when any; last refresh), a footer with the keys that apply right now and transient messages, and between them:
+
+- On a terminal at least 110 columns wide, the ticket list on the left and the selected ticket on the right. Each ticket is a card: state glyph, ID, repo, agent, then a phase progress bar with `done/total`, idle and runtime (one line per ticket when the list is short on rows). Waiting tickets sort first, then working, idle, unknown, orphan, ended, by ID within each; the selection follows the ticket across refreshes. The right side shows the ticket's title row (agent, state and what it is waiting for), runtime, idle, start time, PR (`held` when not auto-merged), branch and worktree, its phases (one bar segment per phase, then a checklist; `+N more` when they don't fit) and below, the live `tail` of its transcript, read incrementally and only for that ticket (wrapped under the message column).
+- Narrower terminals stack the list (one line per ticket), the detail and the transcript; below 50 columns or 14 rows only the list and the transcript's last lines are shown.
+
+Colours are truecolor; `NO_COLOR` (set and non-empty) switches to bold, dim and reverse only. Keys:
 
 | key | |
 |---|---|
-| `j`/`k`, `↓`/`↑` | select; scroll the tail while it is focused |
-| `g` / `G` | first / last |
-| `Enter` | focus and maximise the tail pane, again to go back |
+| `j`/`k`, `↓`/`↑` | select; scroll the transcript while it has focus |
+| `g` / `G` | first / last; top / follow while the transcript has focus |
+| `Tab` | move focus between the list and the transcript (the focused pane has the bright border) |
+| `Enter` | maximise the transcript, again to go back |
+| `Esc` | close help, or leave the maximised transcript |
 | `a` | show the ticket's tmux window: outside tmux the dashboard suspends and runs `tmux attach` (detach with `Ctrl-b d` to come back); inside tmux it runs `tmux switch-client` so your client switches to the `aw` session without nesting (switch back with `Ctrl-b (`/`)` or `L`). Needs a `running` window. |
 | `o` | open the PR with `xdg-open` (only `https://github.com/<owner>/<repo>/pull/<n>` links) |
 | `r` | refresh now |
-| `?` | key help in the footer |
+| `?` | key help overlay |
 | `q`, `Ctrl-C` | quit; the terminal is restored on every exit (also `SIGTERM`, `SIGHUP`, crashes) |
 
 Everything shown is stripped of control, escape, bidi and invisible characters (zero-width joiner and non-joiner are kept for emoji and Persian/Indic text) and cut to the column width. Codex rows show `unknown` until its hooks are trusted (see [Live state](#live-state)).
 
 ### Live state
 
-`state` (`working`, `waiting`, `idle`, `ended`, `unknown`; JSON also has `waitingFor` and `stateSince`, ms epoch or `null`). An `ended` or `orphan` session is `ended`; otherwise:
+`state` (`working`, `waiting`, `idle`, `ended`, `unknown`; JSON also has `waitingFor` and `stateSince`, ms epoch or `null`). An `ended` or `orphan` session is `ended` in JSON; the table and dashboard show an `orphan` session (no tmux window, no `<ID>.ended`) as `orphan`. Otherwise:
 
 - Claude: `CLAUDE_CONFIG_DIR=~/.claude-aw claude agents --json`, run once per refresh (3 s timeout) and only while a Claude ticket has a tmux window; `busy` is `working`, `waiting` carries `waitingFor`. The session must report the worktree path as its exact `cwd`. That command is a research preview: if it fails, times out or changes shape, Claude rows show `unknown`.
 - Codex: hooks installed by `scripts/setup.sh` (via `scripts/codex-hooks.sh`, a marked block in `~/.codex-aw/config.toml`; the rest of the file is left alone, and the script refuses damaged markers or a result that is not valid TOML) write `{state, ts}` to `<worktree>/.aw/codex-state.json` on `SessionStart`/`Stop` (idle), `UserPromptSubmit`/`PostToolUse` (working), `PermissionRequest` (waiting) and `SessionEnd` (ended), only when `.aw` is a real directory. The sandbox only lets an agent write its own worktree, so it can at most misreport its own state. The hook runs with the agent's own privileges, so a race on `.aw` or the temp file reaches nothing the agent could not write anyway. It assumes the session starts at the worktree root, as the launcher does. Codex skips hooks until they are trusted: run `CODEX_HOME=~/.codex-aw codex` once, open `/hooks` and trust them (again whenever the block changes). `aw` reads the file like `phases.json` (no symlinks, regular file under 4 KiB) and only if it is newer than the launcher; a `working` older than 10 minutes with no transcript write since is `unknown`.
@@ -260,7 +269,8 @@ CLI: `bun aw.ts <run|once|status|watch|tail> [--dry-run] [--json] [--interval s]
 - `src/launcher.ts`: clone, worktree, prompt and launcher script, tmux window.
 - `src/pass.ts`: one poll: cleanup, start ready tickets by priority, reconcile.
 - `src/status.ts`: per-worktree status rows, the `claude agents` snapshot and the table.
-- `src/dash.ts`: the `watch` dashboard (OpenTUI): key, selection, layout and attach logic, and the renderer wiring.
+- `src/dash.ts`: the `watch` dashboard (OpenTUI): keys, selection, attach/open and the renderer wiring.
+- `src/dash-view.ts`: the dashboard's pure view: palette, layout, cards, progress bars, detail and transcript rows, every screen line as styled spans.
 - `src/state.ts`: live state: `claude agents --json` (bounded run and parse), the Codex hook state file, precedence.
 - `src/tail.ts`: transcript lookup, line condensing and control-char stripping, `tail`.
 - `src/util.ts`: logged/dry-run-aware command and file helpers, the pinned `.aw` reader.

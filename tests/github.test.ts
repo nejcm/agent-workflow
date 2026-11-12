@@ -129,3 +129,13 @@ test("trackers: done closes the GitHub issue, moves the Linear ticket to the fir
   await withLinearKey(() => linear(l, "box", { ...fakeIo().io, fetch: f }).done({ ...ticket(1), ref: "uuid-1" }));
   expect(bodies.at(-1).variables).toEqual({ id: "uuid-1", s: "s-done" });
 });
+
+test("github adapter: comments parsed from gh issue view, author is the login", async () => {
+  const out = { comments: [{ id: "IC_1", body: "aw: picked up", createdAt: "2026-01-01T10:00:00Z", author: { login: "op" } }, { id: "IC_2", body: "yes", createdAt: "2026-01-01T11:00:00Z", author: null }] };
+  const { io, cmds } = fakeIo((a) => (a[2] === "view" ? { out: JSON.stringify(out) } : undefined));
+  expect(await github(config().sources[0]!, "box", io, false, []).comments(ticket(7), 0)).toEqual([
+    { id: "IC_1", body: "aw: picked up", createdAt: "2026-01-01T10:00:00Z", author: "op" },
+    { id: "IC_2", body: "yes", createdAt: "2026-01-01T11:00:00Z", author: undefined },
+  ]);
+  expect(cmds).toEqual(["gh issue view 7 --repo acme/web --json comments"]);
+});

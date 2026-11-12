@@ -52,6 +52,13 @@ export interface Ticket {
   priority?: number;
 }
 
+export interface TicketComment {
+  id: string;
+  body: string;
+  createdAt: string;
+  author?: string;
+}
+
 export interface Tracker {
   listReady(): Promise<Ticket[]>;
   listInProgress(): Promise<Ticket[]>;
@@ -61,6 +68,8 @@ export interface Tracker {
   toReview(t: Ticket, prUrl: string): Promise<void>;
   done(t: Ticket): Promise<void>;
   comment(t: Ticket, body: string): Promise<void>;
+  /** Comments created after `since` (ms epoch); a tracker may return older ones too. */
+  comments(t: Ticket, since: number): Promise<TicketComment[]>;
   /** Creates a sub-ticket of `parent` with no labels; returns its ref ("" in dry-run). */
   createPhase(parent: Ticket, title: string, body: string): Promise<string>;
   listPhases(parent: Ticket): Promise<{ ref: string; title: string }[]>;

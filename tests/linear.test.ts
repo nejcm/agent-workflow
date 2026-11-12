@@ -143,3 +143,20 @@ test("linear adapter: every comment starts with aw:", async () => {
   await withLinearKey(() => linear(l, "box", io, false).comment({ id: "ENG-1", ref: "u-1", title: "", body: "", url: "" }, "hi"));
   expect(bodies[0].variables.i).toEqual({ issueId: "u-1", body: "aw: hi" });
 });
+
+test("linear adapter: comments parsed, author is the user email, none for a null user", async () => {
+  const l = config({ sources: [src({ tracker: "linear", team: "ENG" })] }).sources[0]!;
+  const bodies: any[] = [];
+  const { io } = fakeIo();
+  io.fetch = (async (_url: string, init: any) => {
+    bodies.push(JSON.parse(init.body));
+    return Response.json({ data: { issue: { comments: { nodes: [{ id: "c1", body: "ok", createdAt: "2026-01-01T10:00:00Z", user: { email: "a@b.c" } }, { id: "c2", body: "bot", createdAt: "2026-01-01T11:00:00Z", user: null }] } } } });
+  }) as any;
+  const cs = await withLinearKey(() => linear(l, "box", io, false).comments({ id: "ENG-1", ref: "u-1", title: "", body: "", url: "" }, Date.parse("2026-01-01T09:00:00Z")));
+  expect(cs).toEqual([
+    { id: "c1", body: "ok", createdAt: "2026-01-01T10:00:00Z", author: "a@b.c" },
+    { id: "c2", body: "bot", createdAt: "2026-01-01T11:00:00Z", author: undefined },
+  ]);
+  expect(bodies[0].variables).toEqual({ id: "u-1", since: "2026-01-01T09:00:00.000Z" });
+  expect(bodies[0].query).toContain("comments(filter: { createdAt: { gt: $since } }, last: 100) { nodes { id body createdAt user { email } } }");
+});

@@ -4,6 +4,9 @@ import type { Io, Ticket } from "./types";
 
 export const AW_DIR = dirname(import.meta.dir);
 
+// Second layer for aw's own git calls: hook files, fsmonitor, auto-gc and risky transports only, not every config that runs code.
+export const GIT = ["git", ...["core.hooksPath=/dev/null", "core.fsmonitor=false", "core.alternateRefsCommand=", "maintenance.auto=false", "protocol.ext.allow=never", "protocol.file.allow=never", "protocol.git.allow=never"].flatMap((c) => ["-c", c])];
+
 // Untrusted text: drop ESC sequences and invisible chars, blank controls and bidi; ZWJ/ZWNJ stay (emoji, Persian, Indic).
 export const clean = (s: string, max = 200) =>
   s

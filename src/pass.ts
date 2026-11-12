@@ -3,13 +3,13 @@ import { join } from "node:path";
 import { allowedRepo, repoDir, validRepo } from "./config";
 import { deliverFeedback } from "./feedback";
 import { byPriority, canonical, findPr, github, sameRepo } from "./github";
-import { start, windows, winName } from "./launcher";
+import { nonoRun, start, windows, winName } from "./launcher";
 import { linear } from "./linear";
 import { autoMerge } from "./merge";
 import { syncPhases } from "./phases";
 import { deliverAnswer, liveStates, syncQuestion } from "./question";
 import type { Config, Io, Source, Ticket, Tracker } from "./types";
-import { AW_DIR, put, remove, write } from "./util";
+import { AW_DIR, GIT, put, remove, write } from "./util";
 
 export const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
 
@@ -167,7 +167,15 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
         const w = wins.get(winName(r.key, id));
         if (w) await write(x.io, ["tmux", "kill-window", "-t", w]);
         wins.delete(winName(r.key, id));
-        await write(x.io, ["git", "-C", r.path, "worktree", "remove", join(dir, id)]);
+        const wt = join(dir, id);
+        // git's own dirty check runs status through the agent-writable admin dir, so run it in the sandbox and force the remove.
+        // A planted filter or a FIFO `locked` file can block git; timeout signals its whole process group.
+        const deadline = ["timeout", "-k", "5", "60"];
+        if (r.sandbox === "nono") {
+          const dirty = await write(x.io, [...deadline, ...nonoRun(r, awDir, [["--read", wt], ["--read", join(r.path, ".git")]]), ...GIT, "-C", wt, "status", "--porcelain", "--ignore-submodules=none"]);
+          if (dirty.trim()) throw new Error(`${wt} has uncommitted or untracked files; left in place`);
+        }
+        await write(x.io, [...deadline, ...GIT, "-C", r.path, "worktree", "remove", ...(r.sandbox === "nono" ? ["--force"] : []), wt]);
         for (const ext of [".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".source"]) remove(x.io, join(dir, id + ext));
       });
     }

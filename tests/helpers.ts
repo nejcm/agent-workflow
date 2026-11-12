@@ -2,12 +2,12 @@ import type { Row } from "../src/status";
 import { afterEach, beforeEach } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { claudeDir } from "../src/agents";
 import { parseConfig } from "../src/config";
 import { canonCache } from "../src/github";
 import type { Config, Io, Ticket, Tracker } from "../src/types";
-import { AW_DIR } from "../src/util";
+import { AW_DIR, GIT } from "../src/util";
 
 export let root: string;
 // Called per test file: bun shares this module across files, so top-level hooks would only bind to the first.
@@ -59,16 +59,27 @@ export function fakeIo(respond: (argv: string[]) => { code?: number; out?: strin
     dry,
     fetch: (() => Promise.reject(new Error("no network"))) as any,
     log: (m) => logs.push(m),
-    run: async (argv) => {
+    run: async (timed) => {
+      const full = timed[0] === "timeout" ? timed.slice(4) : timed;
+      if (full[0] === "git" && full.slice(0, GIT.length).join("\0") !== GIT.join("\0")) throw new Error(`git without the GIT prefix: ${full.join(" ")}`);
+      const argv = full[0] === "git" ? ["git", ...full.slice(GIT.length)] : full;
       cmds.push(argv.join(" "));
       const r =
         respond(argv) ??
         (argv[1] === "repo" && argv[2] === "view" ? { out: JSON.stringify({ nameWithOwner: argv[3] }) } : argv[5] === "--git-common-dir" ? { out: join(realpathSync(argv[2]!), ".git") + "\n" } : {});
       if (argv[1] === "repo" && argv[2] === "clone" && !r.code) mkdirSync(argv[4]!, { recursive: true });
+      if (argv[3] === "worktree" && argv[4] === "add" && !r.code) linkWorktree(argv[2]!, argv[5]!);
       return { code: r.code ?? 0, out: r.out ?? "", err: r.code ? "boom" : "" };
     },
   };
   return { io, cmds, logs };
+}
+
+export function linkWorktree(clone: string, wt: string, admin = join(clone, ".git/worktrees", basename(wt))) {
+  mkdirSync(admin, { recursive: true });
+  mkdirSync(wt, { recursive: true });
+  writeFileSync(join(wt, ".git"), `gitdir: ${admin}\n`);
+  writeFileSync(join(admin, "gitdir"), join(wt, ".git"));
 }
 
 export async function withLinearKey<T>(fn: () => Promise<T>) {

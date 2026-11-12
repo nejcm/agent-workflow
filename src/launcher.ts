@@ -1,21 +1,40 @@
-import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { AGENTS } from "./agents";
 import { repoDir } from "./config";
 import type { Config, Io, Repo, Source, Ticket, Tracker } from "./types";
-import { AW_DIR, inAw, put, remove, write } from "./util";
+import { AW_DIR, GIT, inAw, put, remove, write } from "./util";
 
 export const render = (tpl: string, vars: Record<string, string>) => tpl.replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? m);
 
 const q = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 
-export function launcher(l: Repo, t: Ticket, wt: string, promptFile: string, awDir = AW_DIR) {
+export const nonoRun = (l: Repo, awDir: string, grants: [string, string][], quote = (s: string) => s) =>
+  ["nono", "run", "--no-rollback-prompt", "--profile", quote(join(awDir, "nono", `aw-${l.agent}.json`)), ...grants.flatMap(([flag, path]) => [flag, quote(path)]), "--"];
+
+export function launcher(l: Repo, t: Ticket, wt: string, promptFile: string, awDir = AW_DIR, admin = join(l.path, ".git", "worktrees", basename(wt))) {
   const prompt = `"$(cat ${q(promptFile)})"`;
   const nono = l.sandbox === "nono";
-  const wrap = nono ? ["nono", "run", "--no-rollback-prompt", "--profile", q(join(awDir, "nono", `aw-${l.agent}.json`)), "--allow", q(wt), "--allow", q(join(l.path, ".git")), "--"] : [];
+  const git = join(l.path, ".git");
+  // Read-only .git: config, hooks and info stay out of reach; only what commits and pushes write is granted.
+  const rw = [join(git, "objects"), join(git, "refs"), join(git, "logs"), admin].map((p): [string, string] => ["--allow", p]);
+  const wrap = nono ? nonoRun(l, awDir, [["--allow", wt], ["--read", git], ...rw], q) : [];
   const title = t.title.replace(/[^\w .,:()#-]/g, "").slice(0, 60).trim();
   const [env, cmd] = AGENTS[l.agent].launch(q(wt), q(`${t.id}: ${title}`), prompt, nono);
   return `#!/usr/bin/env bash\ncd ${q(wt)} || exit 1\nunset LINEAR_API_KEY\n${env}\nexec ${[...wrap, ...cmd].join(" ")}\n`;
+}
+
+const gitFile = (p: string) => {
+  if (!lstatSync(p).isFile()) throw new Error(`${p} is not a regular file`);
+  return readFileSync(p, "utf8").trim();
+};
+
+// git names the admin dir <id>1 on a clash; trust it only if it sits in <clone>/.git/worktrees and links back to wt.
+export function adminDir(l: Repo, wt: string) {
+  const admin = realpathSync(resolve(wt, gitFile(join(wt, ".git")).replace(/^gitdir: /, "")));
+  if (dirname(admin) !== realpathSync(join(l.path, ".git", "worktrees")) || realpathSync(resolve(admin, gitFile(join(admin, "gitdir")))) !== realpathSync(join(wt, ".git")))
+    throw new Error(`${wt}/.git does not point to its own admin dir in ${l.path}/.git/worktrees`);
+  return admin;
 }
 
 export async function windows(cfg: Config, io: Io) {
@@ -31,7 +50,7 @@ export const winName = (key: string, id: string) => `${key}/${id}`;
 async function ensureClone(cfg: Config, io: Io, r: Repo) {
   if (existsSync(r.path)) {
     const real = realpathSync(r.path);
-    const git = await io.run(["git", "-C", r.path, "rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    const git = await io.run([...GIT, "-C", r.path, "rev-parse", "--path-format=absolute", "--git-common-dir"]);
     // Also rejects a subdirectory or linked worktree of another clone, which would share its .git.
     if (git.code !== 0 || git.out.trim() !== join(real, ".git")) throw new Error(`${r.path} is not the top of its own git clone (interrupted clone, subdirectory or worktree?); fix or remove it by hand`);
     const twin = Object.values(cfg.repos).find((o) => o !== r && existsSync(o.path) && realpathSync(o.path) === real);
@@ -53,11 +72,11 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   await ensureClone(cfg, io, r);
   put(io, join(dir, `${t.id}.source`), s.name);
   remove(io, join(dir, `${t.id}.ended`));
-  await write(io, ["git", "-C", r.path, "fetch", "origin", r.baseBranch]);
+  await write(io, [...GIT, "-C", r.path, "fetch", "origin", r.baseBranch]);
   if (existsSync(wt)) io.log(`reuse ${wt}`);
   else {
-    const hasBranch = (await io.run(["git", "-C", r.path, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`])).code === 0;
-    await write(io, ["git", "-C", r.path, "worktree", "add", wt, ...(hasBranch ? [branch] : ["-b", branch, `origin/${r.baseBranch}`])]);
+    const hasBranch = (await io.run([...GIT, "-C", r.path, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`])).code === 0;
+    await write(io, [...GIT, "-C", r.path, "worktree", "add", wt, ...(hasBranch ? [branch] : ["-b", branch, `origin/${r.baseBranch}`])]);
   }
   const vars = { id: t.id, title: t.title, body: t.body, url: t.url, branch, base: r.baseBranch, testCmd: r.testCmd, repo: r.key };
   io.log(`${io.dry ? "dry: " : ""}write ${join(wt, ".aw", ".gitignore")}`);
@@ -67,7 +86,7 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
     inAw(wt, (d) => (rmSync(`${d}/.gitignore`, { force: true }), writeFileSync(`${d}/.gitignore`, "*\n", { flag: "wx" })));
   }
   put(io, promptFile, render(readFileSync(r.prompt, "utf8"), vars));
-  put(io, script, launcher(r, t, wt, promptFile, awDir), 0o755);
+  put(io, script, launcher(r, t, wt, promptFile, awDir, io.dry || r.sandbox !== "nono" ? undefined : adminDir(r, wt)), 0o755);
   await write(io, ["tmux", "new-window", "-d", "-t", `=${cfg.tmuxSession}:`, "-n", winName(r.key, t.id), script]);
   // Claimed last so a failed start leaves the ticket ready for the next poll; the open window stops a double start.
   try {

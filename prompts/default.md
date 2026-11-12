@@ -23,7 +23,7 @@ Do this:
 4. Implement the ticket in this worktree only.
 5. Run `{{testCmd}}` and make it pass.
 6. Commit with a message that references {{id}}. Add no attribution: no `Co-Authored-By` trailer, no "Generated with ..." line, no emoji signature.
-7. `git push -u origin {{branch}}`
+7. `git push origin {{branch}}`
 8. Write the merge file (below).
 9. `gh pr create --repo {{repo}} --base {{base}} --head {{branch}} --fill --body "<summary of
    the change and how it was tested>\n\nTicket: {{url}}"` (`--body` overrides the autofilled body).

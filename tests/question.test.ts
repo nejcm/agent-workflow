@@ -5,7 +5,7 @@ import { pass } from "../src/pass";
 import { answerFrame, liveStates, pickAnswer, POINTER } from "../src/question";
 import type { State } from "../src/state";
 import type { Repo, TicketComment } from "../src/types";
-import { config, fakeIo, fakeTracker, noPr, root, ticket, useTempRoot, windowsOut, worktree } from "./helpers";
+import { config, fakeIo, fakeTracker, linkWorktree, noPr, root, ticket, useTempRoot, windowsOut, worktree } from "./helpers";
 
 useTempRoot();
 
@@ -299,6 +299,7 @@ test("answer: a window started this pass (no @id yet) gets nothing until the nex
   const f = fakeTracker({ ready: [ticket(1)], inProgress: [ticket(1)] });
   const { io, cmds } = fakeIo((a) => noPr(a));
   ask("Which DB?");
+  linkWorktree(join(root, "src-web"), join(root, "acme/web/gh-1"));
   writeFileSync(sidecar(), JSON.stringify({ hash: new Bun.CryptoHasher("sha256").update("Which DB?").digest("hex"), postedAt: 1 }));
   f.tr.comments = async () => [answerAt(1)];
   await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), feedbackAuthors: ["op"] }] }), io, () => f.tr, "/aw", async () => "idle");

@@ -218,6 +218,19 @@ Prompt placeholders: `{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{te
 
 CLI: `bun aw.ts <run|once|status> [--dry-run] [--config aw.json]`.
 
+## Code layout
+
+- `aw.ts`: CLI entry (`run`, `once`, `status`).
+- `src/types.ts`: shared types (`Config`, `Repo`, `Source`, `Ticket`, `Tracker`, `Io`).
+- `src/config.ts`: `aw.json` parsing and the repo allowlist.
+- `src/github.ts`, `src/linear.ts`: tracker adapters, priority, canonical-repo lookup.
+- `src/phases.ts`: `.aw/phases.json` validation and sub-ticket sync.
+- `src/merge.ts`: `.aw/merge.json`, critical paths, the merge decision and auto-merge.
+- `src/launcher.ts`: clone, worktree, prompt and launcher script, tmux window.
+- `src/pass.ts`: one poll: cleanup, start ready tickets by priority, reconcile.
+- `src/util.ts`: logged/dry-run-aware command and file helpers, the pinned `.aw` reader.
+- `tests/`: one file per module (launcher tests are in `pass.test.ts`); shared fakes in `tests/helpers.ts`.
+
 ## First-run checklist
 
 The nono profiles have not been run yet; prove the boundaries on a throwaway repo first.

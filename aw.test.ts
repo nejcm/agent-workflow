@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Config, type Io, type Ticket, type Tracker, allowedRepo, canonCache, github, launcher, linear, linearRepo, parseConfig, parsePhases, pass, render, validRepo } from "./aw";
+import { LINEAR_ISSUES, type Config, type Io, type Ticket, type Tracker, allowedRepo, canonCache, github, launcher, linear, linearRepo, linearTicket, parseConfig, parsePhases, pass, render, validRepo } from "./aw";
 
 let root: string;
 beforeEach(() => {
@@ -303,7 +303,8 @@ test("linear adapter: defaultHost takes unlabelled tickets, not other hosts'", a
     if (prev === undefined) delete process.env.LINEAR_API_KEY;
     else process.env.LINEAR_API_KEY = prev;
   }
-  expect(bodies[0].query).toContain("labels { nodes { name } } project { description content }");
+  expect(bodies[0].query).toContain("labels { nodes { name parent { name } } }");
+  expect(bodies[0].query).toContain("project { description content labels");
   expect(JSON.stringify(bodies[0].variables)).not.toContain("host:");
 });
 
@@ -863,4 +864,18 @@ test("config: repo overrides of the wrong type are rejected, not replaced by def
   for (const [k, v] of [["path", 42], ["path", ""], ["path", null], ["baseBranch", 42], ["prompt", ""], ["prompt", 7]] as const)
     expect(() => config({ repos: [{ name: "acme/web", [k]: v }] })).toThrow(`repos[0] (acme/web).${k}: non-empty string`);
   expect(() => config({ defaults: { agent: "claude", sandbox: "nono", testCmd: "t", baseBranch: 1 } })).toThrow(".baseBranch: non-empty string");
+});
+
+test("linear repo: project label and label groups", () => {
+  expect(linearRepo([], [undefined, "repo: acme/api"], ["repo:acme/web"])).toBe("acme/web");
+  expect(linearRepo([], ["repo: acme/api"], ["repo:acme/web"])).toBe("acme/api");
+  expect(linearRepo(["repo:acme/api"], [], ["repo:acme/web"])).toBe("acme/api");
+  expect(linearRepo([], [], ["bug"])).toBeUndefined();
+  const node = (labels: object[], projectLabels: object[]) => ({ id: "u", identifier: "PER-1", title: "t", description: null, url: "u", labels: { nodes: labels }, project: { description: "", content: null, labels: { nodes: projectLabels } } });
+  const t = linearTicket(node([{ name: "agent", parent: null }], [{ name: "acme/web", parent: { name: "repo" } }]));
+  expect(t.repo).toBe("acme/web");
+  expect(t.labels).toEqual(["agent"]);
+  expect(linearTicket(node([{ name: "acme/api", parent: { name: "repo" } }], [{ name: "acme/web", parent: { name: "repo" } }])).repo).toBe("acme/api");
+  expect(linearTicket(node([], [{ name: "acme/web", parent: { name: "other" } }])).repo).toBeUndefined();
+  expect(LINEAR_ISSUES).toContain("project { description content labels { nodes { name parent { name } } } }");
 });

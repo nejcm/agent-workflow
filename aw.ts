@@ -305,11 +305,11 @@ const q = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 export function launcher(l: Lane, t: Ticket, wt: string, promptFile: string, awDir = AW_DIR) {
   const prompt = `"$(cat ${q(promptFile)})"`;
   const nono = l.sandbox === "nono";
-  const wrap = nono ? ["nono", "run", "--profile", q(join(awDir, "nono", `aw-${l.agent}.json`)), "--allow", q(wt), "--allow", q(join(l.repoPath, ".git")), "--"] : [];
+  const wrap = nono ? ["nono", "run", "--no-rollback-prompt", "--profile", q(join(awDir, "nono", `aw-${l.agent}.json`)), "--allow", q(wt), "--allow", q(join(l.repoPath, ".git")), "--"] : [];
   const title = t.title.replace(/[^\w .,:()#-]/g, "").slice(0, 60).trim();
   const [env, cmd] =
     l.agent === "claude"
-      ? ['export CLAUDE_CONFIG_DIR="$HOME/.claude-aw" CODEX_HOME="$HOME/.codex-aw"', ["claude", "--remote-control", q(`${t.id}: ${title}`), "--permission-mode", "bypassPermissions", prompt]]
+      ? ['export CLAUDE_CONFIG_DIR="$HOME/.claude-aw" CODEX_HOME="$HOME/.codex-aw" CLAUDE_CODE_TMPDIR="$HOME/.claude-aw/tmp"; mkdir -p "$CLAUDE_CODE_TMPDIR"', ["claude", "--remote-control", q(`${t.id}: ${title}`), "--permission-mode", "bypassPermissions", prompt]]
       : ['export CODEX_HOME="$HOME/.codex-aw"', ["codex", ...(nono ? ["--no-daemon"] : []), "--sandbox", "danger-full-access", "--ask-for-approval", "never", "-C", q(wt), prompt]];
   return `#!/usr/bin/env bash\ncd ${q(wt)} || exit 1\nunset LINEAR_API_KEY\n${env}\nexec ${[...wrap, ...cmd].join(" ")}\n`;
 }

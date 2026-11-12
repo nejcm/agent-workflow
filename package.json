@@ -1,0 +1,13 @@
+{
+  "name": "aw",
+  "private": true,
+  "scripts": {
+    "setup": "./setup.sh",
+    "start": "./run.sh",
+    "once": "./run.sh once",
+    "service": "./run.sh service",
+    "status": "bun aw.ts status",
+    "dry": "bun aw.ts once --dry-run",
+    "test": "bun test"
+  }
+}

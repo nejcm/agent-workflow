@@ -14,13 +14,13 @@ Move a GitHub issue or Linear ticket to **ready**, and `aw` starts a Claude Code
 ```
 ready ticket ──► resolve its repo; not in `repos`, or GitHub redirects it ──► one comment, skipped
              ──► gh repo clone <owner>/<name> ~/agent-repos/<owner>/<name>.tmp-…, then rename   (first time only)
-             ──► In Progress + comment "picked up on <host>"
+             ──► In Progress + comment "aw: picked up on <host>"
              ──► git worktree add ~/agent-ws/<owner>/<name>/<ID> -b agent/<ID> origin/<base>
              ──► tmux window <owner>/<name>/<ID>: nono run … -- claude --remote-control … "<prompt>"
 .aw/phases.json changed  ──► create / update phase sub-tickets
 PR for agent/<ID> exists ──► In Review + comment with the PR link
-in review, autoMerge on   ──► gh pr merge --squash --delete-branch, ticket Done; or one "not auto-merged" comment per head SHA
-session ended, no PR     ──► one comment "session ended without a PR"
+in review, autoMerge on   ──► gh pr merge --squash --delete-branch, ticket Done; or one "aw: not auto-merged" comment per head SHA
+session ended, no PR     ──► one comment "aw: session ended without a PR"
 ticket done / closed     ──► kill window, git worktree remove
 ```
 
@@ -34,7 +34,7 @@ ticket done / closed     ──► kill window, git worktree remove
 
 - **GitHub:** the issue's own repo. A source polls every repo in `repos`.
 - **Linear:** the first of: a ticket label `repo:owner/name`; a line `repo: owner/name` in the ticket description (first such line, at the start of a line); the same line in the ticket's project summary, then its project overview. A ticket that names no repo gets one comment and is skipped.
-- The result must match a `name` in `repos` (case-insensitive; the configured spelling is then used everywhere). Otherwise the ticket gets a comment (`repo x is not in the aw allowlist`, `no repo set on this ticket`, or `… is not a valid owner/name`) and is skipped, with no worktree. Repo strings from tickets must match `owner/name` of `[A-Za-z0-9_.-]`, owner not starting with `-` or `.`, no `..`, name not `.` and not ending in `.git`, and only reach `gh`/`git` as argv.
+- The result must match a `name` in `repos` (case-insensitive; the configured spelling is then used everywhere). Otherwise the ticket gets a comment (`aw: repo x is not in the aw allowlist`, `aw: no repo set on this ticket`, or `aw: … is not a valid owner/name`) and is skipped, with no worktree. Repo strings from tickets must match `owner/name` of `[A-Za-z0-9_.-]`, owner not starting with `-` or `.`, no `..`, name not `.` and not ending in `.git`, and only reach `gh`/`git` as argv.
 - GitHub serves a renamed or transferred repo under its old name (asking for `zeit/next.js` returns `vercel/next.js`). So before listing a repo's issues, and before cloning or starting any ticket, `aw` checks `gh repo view <repo> --json nameWithOwner` equals the allowlisted name (case-insensitive). The check before listing is cached for 5 minutes; the one right before cloning or starting a ticket is never cached. On a mismatch the repo is skipped and logged, and a Linear ticket for it gets the rejection comment; a failed lookup skips the repo (or the start) for that poll, without a comment.
 - Only Linear tickets are rejected (a GitHub ticket's repo is allowlisted by construction; a redirected one is only logged). A Linear ticket gets at most one rejection comment ever, whatever the reason and from however many sources, recorded in `<workspaceRoot>/.rejected/<ID>` before the comment is posted: a crash in between loses the comment rather than repeating it, and a failed post clears the record so the next poll retries. Starting the ticket later does not clear it.
 - Each worktree has a `<ID>.source` file next to it, outside the sandbox, naming the source that started it. Only that source acts on the worktree (cleanup, in-progress and in-review checks, phases, "ended without a PR"); others ignore it. If that source is no longer in `aw.json`, the worktree is left alone and logged once per run. Nothing inside the worktree is trusted for this. A ready ticket whose `<ID>.source` names another source (configured or not) is skipped and logged; only the owner restarts it. A Linear ticket keeps the repo it was started in even if its label or description changes later; while it has a window, or a worktree or `.source` in any `<workspaceRoot>/<owner>/<name>`, it is not started in another, also when that repo has since been removed from `repos` (its worktree is then left alone).
@@ -59,7 +59,7 @@ Phases are history, not a gate: the same session works the ticket to the PR, and
 
 The agent writes `.aw/merge.json` (`{ "tested", "confidence": "high|medium|low", "critical", "reason" }`, max 4 KiB, read like the phases file: no symlinks, regular file only) just before opening the PR. Ticket text can steer the agent, so the file is untrusted: it can only hold a merge back (`critical: true` or `confidence: "low"` blocks any size; missing or invalid blocks medium), never let one through. Built-in critical paths (case-insensitive globs on the repo-relative path; a pattern without `/` matches the file name at any depth): `.github/**`, `**/Dockerfile*`, `docker-compose*`, `**/migrations/**`, `**/*.sql`, `package.json`, `bun.lock*`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `go.mod`, `go.sum`, `Cargo.toml`, `Cargo.lock`, `pyproject.toml`, `requirements*.txt`, `**/auth/**`, `**/*secret*`, `**/*.env*`, `**/*.pem`, `**/*.key`, `nono/**`, `aw.json`, `**/infra/**`, `**/terraform/**`, `**/deploy/**`. `criticalPaths` adds to them.
 
-Pending checks or unknown mergeability wait silently. A merge is `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>` (never `--admin`), so a push after the decision makes it fail. Right before merging `aw` views the PR again and re-runs every gate. A failed merge is logged and retried next poll, and so is a PR not yet `MERGED` after the command (merge queue). After a merge `aw` comments once, closes the GitHub issue / moves the Linear ticket to the first `done` state, and cleanup follows. A PR found merged on a later poll (also by hand) moves the ticket the same way if it is from this repo and targets `baseBranch`, which retries a failed close. A PR that is not merged gets one `not auto-merged: <reason>` comment per head SHA, recorded in `<ID>.merge` next to the worktree; it is re-evaluated every poll, so a re-run check or a removed label still lets it merge without a new commit.
+Pending checks or unknown mergeability wait silently. A merge is `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>` (never `--admin`), so a push after the decision makes it fail. Right before merging `aw` views the PR again and re-runs every gate. A failed merge is logged and retried next poll, and so is a PR not yet `MERGED` after the command (merge queue). After a merge `aw` comments once, closes the GitHub issue / moves the Linear ticket to the first `done` state, and cleanup follows. A PR found merged on a later poll (also by hand) moves the ticket the same way if it is from this repo and targets `baseBranch`, which retries a failed close. A PR that is not merged gets one `aw: not auto-merged: <reason>` comment per head SHA, recorded in `<ID>.merge` next to the worktree; it is re-evaluated every poll, so a re-run check or a removed label still lets it merge without a new commit.
 
 ## Quick start
 
@@ -241,6 +241,7 @@ Same steps on the VM (Tailscale for access), with `"sandbox": "none"` in `defaul
 | `defaults` / `repos[].prompt` | `prompts/default.md` | template, relative to the config file |
 | `defaults` / `repos[].autoMerge` | `off` | `off` \| `intelligent` \| `all`, see [Auto-merge](#auto-merge) |
 | `defaults` / `repos[].criticalPaths` | `[]` | extra globs never auto-merged in `intelligent`; a per-repo list replaces the `defaults` one |
+| `defaults` / `repos[].feedbackAuthors` | `[]` | GitHub logins / Linear emails (case-insensitive) allowed to answer agent questions |
 | `sources[].name` | required | `[a-z0-9-]`, unique |
 | `sources[].tracker` | required | `github` \| `linear` |
 | GitHub: `readyLabel`, `inProgressLabel`, `inReviewLabel` | `agent`, `in-progress`, `in-review` | done = issue closed |

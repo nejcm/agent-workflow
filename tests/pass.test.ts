@@ -180,9 +180,9 @@ test("allowlist: a rejected ticket gets one comment whatever the reason, kept ac
   };
   const first = await run([eng(1, "evil/x"), eng(2), eng(3, "a/b;rm -rf ~")]);
   expect(first.calls).toEqual([
-    "comment ENG-1 aw: repo evil/x is not in the aw allowlist",
-    expect.stringContaining("comment ENG-2 aw: no repo set on this ticket"),
-    'comment ENG-3 aw: repo "a/b;rm -rf ~" is not a valid owner/name',
+    "comment ENG-1 repo evil/x is not in the aw allowlist",
+    expect.stringContaining("comment ENG-2 no repo set on this ticket"),
+    'comment ENG-3 repo "a/b;rm -rf ~" is not a valid owner/name',
   ]);
   expect(first.cmds.some((x) => /worktree|new-window|clone/.test(x))).toBe(false);
   expect((await run([eng(1, "evil/x"), eng(2), eng(3, "a/b;rm -rf ~")])).calls).toEqual([]);
@@ -293,7 +293,7 @@ test("redirected or unresolvable repos are skipped before listing, cloning or st
   await pass(c, io, factory, "/aw");
   st.ready = st.ready.slice(0, 2);
   await pass(c, io, factory, "/aw");
-  expect(lin.calls).toEqual(["comment ENG-1 aw: repo acme/api now resolves to evil/api on GitHub, which is not in the aw allowlist", "claim ENG-3"]);
+  expect(lin.calls).toEqual(["comment ENG-1 repo acme/api now resolves to evil/api on GitHub, which is not in the aw allowlist", "claim ENG-3"]);
   expect(cmds.filter((x) => x.startsWith("gh issue list")).map((x) => x.split(" ")[4])).toEqual(Array(6).fill("acme/web"));
   expect(cmds.filter((x) => x === "gh repo view acme/api --json nameWithOwner")).toHaveLength(3);
   expect(cmds.filter((x) => x === "gh repo view acme/docs --json nameWithOwner").length).toBeGreaterThan(1);
@@ -416,7 +416,7 @@ test("rejection: one comment per Linear ticket across sources and starts; marked
   await run("evil/x", true);
   expect(existsSync(marker)).toBe(false);
   await run("evil/x");
-  expect(comments).toEqual(["ENG-1 aw: repo evil/x is not in the aw allowlist"]);
+  expect(comments).toEqual(["ENG-1 repo evil/x is not in the aw allowlist"]);
   expect(await run("acme/web")).toEqual(["claim ENG-1"]);
   rmSync(join(root, "acme/web/ENG-1"), { recursive: true });
   rmSync(join(root, "acme/web/ENG-1.source"));

@@ -98,7 +98,7 @@ test("phases: bad or symlinked file is logged and the parent still moves to revi
   rmSync(join(root, "acme/web/gh-3/.aw/phases.json"));
   symlinkSync(join(root, "outside/phases.json"), join(root, "acme/web/gh-3/.aw/phases.json"));
   await pass(c, io, () => tr, "/aw");
-  expect(logs.some((l) => l.includes("phases gh-1 failed: phases: must be a regular file"))).toBe(true);
+  expect(logs.some((l) => l.includes("phases gh-1 failed: phases.json: must be a regular file"))).toBe(true);
   expect(logs.some((l) => l.includes("phases gh-2 failed: ENOTDIR"))).toBe(true);
   expect(logs.some((l) => l.includes("phases gh-3 failed: ELOOP"))).toBe(true);
   expect(calls).toEqual(["review gh-1 https://pr/1", "review gh-2 https://pr/1", "review gh-3 https://pr/1"]);
@@ -124,7 +124,7 @@ test("phases: a FIFO phases file is rejected without blocking the poller", async
   mkdirSync(join(root, "acme/web/gh-1/.aw"), { recursive: true });
   expect(Bun.spawnSync(["mkfifo", join(root, "acme/web/gh-1/.aw/phases.json")]).exitCode).toBe(0);
   await pass(c, io, () => tr, "/aw");
-  expect(logs.some((l) => l.includes("phases gh-1 failed: phases: must be a regular file"))).toBe(true);
+  expect(logs.some((l) => l.includes("phases gh-1 failed: phases.json: must be a regular file"))).toBe(true);
 });
 
 test("phases: dry-run creates nothing and writes no sidecar", async () => {

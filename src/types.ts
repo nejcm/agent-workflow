@@ -9,6 +9,7 @@ export interface Repo {
   maxConcurrent?: number;
   autoMerge: AutoMerge;
   criticalPaths: string[];
+  feedbackAuthors: string[];
 }
 
 export type AutoMerge = "off" | "intelligent" | "all";

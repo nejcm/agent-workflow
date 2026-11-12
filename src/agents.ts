@@ -99,7 +99,7 @@ export async function claudeAgents(home = homedir(), ms = 3000, argv = ["claude"
 export function codexState(wt: string, since: number, now: number): Live | undefined {
   let o: any;
   try {
-    o = JSON.parse(readAw(wt, "codex-state", MAX_FILE) ?? "");
+    o = JSON.parse(readAw(wt, "codex-state.json", MAX_FILE) ?? "");
   } catch {
     return undefined;
   }

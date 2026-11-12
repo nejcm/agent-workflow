@@ -111,7 +111,7 @@ export async function autoMerge(cfg: Config, r: Repo, t: Ticket, tr: Tracker, io
   if (pr.state === "MERGED" && !pr.isCrossRepository && pr.baseRefName === r.baseBranch && (await ours())) return tr.done(t);
   let a: Assessment | undefined;
   try {
-    const raw = readAw(join(dir, t.id), "merge", MAX_MERGE_BYTES);
+    const raw = readAw(join(dir, t.id), "merge.json", MAX_MERGE_BYTES);
     a = raw === undefined ? undefined : parseAssessment(raw);
   } catch (e) {
     io.log(`merge ${t.id}: .aw/merge.json ignored: ${(e as Error).message}`);

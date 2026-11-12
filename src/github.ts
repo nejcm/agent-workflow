@@ -55,7 +55,7 @@ export function github(l: Source, host: string, io: Io, defaultHost: boolean, re
   };
   const skip = [l.inProgressLabel, l.inReviewLabel];
   const edit = (t: Ticket, add: string, rm?: string) => write(io, ["gh", "issue", "edit", t.ref, "--repo", t.repo!, "--add-label", add, ...(rm ? ["--remove-label", rm] : [])]);
-  const comment = async (t: Ticket, body: string) => { await write(io, ["gh", "issue", "comment", t.ref, "--repo", t.repo!, "--body", body]); };
+  const comment = async (t: Ticket, body: string) => { await write(io, ["gh", "issue", "comment", t.ref, "--repo", t.repo!, "--body", `aw: ${body}`]); };
   return {
     // Excluded server-side too: claimed tickets keep the ready label and would otherwise fill the 100 limit.
     listReady: async () => (await listMine([l.readyLabel], skip.map((x) => `-label:${JSON.stringify(x)}`).join(" "))).filter((t) => !skip.some((x) => t.labels?.includes(x))),

@@ -22,7 +22,8 @@
       "maxConcurrent": 1,
       "prompt": "prompts/default.md",
       "autoMerge": "intelligent",
-      "criticalPaths": ["src/billing/**"]
+      "criticalPaths": ["src/billing/**"],
+      "feedbackAuthors": ["octocat", "lead@acme.com"]
     }
   ],
   "sources": [

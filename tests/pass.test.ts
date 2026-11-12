@@ -32,6 +32,25 @@ test("launcher: codex without sandbox keeps the daemon", () => {
   expect(launcher(web(config({ repos: [{ name: "acme/web", agent: "codex" }] })), ticket(2), "/w", "/p", "/aw")).toContain("-- codex --no-daemon ");
 });
 
+test("launcher scripts are byte-for-byte stable for each agent, with and without nono", () => {
+  const head = String.raw`#!/usr/bin/env bash
+cd '/ws/it'\''s' || exit 1
+unset LINEAR_API_KEY
+`;
+  const claudeEnv = String.raw`export CLAUDE_CONFIG_DIR="$HOME/.claude-aw" CODEX_HOME="$HOME/.codex-aw" CLAUDE_CODE_TMPDIR="$HOME/.claude-aw/tmp"; mkdir -p "$CLAUDE_CODE_TMPDIR"
+`;
+  const nono = (a: string) => String.raw`nono run --no-rollback-prompt --profile '/aw/nono/aw-${a}.json' --allow '/ws/it'\''s' --allow '/src/web/.git' -- `;
+  const claude = String.raw`claude --remote-control 'gh-3: Its (x)' --permission-mode bypassPermissions "$(cat '/ws/p.md')"
+`;
+  const codex = (d: string) => String.raw`codex ${d}--sandbox danger-full-access --ask-for-approval never -C '/ws/it'\''s' "$(cat '/ws/p.md')"
+`;
+  const s = (agent: string, sandbox: string) => launcher(web(config({ repos: [{ name: "acme/web", path: "/src/web", agent, sandbox }] })), { ...ticket(3), title: "It's $(x) ✓" }, "/ws/it's", "/ws/p.md", "/aw");
+  expect(s("claude", "nono")).toBe(`${head}${claudeEnv}exec ${nono("claude")}${claude}`);
+  expect(s("claude", "none")).toBe(`${head}${claudeEnv}exec ${claude}`);
+  expect(s("codex", "nono")).toBe(`${head}export CODEX_HOME="$HOME/.codex-aw"\nexec ${nono("codex")}${codex("--no-daemon ")}`);
+  expect(s("codex", "none")).toBe(`${head}export CODEX_HOME="$HOME/.codex-aw"\nexec ${codex("")}`);
+});
+
 test("starts ready tickets up to maxConcurrent", async () => {
   const c = config({ maxConcurrent: 2 });
   const { tr, calls } = fakeTracker({ ready: [ticket(1), ticket(2), ticket(3)] });
@@ -58,7 +77,7 @@ test("reuses existing worktree dir and existing branch", async () => {
 test("in-progress: PR moves to review; missing window comments once", async () => {
   const c = config();
   const { tr, calls } = fakeTracker({ inProgress: [ticket(1), ticket(2), ticket(3)] });
-  const { io } = fakeIo((a) => {
+  const { io, logs } = fakeIo((a) => {
     if (a[1] === "list-windows") return windowsOut(["acme/web/gh-3"]);
     if (a[1] === "pr") return { out: a.includes("agent/gh-1") ? '[{"url":"https://pr/1","state":"OPEN"}]' : "[]" };
   });
@@ -66,13 +85,16 @@ test("in-progress: PR moves to review; missing window comments once", async () =
   await pass(c, io, () => tr, "/aw");
   expect(calls).toEqual(["review gh-1 https://pr/1", "comment gh-2 session ended without a PR", "review gh-1 https://pr/1"]);
   expect(existsSync(join(root, "acme/web/gh-2.ended"))).toBe(true);
+  expect(readFileSync(join(root, "acme/web/gh-1.pr"), "utf8")).toBe("https://pr/1");
+  expect(logs.filter((l) => l.endsWith("write " + join(root, "acme/web/gh-1.pr")))).toHaveLength(1);
+  expect(existsSync(join(root, "acme/web/gh-2.pr"))).toBe(false);
 });
 
 test("done: kills window, removes worktree and files; keeps files when remove fails", async () => {
   const c = config();
   for (const id of ["gh-1", "gh-2", "gh-3"]) {
     mkdirSync(join(root, "acme/web", id), { recursive: true });
-    for (const ext of [".prompt.md", ".sh", ".ended"]) writeFileSync(join(root, "acme/web", id + ext), "");
+    for (const ext of [".prompt.md", ".sh", ".ended", ".pr"]) writeFileSync(join(root, "acme/web", id + ext), "");
     writeFileSync(join(root, "acme/web", `${id}.source`), "web\n");
   }
   const { tr } = fakeTracker({ done: ["gh-1", "gh-2"] });
@@ -85,6 +107,7 @@ test("done: kills window, removes worktree and files; keeps files when remove fa
   expect(cmds.filter((x) => x.includes("kill-window"))).toHaveLength(1);
   expect(existsSync(join(root, "acme/web/gh-1.sh"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.source"))).toBe(false);
+  expect(existsSync(join(root, "acme/web/gh-1.pr"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-2.sh"))).toBe(true);
   expect(existsSync(join(root, "acme/web/gh-3.sh"))).toBe(true);
   expect(logs.some((l) => l.includes("[web] cleanup acme/web/gh-2 failed"))).toBe(true);
@@ -109,8 +132,8 @@ test("dry-run logs side effects and executes none", async () => {
   const c = config();
   mkdirSync(join(root, "acme/web/gh-5"), { recursive: true });
   writeFileSync(join(root, "acme/web/gh-5.source"), "web");
-  const { tr } = fakeTracker({ ready: [ticket(1)], done: ["gh-5"] });
-  const { io, cmds, logs } = fakeIo((a) => (a[1] === "has-session" ? { code: 1 } : noPr(a)), true);
+  const { tr } = fakeTracker({ ready: [ticket(1)], inProgress: [ticket(2)], done: ["gh-5"] });
+  const { io, cmds, logs } = fakeIo((a) => (a[1] === "has-session" ? { code: 1 } : a[1] === "pr" && a.includes("agent/gh-2") ? { out: '[{"url":"https://pr/2","state":"OPEN"}]' } : noPr(a)), true);
   await pass(c, io, () => tr, "/aw");
   expect(cmds.every((x) => /has-session|list-windows|rev-parse|gh pr list|gh repo view/.test(x))).toBe(true);
   expect(logs.some((l) => l.includes("dry: tmux new-session -d -s aw"))).toBe(true);
@@ -118,6 +141,7 @@ test("dry-run logs side effects and executes none", async () => {
   expect(logs.some((l) => l.includes("dry: tmux new-window"))).toBe(true);
   expect(existsSync(join(root, "acme/web/gh-1.prompt.md"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.source"))).toBe(false);
+  expect(existsSync(join(root, "acme/web/gh-2.pr"))).toBe(false);
 });
 
 test("pass hands defaultHost to the tracker factory", async () => {

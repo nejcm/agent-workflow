@@ -1,11 +1,12 @@
-import { closeSync, constants as C, existsSync, fstatSync, lstatSync, openSync, readdirSync, readSync, statSync, type Stats } from "node:fs";
+import { closeSync, constants as C, existsSync, fstatSync, openSync, readSync, statSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { type Agent, AGENTS } from "./agents";
 import { repoDir, validRepo } from "./config";
 import { diskRepos, SAFE_ID } from "./pass";
 import type { Config, Repo } from "./types";
+import { clean } from "./util";
 
-const MAX = 200;
 const CHUNK = 256 * 1024;
 
 export const mtime = (p: string) => {
@@ -15,16 +16,6 @@ export const mtime = (p: string) => {
     return undefined;
   }
 };
-
-// Untrusted text: drop ESC sequences and invisible chars, blank controls and bidi; ZWJ/ZWNJ stay (emoji, Persian, Indic).
-export const clean = (s: string, max = MAX) =>
-  s
-    .replace(/\x1b(\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(\x07|\x1b\\)?|[@-_])?/g, "")
-    .replace(/[\u00ad\u200b\u2060\ufeff\ufff9-\ufffb\u{e0000}-\u{e007f}]/gu, "")
-    .replace(/[\p{Cc}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, max);
 
 const seg = new Intl.Segmenter();
 
@@ -134,30 +125,12 @@ function lineEvents(o: any): string[] {
   return out;
 }
 
-/** Claude Code's project dir name for a cwd: every non-alphanumeric char becomes "-". */
-export const claudeDir = (home: string, wt: string) => join(home, ".claude-aw", "projects", wt.replace(/[^A-Za-z0-9]/g, "-"));
-
 export function newest(paths: string[]) {
   return paths.map((p) => ({ p, m: mtime(p) ?? -1 })).filter((x) => x.m >= 0).sort((a, b) => b.m - a.m)[0]?.p;
 }
 
-// Hand-walked: Bun's recursive readdir follows symlinked dirs, so a planted link could loop or walk the whole disk.
-function jsonl(dir: string, recursive = false): string[] {
-  try {
-    if (!lstatSync(dir).isDirectory()) return [];
-    return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
-      const p = join(dir, e.name);
-      return recursive && e.isDirectory() ? jsonl(p, true) : e.isFile() && e.name.endsWith(".jsonl") ? [p] : [];
-    });
-  } catch {
-    return [];
-  }
-}
-
-const cwdOf = (o: any) => (o?.type === "session_meta" ? o.payload?.cwd : o?.cwd);
-
-/** The first cwd recorded in a transcript's head (Codex session_meta, or any Claude entry). */
-function headCwd(file: string) {
+/** The first cwd recorded in a transcript's head. */
+function headCwd(file: string, cwdOf: Agent["cwd"]) {
   return withFile(file, (fd) => {
     const buf = Buffer.alloc(CHUNK);
     for (const l of buf.toString("utf8", 0, readSync(fd, buf, 0, CHUNK, 0)).split("\n"))
@@ -169,18 +142,17 @@ function headCwd(file: string) {
 }
 
 // Claude's dir mangling collides (a-b vs a.b) and Codex shares one dir, so both are matched on the recorded cwd.
-const ownedBy = (files: string[], wt: string, since: number) =>
-  files
+const ownedBy = (a: Agent, wt: string, home: string, since: number) =>
+  a
+    .transcripts(wt, home)
     .map((p) => ({ p, m: mtime(p) ?? -1 }))
     .filter((x) => x.m >= since)
     .sort((a, b) => b.m - a.m)
-    .find((x) => headCwd(x.p) === wt)?.p;
+    .find((x) => headCwd(x.p, a.cwd) === wt)?.p;
 
 /** Newest transcript written for `wt` since `since` (ms) whose recorded cwd is `wt`. */
 export function transcript(wt: string, agent?: Repo["agent"], home = homedir(), since = 0) {
-  const claude = agent !== "codex" ? ownedBy(jsonl(claudeDir(home, wt)), wt, since) : undefined;
-  const codex = agent !== "claude" ? ownedBy(jsonl(join(home, ".codex-aw", "sessions"), true), wt, since) : undefined;
-  return newest([claude, codex].filter((p): p is string => !!p));
+  return newest((agent ? [AGENTS[agent]] : Object.values(AGENTS)).flatMap((a) => ownedBy(a, wt, home, since) ?? []));
 }
 
 /** Worktree paths for a ticket id; falls back to configured repos so a finished ticket's transcript is still found. */

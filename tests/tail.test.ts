@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { argSummary, claudeDir, clean, events, newest, tail, transcript, worktreesFor } from "../src/tail";
-import { config, root, useTempRoot, worktree } from "./helpers";
+import { claudeDir } from "../src/agents";
+import { argSummary, events, newest, tail, transcript, worktreesFor } from "../src/tail";
+import { clean } from "../src/util";
+import { claudeFile, config, root, useTempRoot, worktree } from "./helpers";
 
 useTempRoot();
 
@@ -14,12 +16,6 @@ const claudeErr = JSON.stringify({ type: "user", timestamp: ts, message: { role:
 const claudePrompt = JSON.stringify({ type: "user", timestamp: ts, message: { role: "user", content: "You are working on ticket PER-10" } });
 const prLink = JSON.stringify({ type: "pr-link", sessionId: "f8f5", prNumber: 4, prUrl: "https://github.com/nejcm/agent-workflow/pull/4", prRepository: "nejcm/agent-workflow", timestamp: ts });
 const cwdLine = (wt: string) => JSON.stringify({ type: "user", timestamp: ts, cwd: wt, message: { role: "user", content: "go" } });
-const claudeFile = (wt: string, name: string, ...ls: string[]) => {
-  const cd = claudeDir(root, wt);
-  mkdirSync(cd, { recursive: true });
-  writeFileSync(join(cd, name), [cwdLine(wt), ...ls, ""].join("\n"));
-  return join(cd, name);
-};
 const say = (text: string) => JSON.stringify({ type: "assistant", timestamp: ts, message: { content: [{ type: "text", text }] } });
 const run = async (target: string, n = 20, follow = false, wait?: () => Promise<boolean>) => {
   const out: string[] = [];
@@ -83,10 +79,6 @@ test("newest picks the most recent existing file", () => {
   utimesSync(b!, 1000, 1000);
   expect(newest([b!, a!, join(root, "missing")])).toBe(a!);
   expect(newest([])).toBeUndefined();
-});
-
-test("claude transcript dir mirrors the cwd with non-alphanumerics as -", () => {
-  expect(claudeDir("/h", "/home/u/agent-ws/acme/web.js/PER-10")).toBe("/h/.claude-aw/projects/-home-u-agent-ws-acme-web-js-PER-10");
 });
 
 test("transcript finds the newest claude file, or the codex session whose meta cwd matches", () => {
@@ -163,7 +155,6 @@ test("an ID in several repos is refused; owner/repo/ID picks one; each segment i
 
 test("claude dir collisions (a-b vs a.b) are told apart by the recorded cwd; since applies to claude too", () => {
   const [ab, adot] = [join(root, "acme/a-b/PER-9"), join(root, "acme/a.b/PER-9")];
-  expect(claudeDir(root, ab)).toBe(claudeDir(root, adot));
   const f = claudeFile(adot, "s.jsonl", claudeText);
   expect(transcript(ab, "claude", root)).toBeUndefined();
   expect(transcript(adot, "claude", root)).toBe(f);

@@ -57,6 +57,13 @@ test("malformed and unknown lines yield nothing", () => {
 test("clean strips escapes, controls and bidi, collapses whitespace and caps length", () => {
   expect(clean("a\x1b[31mred\x1b[0m\x1b]0;title\x07b\x07\x00c\r\nd‮e\x9bf")).toBe("aredb c d e f");
   expect(clean("x".repeat(500))).toHaveLength(200);
+  const blanked = { c0: "\x01\x1f\x7f", c1: "\x80\x85\x9b\x9f", bidi: "\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069" };
+  const deleted = { zeroWidth: "\u200b\u2060\ufeff\u00ad", annotation: "\ufff9\ufffa\ufffb", tags: "\u{e0000}\u{e0001}\u{e0041}\u{e007f}" };
+  for (const [name, chars] of Object.entries(blanked)) for (const c of chars) expect([name, clean(`a${c}b`)]).toEqual([name, "a b"]);
+  for (const [name, chars] of Object.entries(deleted)) for (const c of chars) expect([name, clean(`a${c}b`)]).toEqual([name, "ab"]);
+  // ZWJ and ZWNJ are kept on purpose: they join emoji and shape Persian and Indic text.
+  for (const ok of ["👩\u200d💻", "می\u200cروم", "क्\u200dष", "❤\ufe0f"]) expect(clean(ok)).toBe(ok);
+  expect(clean("PER-1  漢字 ok")).toBe("PER-1 漢字 ok");
   expect(events(JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "\x1b[2JBash", input: { command: "rm\x1b[2J -rf" } }] } }))[0]).not.toContain("\x1b");
 });
 

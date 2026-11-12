@@ -16,11 +16,12 @@ export const mtime = (p: string) => {
   }
 };
 
-// Transcripts are untrusted: drop ESC sequences, C0/C1 controls and bidi overrides so nothing reaches the terminal raw.
+// Untrusted text: drop ESC sequences and invisible chars, blank controls and bidi; ZWJ/ZWNJ stay (emoji, Persian, Indic).
 export const clean = (s: string, max = MAX) =>
   s
     .replace(/\x1b(\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(\x07|\x1b\\)?|[@-_])?/g, "")
-    .replace(/[\x00-\x1f\x7f-\x9f‎‏‪-‮⁦-⁩]+/g, " ")
+    .replace(/[\u00ad\u200b\u2060\ufeff\ufff9-\ufffb\u{e0000}-\u{e007f}]/gu, "")
+    .replace(/[\p{Cc}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, max);
@@ -169,7 +170,8 @@ export function worktreesFor(cfg: Config, id: string) {
   return (onDisk.length ? onDisk : Object.keys(cfg.repos)).map((k) => ({ key: k, wt: join(repoDir(cfg, k), id) }));
 }
 
-function reader(path: string) {
+/** Incremental event reader for one transcript: each call returns the events written since the last. */
+export function reader(path: string) {
   let pos = 0;
   let file = "";
   return () =>

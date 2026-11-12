@@ -30,8 +30,8 @@ test("running, ended and orphan rows with runtime, idle, phases and PR", () => {
   const rs = rows(config(), wins("PER-1", "PER-2"), root, T * 1000);
   expect(rs.map((r) => [r.id, r.session, r.state])).toEqual([["PER-1", "running", "unknown"], ["PER-2", "ended", "ended"], ["PER-3", "orphan", "ended"]]);
   const [a, b, c] = rs;
-  expect(a).toMatchObject({ repo: "acme/web", agent: "claude", runtimeMs: 3_600_000, idleMs: 30_000, phases: { done: 1, total: 3 }, pr: "https://github.com/acme/web/pull/4", merge: null });
-  expect(b).toMatchObject({ runtimeMs: 540_000, idleMs: null, phases: null, pr: null, merge: "held", transcript: null });
+  expect(a).toMatchObject({ repo: "acme/web", agent: "claude", runtimeMs: 3_600_000, idleMs: 30_000, phases: { done: 1, total: 3 }, pr: "https://github.com/acme/web/pull/4", merge: null, window: "@0" });
+  expect(b).toMatchObject({ runtimeMs: 540_000, idleMs: null, phases: null, pr: null, merge: "held", transcript: null, window: null });
   expect(c!.runtimeMs).toBeGreaterThanOrEqual(0);
   expect(JSON.parse(JSON.stringify(rs))).toEqual(rs);
 

@@ -68,7 +68,7 @@ scripts/setup.sh owner/repo   # config dirs, nono, labels, .env and aw.json from
 scripts/run.sh                # preflight (dry run), then poll in the foreground
 ```
 
-The same are available as `bun run setup owner/repo`, `bun run start`, `bun run once`, `bun run service`, `bun run status`, `bun run watch`, `bun run dry`, `bun run test` and `bun run typecheck` (`tsc --noEmit`; run `bun install` once for the dev-only `typescript` and `bun-types`). Edit `repos` and `sources` in `aw.json` before running. `scripts/run.sh once` does a single pass; `scripts/run.sh service` installs and starts the systemd user unit. The agent logins and the workspace trust dialog below are interactive; `scripts/setup.sh` prints what is still missing.
+The same are available as `bun run setup owner/repo`, `bun run start`, `bun run once`, `bun run service`, `bun run status`, `bun run watch`, `bun run dry`, `bun run test` and `bun run typecheck` (`tsc --noEmit`; run `bun install` once for `@opentui/core`, the `watch` dashboard's only runtime dependency, and the dev-only `typescript` and `bun-types`; if it cannot be loaded `watch` falls back to plain output, and nothing else needs it). Edit `repos` and `sources` in `aw.json` before running. `scripts/run.sh once` does a single pass; `scripts/run.sh service` installs and starts the systemd user unit. The agent logins and the workspace trust dialog below are interactive; `scripts/setup.sh` prints what is still missing.
 
 ## Setup
 
@@ -182,8 +182,23 @@ Claude Code and Codex can't import a session while it runs, so observe it instea
 
 - `tmux attach -t aw`: the live terminals, one window per ticket (`owner/name/ID`). Detach with `Ctrl-b d`; typing there steers the agent.
 - `bun aw.ts status [--json]`: per worktree its agent, session (`running`: tmux window and no `<ID>.ended`; `ended`; `orphan`: neither), live state (see [Live state](#live-state)), runtime (since `<ID>.sh` was written), idle (since the transcript was last written), phases `done/total` (`.aw/phases.json`, else the `<ID>.phases.json` sidecar) and PR (from Claude's `pr-link` transcript entry; `held` when `<ID>.merge` records a "not auto-merged" decision). No network calls.
-- `bun aw.ts watch [--interval 5]`: the same, redrawn every few seconds until `Ctrl-C`.
+- `bun aw.ts watch [--interval 2] [--plain]`: a terminal dashboard (OpenTUI), refreshed every `--interval` seconds (default 2, min 1); see below. `--plain`, or stdin/stdout not a TTY, redraws the `status` output instead until `Ctrl-C`; if OpenTUI cannot start, or `@opentui/core` is not in a `node_modules` above `src/`, it prints one line to stderr and does the same (that check assumes Bun's default auto-install, which only downloads when no `node_modules` exists; `install.auto = "force"` in a bunfig still fetches).
 - `bun aw.ts tail <ID | owner/repo/ID> [-n 20] [--no-follow]`: read-only, one line per assistant message, tool call (name and a short argument) or tool error from the newest transcript (last 256 KiB), then follows it. Claude's are `~/.claude-aw/projects/<cwd, non-alphanumerics as ->/*.jsonl`; Codex's are `~/.codex-aw/sessions/**/*.jsonl`; both are matched by the `cwd` they record, and symlinks and non-regular files are skipped. An ID with transcripts in several repos is refused; name the repo. Tool output is never printed; text is capped and stripped of control and escape characters. Works for a finished ticket whose worktree is gone, as long as its transcript is.
+
+The dashboard shows a header (host, sessions, last refresh), one row per worktree (ID, repo, agent, state coloured by [live state](#live-state), idle, runtime, phases, PR) and, below, the live `tail` of the selected ticket's transcript, read incrementally and only for that ticket. Keys:
+
+| key | |
+|---|---|
+| `j`/`k`, `↓`/`↑` | select; scroll the tail while it is focused |
+| `g` / `G` | first / last |
+| `Enter` | focus and maximise the tail pane, again to go back |
+| `a` | show the ticket's tmux window: outside tmux the dashboard suspends and runs `tmux attach` (detach with `Ctrl-b d` to come back); inside tmux it runs `tmux switch-client` so your client switches to the `aw` session without nesting (switch back with `Ctrl-b (`/`)` or `L`). Needs a `running` window. |
+| `o` | open the PR with `xdg-open` (only `https://github.com/<owner>/<repo>/pull/<n>` links) |
+| `r` | refresh now |
+| `?` | key help in the footer |
+| `q`, `Ctrl-C` | quit; the terminal is restored on every exit (also `SIGTERM`, `SIGHUP`, crashes) |
+
+Everything shown is stripped of control, escape, bidi and invisible characters (zero-width joiner and non-joiner are kept for emoji and Persian/Indic text) and cut to the column width. Codex rows show `unknown` until its hooks are trusted (see [Live state](#live-state)).
 
 ### Live state
 
@@ -232,7 +247,7 @@ Prompt placeholders: `{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{te
 
 `lanes` is rejected at startup. Move each lane's `repo` into `repos` (with its `repoPath` as `path`, plus `baseBranch`, `agent`, `sandbox`, `testCmd`, `maxConcurrent`, `prompt`) and keep the rest (`name`, `tracker`, labels, Linear states and `team`) as a source; Linear tickets or projects must now name their repo. Worktrees in the old `<workspaceRoot>/<lane>/<ID>` layout are not seen any more: finish or close those tickets first, or remove them by hand (`git -C <clone> worktree remove <workspaceRoot>/<lane>/<ID>`, then the `<ID>.*` files).
 
-CLI: `bun aw.ts <run|once|status|watch|tail> [--dry-run] [--json] [--interval s] [-n N] [--no-follow] [--config aw.json]`.
+CLI: `bun aw.ts <run|once|status|watch|tail> [--dry-run] [--json] [--interval s] [--plain] [-n N] [--no-follow] [--config aw.json]`.
 
 ## Code layout
 
@@ -245,6 +260,7 @@ CLI: `bun aw.ts <run|once|status|watch|tail> [--dry-run] [--json] [--interval s]
 - `src/launcher.ts`: clone, worktree, prompt and launcher script, tmux window.
 - `src/pass.ts`: one poll: cleanup, start ready tickets by priority, reconcile.
 - `src/status.ts`: per-worktree status rows, the `claude agents` snapshot and the table.
+- `src/dash.ts`: the `watch` dashboard (OpenTUI): key, selection, layout and attach logic, and the renderer wiring.
 - `src/state.ts`: live state: `claude agents --json` (bounded run and parse), the Codex hook state file, precedence.
 - `src/tail.ts`: transcript lookup, line condensing and control-char stripping, `tail`.
 - `src/util.ts`: logged/dry-run-aware command and file helpers, the pinned `.aw` reader.

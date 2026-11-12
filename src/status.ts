@@ -25,7 +25,11 @@ export interface Row {
   /** "held": aw decided not to auto-merge the PR's current head (the `<ID>.merge` marker). */
   merge: "held" | null;
   transcript: string | null;
+  /** tmux window id (`@3`) while `running`. */
+  window: string | null;
 }
+
+export const PR_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/;
 
 function progress(wt: string, sidecar: string) {
   try {
@@ -45,7 +49,7 @@ function prOf(file: string) {
   const end = text.indexOf("\n", i);
   try {
     const url = JSON.parse(text.slice(text.lastIndexOf("\n", i) + 1, end < 0 ? undefined : end)).prUrl;
-    return typeof url === "string" && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/.test(url) ? url : null;
+    return typeof url === "string" && PR_URL.test(url) ? url : null;
   } catch {
     return null;
   }
@@ -77,6 +81,7 @@ export function rows(cfg: Config, wins: Map<string, string>, home = homedir(), n
         pr: t ? prOf(t) : null,
         merge: existsSync(join(dir, `${id}.merge`)) ? "held" : null,
         transcript: t,
+        window: session === "running" ? wins.get(winName(r.key, id)) ?? null : null,
       };
     });
   });
@@ -98,6 +103,8 @@ export const dur = (ms: number | null) => {
   return `${Math.floor(s / 86400)}d${Math.floor((s % 86400) / 3600)}h`;
 };
 
+export const prLabel = (r: Row) => [r.pr && `#${/\d+$/.exec(r.pr)![0]}`, r.merge].filter(Boolean).join(" ") || "-";
+
 export function table(rs: Row[]) {
   if (!rs.length) return "no worktrees";
   const cells = rs.map((r) => [
@@ -109,7 +116,7 @@ export function table(rs: Row[]) {
     dur(r.runtimeMs),
     dur(r.idleMs),
     r.phases ? `${r.phases.done}/${r.phases.total}` : "-",
-    [r.pr && `#${/\d+$/.exec(r.pr)![0]}`, r.merge].filter(Boolean).join(" ") || "-",
+    prLabel(r),
   ]);
   const all = [["ID", "REPO", "AGENT", "SESSION", "STATE", "RUNTIME", "IDLE", "PHASES", "PR"], ...cells].map((c) => c.map((x, i) => clean(x, i === 4 ? 30 : 80)));
   const w = all[0]!.map((_, i) => Math.max(...all.map((c) => c[i]!.length)));

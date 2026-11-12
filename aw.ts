@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { parseConfig } from "./src/config";
+import { dashboard, watch } from "./src/dash";
 import { pass } from "./src/pass";
 import { snapshot, table } from "./src/status";
 import { tail } from "./src/tail";
@@ -26,17 +27,17 @@ const spawnRun: Run = async (argv, cwd) => {
 const USAGE = `usage: bun aw.ts <command> [--config aw.json]
   run | once [--dry-run]
   status [--json]
-  watch [--interval s]
+  watch [--interval 2] [--plain]
   tail <ID | owner/repo/ID> [-n 20] [--no-follow]`;
 const VALUED = ["--config", "--interval", "-n"];
-const FLAGS = [...VALUED, "--dry-run", "--json", "--no-follow"];
+const FLAGS = [...VALUED, "--dry-run", "--json", "--no-follow", "--plain"];
 
 /** Command, ticket target and option values, or undefined for unknown flags, stray args or out-of-range numbers. */
 export function parseArgs(argv: string[]) {
   const isValue = (i: number) => VALUED.includes(argv[i - 1] ?? "");
   const opt = (name: string) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] ?? "" : undefined);
   const [cmd, id, ...extra] = argv.filter((a, i) => !a.startsWith("-") && !isValue(i));
-  const interval = Number(opt("--interval") ?? 5);
+  const interval = Number(opt("--interval") ?? 2);
   const n = Number(opt("-n") ?? 20);
   const ok =
     argv.every((a, i) => !a.startsWith("-") || isValue(i) || FLAGS.includes(a)) &&
@@ -69,10 +70,17 @@ async function main(argv: string[]) {
   const io: Io = { run: spawnRun, fetch, dry: argv.includes("--dry-run"), log: (m) => console.log(`${new Date().toISOString()} ${m}`) };
   if (cmd === "status") return console.log(argv.includes("--json") ? JSON.stringify(await snapshot(cfg, io), null, 2) : await status(cfg, io));
   if (cmd === "watch")
-    for (;;) {
-      process.stdout.write(`\x1b[H\x1b[2J${new Date().toLocaleTimeString()}  every ${interval}s, Ctrl-C to stop\n\n${await status(cfg, io)}\n`);
-      await Bun.sleep(interval * 1000);
-    }
+    return watch({
+      plain: argv.includes("--plain"),
+      tty: !!process.stdout.isTTY && !!process.stdin.isTTY,
+      dash: () => dashboard(cfg, io, interval),
+      fallback: async () => {
+        for (;;) {
+          process.stdout.write(`\x1b[H\x1b[2J${new Date().toLocaleTimeString()}  every ${interval}s, Ctrl-C to stop\n\n${await status(cfg, io)}\n`);
+          await Bun.sleep(interval * 1000);
+        }
+      },
+    });
   if (cmd === "tail")
     return tail(cfg, id!, n, !argv.includes("--no-follow")).catch((e) => {
       console.error(e.message);

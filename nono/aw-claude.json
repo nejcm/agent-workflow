@@ -21,7 +21,8 @@
   "filesystem": {
     "allow": [
       "$HOME/.claude-aw",
-      "$HOME/.claude-aw.lock"
+      "$HOME/.claude-aw.lock",
+      "$HOME/.codex-aw"
     ],
     "read": [
       "$HOME/.claude/skills",
@@ -61,14 +62,17 @@
       "XDG_CONFIG_HOME",
       "XDG_DATA_HOME",
       "XDG_CACHE_HOME",
-      "CLAUDE_CONFIG_DIR"
+      "CLAUDE_CONFIG_DIR",
+      "CODEX_HOME"
     ]
   },
   "network": {
     "network_profile": "claude-code",
     "allow_domain": [
       "github.com",
-      "api.github.com"
+      "api.github.com",
+      "chatgpt.com",
+      "auth.openai.com"
     ],
     "credentials": [
       "github",

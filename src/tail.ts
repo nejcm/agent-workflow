@@ -1,21 +1,13 @@
-import { closeSync, constants as C, existsSync, fstatSync, openSync, readSync, statSync, type Stats } from "node:fs";
+import { closeSync, constants as C, existsSync, fstatSync, openSync, readSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { type Agent, AGENTS } from "./agents";
 import { repoDir, validRepo } from "./config";
 import { diskRepos, SAFE_ID } from "./pass";
 import type { Config, Repo } from "./types";
-import { clean } from "./util";
+import { clean, mtime } from "./util";
 
 const CHUNK = 256 * 1024;
-
-export const mtime = (p: string) => {
-  try {
-    return statSync(p).mtimeMs;
-  } catch {
-    return undefined;
-  }
-};
 
 const seg = new Intl.Segmenter();
 

@@ -8,9 +8,9 @@ import { windows, winName } from "./launcher";
 import { worktreeIds } from "./pass";
 import { phaseProgress, type PhaseStatus } from "./phases";
 import { resolve, type State } from "./state";
-import { mtime, transcript, withFile } from "./tail";
+import { transcript, withFile } from "./tail";
 import type { Config, Io, Repo } from "./types";
-import { clean } from "./util";
+import { clean, mtime } from "./util";
 
 export interface Row {
   id: string;

@@ -3,9 +3,10 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, 
 import { join } from "node:path";
 import { validRepo } from "../src/config";
 import { canonCache, github } from "../src/github";
-import { launcher, render } from "../src/launcher";
+import { adminDir, launcher, render } from "../src/launcher";
 import { pass } from "../src/pass";
 import type { Io, Ticket, Tracker } from "../src/types";
+import { GIT } from "../src/util";
 import { config, fakeIo, fakeTracker, noPr, root, src, ticket, two, useTempRoot, web, windowsOut, worktree } from "./helpers";
 
 useTempRoot();
@@ -19,7 +20,7 @@ test("launcher: claude under nono, ticket text never in shell", () => {
   const s = launcher(web(c), { ...ticket(1), title: "x'; rm -rf / $(id) `id`" }, "/ws/web/gh-1", "/ws/web/gh-1.prompt.md", "/aw");
   expect(s).toContain("export CLAUDE_CONFIG_DIR=\"$HOME/.claude-aw\" CODEX_HOME=\"$HOME/.codex-aw\" CLAUDE_CODE_TMPDIR=\"$HOME/.claude-aw/tmp\"");
   expect(s).toContain("--no-rollback-prompt");
-  expect(s).toContain(`exec nono run --no-rollback-prompt --profile '/aw/nono/aw-claude.json' --allow '/ws/web/gh-1' --allow '${root}/src-web/.git' -- claude --remote-control`);
+  expect(s).toContain(`exec nono run --no-rollback-prompt --profile '/aw/nono/aw-claude.json' --allow '/ws/web/gh-1' --read '${root}/src-web/.git' --allow '${root}/src-web/.git/objects' --allow '${root}/src-web/.git/refs' --allow '${root}/src-web/.git/logs' --allow '${root}/src-web/.git/worktrees/gh-1' -- claude --remote-control`);
   expect(s).toContain(`--permission-mode bypassPermissions "$(cat '/ws/web/gh-1.prompt.md')"`);
   expect(s).not.toMatch(/\$\(id\)|`id`|'; rm/);
 });
@@ -39,7 +40,7 @@ unset LINEAR_API_KEY
 `;
   const claudeEnv = String.raw`export CLAUDE_CONFIG_DIR="$HOME/.claude-aw" CODEX_HOME="$HOME/.codex-aw" CLAUDE_CODE_TMPDIR="$HOME/.claude-aw/tmp"; mkdir -p "$CLAUDE_CODE_TMPDIR"
 `;
-  const nono = (a: string) => String.raw`nono run --no-rollback-prompt --profile '/aw/nono/aw-${a}.json' --allow '/ws/it'\''s' --allow '/src/web/.git' -- `;
+  const nono = (a: string) => String.raw`nono run --no-rollback-prompt --profile '/aw/nono/aw-${a}.json' --allow '/ws/it'\''s' --read '/src/web/.git' --allow '/src/web/.git/objects' --allow '/src/web/.git/refs' --allow '/src/web/.git/logs' --allow '/src/web/.git/worktrees/it'\''s' -- `;
   const claude = String.raw`claude --remote-control 'gh-3: Its (x)' --permission-mode bypassPermissions "$(cat '/ws/p.md')"
 `;
   const codex = (d: string) => String.raw`codex ${d}--sandbox danger-full-access --ask-for-approval never -C '/ws/it'\''s' "$(cat '/ws/p.md')"
@@ -61,7 +62,7 @@ test("starts ready tickets up to maxConcurrent", async () => {
   expect(cmds).toContain(`tmux new-window -d -t =aw: -n acme/web/gh-1 ${root}/acme/web/gh-1.sh`);
   const prompt = readFileSync(join(root, "acme/web/gh-1.prompt.md"), "utf8");
   expect(prompt).toContain("body; rm -rf ~ $(whoami)");
-  expect(prompt).toContain("git push -u origin agent/gh-1");
+  expect(prompt).toContain("git push origin agent/gh-1");
 });
 
 test("reuses existing worktree dir and existing branch", async () => {
@@ -100,7 +101,7 @@ test("done: kills window, removes worktree and files; keeps files when remove fa
   const { tr } = fakeTracker({ done: ["gh-1", "gh-2"] });
   const { io, cmds, logs } = fakeIo((a) => {
     if (a[1] === "list-windows") return windowsOut(["acme/web/gh-1"]);
-    if (a[3] === "worktree" && a[5]?.endsWith("gh-2")) return { code: 1 };
+    if (a[3] === "worktree" && a.at(-1)?.endsWith("gh-2")) return { code: 1 };
   });
   await pass(c, io, () => tr, "/aw");
   expect(cmds).toContain("tmux kill-window -t @0");
@@ -155,7 +156,8 @@ test("dry-run logs side effects and executes none", async () => {
   await pass(c, io, () => tr, "/aw");
   expect(cmds.every((x) => /has-session|list-windows|rev-parse|gh pr list|gh repo view/.test(x))).toBe(true);
   expect(logs.some((l) => l.includes("dry: tmux new-session -d -s aw"))).toBe(true);
-  expect(logs.some((l) => l.includes(`dry: git -C ${root}/src-web worktree remove ${root}/acme/web/gh-5`))).toBe(true);
+  expect(logs.some((l) => l.startsWith("[web] dry: timeout -k 5 60 nono run ") && l.endsWith(`-C ${root}/acme/web/gh-5 status --porcelain --ignore-submodules=none`))).toBe(true);
+  expect(logs.some((l) => l.includes(`dry: timeout -k 5 60 ${GIT.join(" ")} -C ${root}/src-web worktree remove --force ${root}/acme/web/gh-5`))).toBe(true);
   expect(logs.some((l) => l.includes("dry: tmux new-window"))).toBe(true);
   expect(existsSync(join(root, "acme/web/gh-1.prompt.md"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.source"))).toBe(false);
@@ -282,11 +284,11 @@ test("after a restart cleanup and findPr use the repo and source recorded next t
   const lin = fakeTracker({ inProgress: [{ ...ticket(7), id: "ENG-7", repo: "acme/web" }] });
   const { io, cmds, logs } = fakeIo((a) => {
     if (a[1] === "list-windows") return windowsOut(["acme/web/gh-5", "acme/api/gh-5", "acme/api/ENG-7"]);
-    if (a[4] === "remove") rmSync(a[5]!, { recursive: true });
+    if (a[4] === "remove") rmSync(a.at(-1)!, { recursive: true });
     return noPr(a);
   });
   await pass(c, io, (s) => (s.name === "gh" ? gh.tr : lin.tr), "/aw");
-  expect(cmds.filter((x) => /worktree remove|kill-window/.test(x))).toEqual(["tmux kill-window -t @1", `git -C ${root}/src-api worktree remove ${root}/acme/api/gh-5`]);
+  expect(cmds.filter((x) => /worktree remove|kill-window/.test(x))).toEqual(["tmux kill-window -t @1", `git -C ${root}/src-api worktree remove --force ${root}/acme/api/gh-5`]);
   expect(existsSync(join(root, "acme/web/gh-5.source"))).toBe(true);
   expect(logs.some((l) => l.includes(`acme/web/gh-6: source "gone" in gh-6.source is not configured; left alone`))).toBe(true);
   expect(cmds).toContain("gh pr list --repo acme/api --head agent/gh-5 --state all --json url,state");
@@ -457,4 +459,95 @@ test("clone path: a subdirectory or alias of another repo's clone is refused at 
   };
   expect(await run(join(root, "clone/sub"))).toContain("is not the top of its own git clone");
   expect(await run(join(root, "alias"))).toContain("is the same clone as acme/web's path");
+});
+
+test("aw's git calls run no hook files, fsmonitor or auto-gc planted in the clone's .git", () => {
+  const origin = join(root, "origin");
+  const clone = join(root, "clone");
+  const marker = join(root, "fired");
+  const run = (...a: string[]) => Bun.spawnSync(a, { stdout: "pipe", stderr: "pipe" }).exitCode;
+  const git = (...a: string[]) => run("git", "-C", clone, ...a);
+  const commit = () => run("git", "-C", origin, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "c");
+  expect(run("git", "init", "-q", origin)).toBe(0);
+  expect(commit()).toBe(0);
+  expect(run("git", "clone", "-q", origin, clone)).toBe(0);
+  mkdirSync(join(root, "blobs"));
+  for (let i = 0; i < 2000; i++) writeFileSync(join(root, "blobs", `${i}`), `${i}`);
+  expect(Bun.spawnSync(["git", "-C", clone, "hash-object", "-w", "--stdin-paths"], { stdin: Buffer.from(readdirSync(join(root, "blobs")).map((f) => join(root, "blobs", f)).join("\n")) }).exitCode).toBe(0);
+  const evil = `#!/bin/sh\necho x >> '${marker}'\n`;
+  for (const h of ["post-checkout", "reference-transaction", "post-index-change", "pre-auto-gc"]) writeFileSync(join(clone, ".git/hooks", h), evil, { mode: 0o755 });
+  writeFileSync(join(root, "fsm"), evil, { mode: 0o755 });
+  for (const [k, v] of [["core.fsmonitor", join(root, "fsm")], ["hook.evil.command", `echo x >> '${marker}'`], ["hook.evil.event", "pre-auto-gc"], ["gc.auto", "1"], ["gc.autoDetach", "false"], ["maintenance.autoDetach", "false"], ["maintenance.gc.enabled", "true"]]) git("config", k!, v!);
+  // The test origin is a local path, which GIT itself refuses.
+  const fetch = (...c: string[]) => (commit(), run(...GIT, "-c", "protocol.file.allow=always", ...c, "-C", clone, "fetch", "-q", "origin"));
+  expect(fetch()).toBe(0);
+  expect(run(...GIT, "-C", clone, "worktree", "add", "-q", join(root, "wt"), "-b", "agent/x")).toBe(0);
+  expect(run(...GIT, "-C", clone, "worktree", "remove", join(root, "wt"))).toBe(0);
+  expect(existsSync(marker)).toBe(false);
+  expect(fetch("-c", "maintenance.auto=true")).toBe(0);
+  expect(existsSync(marker)).toBe(true);
+  rmSync(marker);
+  expect(git("worktree", "add", "-q", join(root, "wt2"), "-b", "agent/y")).toBe(0);
+  expect(existsSync(marker)).toBe(true);
+});
+
+test("cleanup never runs git's own dirty check, which follows a planted commondir or config.worktree", async () => {
+  const clone = join(root, "src-web");
+  const marker = join(root, "fired");
+  const sh = (...a: string[]) => Bun.spawnSync(a, { stdout: "pipe", stderr: "pipe" });
+  expect(sh("git", "init", "-q", clone).exitCode).toBe(0);
+  writeFileSync(join(clone, "f"), "a");
+  expect(sh("git", "-C", clone, "add", "f").exitCode).toBe(0);
+  expect(sh("git", "-C", clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "i").exitCode).toBe(0);
+  writeFileSync(join(root, "clean"), `#!/bin/sh\necho x >> '${marker}'; cat\n`, { mode: 0o755 });
+  const plant = (id: string, how: "commondir" | "config.worktree") => {
+    const wt = join(root, "acme/web", id);
+    expect(sh(...GIT, "-C", clone, "worktree", "add", "-q", wt, "-b", `agent/${id}`).exitCode).toBe(0);
+    worktree(id);
+    writeFileSync(join(wt, "f"), "x");
+    writeFileSync(join(wt, ".gitattributes"), "* filter=evil\n");
+    const admin = join(clone, ".git/worktrees", id);
+    if (how === "commondir") {
+      const fake = join(root, `fake-${id}`);
+      sh("cp", "-r", join(clone, ".git"), fake);
+      sh("git", "--git-dir", fake, "config", "filter.evil.clean", join(root, "clean"));
+      writeFileSync(join(admin, "commondir"), fake);
+    } else {
+      sh("git", "-C", clone, "config", "extensions.worktreeConfig", "true");
+      writeFileSync(join(admin, "config.worktree"), `[filter "evil"]\n\tclean = ${join(root, "clean")}\n`);
+    }
+    return wt;
+  };
+  const a = plant("gh-1", "commondir");
+  const b = plant("gh-2", "config.worktree");
+  const run = async (nonoOut: string) => {
+    const { tr } = fakeTracker({ done: ["gh-1", "gh-2"] });
+    const { io, logs } = fakeIo((x) => (x[0] === "nono" ? { out: nonoOut } : x[0] === "git" ? (({ exitCode, stdout }) => ({ code: exitCode, out: stdout.toString() }))(sh(...GIT, ...x.slice(1))) : noPr(x)));
+    await pass(config({ repos: [{ name: "acme/web", path: clone }] }), io, () => tr, "/aw");
+    return logs;
+  };
+  expect((await run("?? f\n")).filter((l) => l.includes("has uncommitted or untracked files"))).toHaveLength(2);
+  expect([existsSync(a), existsSync(b), existsSync(marker)]).toEqual([true, true, false]);
+  for (const wt of [a, b]) {
+    expect(sh("git", "-C", clone, "worktree", "remove", wt).exitCode).not.toBe(0);
+    expect(existsSync(marker)).toBe(true);
+    rmSync(marker);
+  }
+  await run("");
+  expect([existsSync(a), existsSync(b), existsSync(marker)]).toEqual([false, false, false]);
+});
+
+test("the session is granted git's actual admin dir, and a .git pointing elsewhere is refused", () => {
+  const clone = join(root, "src-web");
+  const sh = (...a: string[]) => Bun.spawnSync(a, { stdout: "pipe", stderr: "pipe" }).exitCode;
+  expect(sh("git", "init", "-q", clone)).toBe(0);
+  expect(sh("git", "-C", clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i")).toBe(0);
+  expect(sh(...GIT, "-C", clone, "worktree", "add", "-q", join(root, "other/gh-1"), "-b", "other")).toBe(0);
+  const wt = join(root, "acme/web/gh-1");
+  expect(sh(...GIT, "-C", clone, "worktree", "add", "-q", wt, "-b", "agent/gh-1")).toBe(0);
+  const r = { ...web(config()), path: clone };
+  expect(adminDir(r, wt)).toBe(join(clone, ".git/worktrees/gh-11"));
+  expect(launcher(r, ticket(1), wt, "/p", "/aw", adminDir(r, wt))).toContain(`--allow '${clone}/.git/worktrees/gh-11' --`);
+  writeFileSync(join(wt, ".git"), `gitdir: ${join(clone, ".git/worktrees/gh-1")}\n`);
+  expect(() => adminDir(r, wt)).toThrow("does not point to its own admin dir");
 });

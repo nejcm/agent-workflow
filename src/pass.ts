@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { allowedRepo, repoDir, validRepo } from "./config";
+import { deliverFeedback } from "./feedback";
 import { byPriority, canonical, findPr, github, sameRepo } from "./github";
 import { start, windows, winName } from "./launcher";
 import { linear } from "./linear";
@@ -122,10 +123,13 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
       if (!key) continue;
       const w = { ...t, repo: key };
       const dir = repoDir(cfg, key);
+      const r = cfg.repos[key]!;
+      const win = wins.get(winName(key, t.id));
       await step(io, `phases ${t.id}`, () => syncPhases(w, tr, io, dir, true));
-      if (cfg.repos[key]!.autoMerge !== "off") await step(io, `merge ${t.id}`, () => autoMerge(cfg, cfg.repos[key]!, w, tr, io));
-      // autoMerge looks the PR up anyway; otherwise once, for tickets that reached review before aw recorded `.pr`.
-      else if (!existsSync(join(dir, `${t.id}.pr`))) await step(io, `pr ${t.id}`, () => findPr(key, t.id, io, dir));
+      if (r.autoMerge !== "off") await step(io, `merge ${t.id}`, () => autoMerge(cfg, r, w, tr, io));
+      // autoMerge looks the PR up anyway; otherwise every poll while the session lives (feedback needs the current PR), else once.
+      else if (win || !existsSync(join(dir, `${t.id}.pr`))) await step(io, `pr ${t.id}`, () => findPr(key, t.id, io, dir));
+      if (win) await step(io, `feedback ${t.id}`, () => deliverFeedback(r, w, tr, io, dir, win, () => state(r, dir, t.id)));
     }
   });
 }
@@ -164,7 +168,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
         if (w) await write(x.io, ["tmux", "kill-window", "-t", w]);
         wins.delete(winName(r.key, id));
         await write(x.io, ["git", "-C", r.path, "worktree", "remove", join(dir, id)]);
-        for (const ext of [".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".source"]) remove(x.io, join(dir, id + ext));
+        for (const ext of [".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".source"]) remove(x.io, join(dir, id + ext));
       });
     }
   }

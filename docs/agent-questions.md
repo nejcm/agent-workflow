@@ -16,7 +16,7 @@ An agent that is blocked asks on the ticket instead of only in its tmux session.
 - `aw status` / `aw watch` show `question` while a posted question is unanswered, the session is `idle` and there is no PR (`working`, `waiting` and `unknown` stay visible).
 - Storage stays sidecar files (no SQLite).
 
-Out of scope: a fresh session after a crash does not see earlier Q&A; several answer comments are never merged; PR review feedback (improvements item 2).
+Out of scope: a fresh session after a crash does not see earlier Q&A; several answer comments are never merged; PR review feedback (improvements item 2, built separately: README "PR feedback", `src/feedback.ts`).
 
 ## Phases
 

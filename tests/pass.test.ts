@@ -114,6 +114,23 @@ test("done: kills window, removes worktree and files; keeps files when remove fa
   expect(logs.some((l) => l.includes("[web] cleanup acme/web/gh-2 failed"))).toBe(true);
 });
 
+test("a failed start leaves the ticket unclaimed and retries next poll; a failed claim kills the window", async () => {
+  const c = config();
+  const { tr, calls } = fakeTracker({ ready: [ticket(1)] });
+  let tmuxDown = true;
+  const { io, cmds, logs } = fakeIo((a) => ((a[1] === "new-window" && tmuxDown) || a[1] === "kill-window" ? { code: 1 } : noPr(a)));
+  await pass(c, io, () => tr, "/aw");
+  expect(calls).toEqual([]);
+  expect(logs.some((l) => l.includes("start gh-1 failed"))).toBe(true);
+  tmuxDown = false;
+  tr.claim = () => Promise.reject(new Error("tracker down"));
+  await pass(c, io, () => tr, "/aw");
+  expect(logs).toContain(`[web] reuse ${root}/acme/web/gh-1`);
+  expect(cmds).toContain("tmux kill-window -t =aw:=acme/web/gh-1");
+  expect(logs.some((l) => l.includes("start gh-1 failed: tracker down"))).toBe(true);
+  expect(logs.some((l) => l.includes("kill window acme/web/gh-1 by hand"))).toBe(true);
+});
+
 test("one ticket or source failing does not stop the rest", async () => {
   const c = config({ sources: [src(), src({ name: "api" })] });
   const bad: Tracker = { ...fakeTracker({}).tr, listReady: () => Promise.reject(new Error("api down")), listInProgress: () => Promise.reject(new Error("api down")) };

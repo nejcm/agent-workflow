@@ -52,7 +52,6 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   const script = join(dir, `${t.id}.sh`);
   await ensureClone(cfg, io, r);
   put(io, join(dir, `${t.id}.source`), s.name);
-  await tr.claim(t);
   remove(io, join(dir, `${t.id}.ended`));
   await write(io, ["git", "-C", r.path, "fetch", "origin", r.baseBranch]);
   if (existsSync(wt)) io.log(`reuse ${wt}`);
@@ -70,4 +69,11 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   put(io, promptFile, render(readFileSync(r.prompt, "utf8"), vars));
   put(io, script, launcher(r, t, wt, promptFile, awDir), 0o755);
   await write(io, ["tmux", "new-window", "-d", "-t", `=${cfg.tmuxSession}:`, "-n", winName(r.key, t.id), script]);
+  // Claimed last so a failed start leaves the ticket ready for the next poll; the open window stops a double start.
+  try {
+    await tr.claim(t);
+  } catch (e) {
+    await write(io, ["tmux", "kill-window", "-t", `=${cfg.tmuxSession}:=${winName(r.key, t.id)}`]).catch((k) => io.log(`${t.id}: claim failed and kill-window failed (${k.message}); kill window ${winName(r.key, t.id)} by hand`));
+    throw e;
+  }
 }

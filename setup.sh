@@ -9,7 +9,7 @@ link() {
   ln -s "$1" "$2" && echo "link $2 -> $1"
 }
 
-mkdir -p ~/.claude-aw ~/.claude-aw.lock ~/.codex-aw ~/agent-ws
+mkdir -p ~/.claude-aw ~/.claude-aw.lock ~/.codex-aw ~/agent-ws ~/agent-repos
 link ~/.claude/CLAUDE.md ~/.claude-aw/CLAUDE.md
 link ~/.claude/AGENTS.md ~/.claude-aw/AGENTS.md
 link ~/.claude/skills ~/.claude-aw/skills
@@ -44,7 +44,7 @@ gh auth status >/dev/null 2>&1 || { echo "MISSING: gh login (gh auth login)"; ex
 for f in nono/aw-claude.json nono/aw-codex.json; do nono profile validate "$f" >/dev/null && echo "ok   $f"; done
 
 [ -e .env ] || { cp .env.example .env && echo "write .env (set LINEAR_API_KEY if you use Linear)"; }
-[ -e aw.json ] || { cp aw.example.json aw.json && sed -i "s/\"host\": \"laptop\"/\"host\": \"$host\"/" aw.json && echo "write aw.json (edit the lanes)"; }
+[ -e aw.json ] || { cp aw.example.json aw.json && sed -i "s/\"host\": \"laptop\"/\"host\": \"$host\"/" aw.json && echo "write aw.json (edit repos and sources)"; }
 
 for repo in "$@"; do
   for l in agent in-progress in-review "host:$host"; do
@@ -55,6 +55,6 @@ done
 todo=0
 CLAUDE_CONFIG_DIR=~/.claude-aw claude auth status 2>/dev/null | grep -q '"loggedIn": true' || { todo=1; echo "TODO: CLAUDE_CONFIG_DIR=~/.claude-aw claude   # then /login"; }
 CODEX_HOME=~/.codex-aw codex login status >/dev/null 2>&1 || { todo=1; echo "TODO: CODEX_HOME=~/.codex-aw codex login"; }
-echo "Linear lanes: create labels agent and host:$host in the team."
+echo "Linear sources: create labels agent and host:$host in the team."
 [ "$todo" = 0 ] && echo "Setup done. Next: ./run.sh"
 exit 0

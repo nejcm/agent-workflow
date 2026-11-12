@@ -1,19 +1,22 @@
 #!/usr/bin/env bun
-import { chmodSync, closeSync, constants as C, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants as C, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
-export interface Lane {
-  name: string;
-  tracker: "github" | "linear";
-  repo: string;
-  repoPath: string;
+export interface Repo {
+  key: string;
+  path: string;
   baseBranch: string;
   agent: "claude" | "codex";
   sandbox: "nono" | "none";
-  maxConcurrent: number;
   testCmd: string;
   prompt: string;
+  maxConcurrent?: number;
+}
+
+export interface Source {
+  name: string;
+  tracker: "github" | "linear";
   readyLabel: string;
   inProgressLabel: string;
   inReviewLabel: string;
@@ -29,8 +32,11 @@ export interface Config {
   defaultHost: boolean;
   pollIntervalMs: number;
   workspaceRoot: string;
+  reposRoot: string;
   tmuxSession: string;
-  lanes: Lane[];
+  maxConcurrent: number;
+  repos: Record<string, Repo>;
+  sources: Source[];
 }
 
 export interface Ticket {
@@ -40,20 +46,22 @@ export interface Ticket {
   body: string;
   url: string;
   labels?: string[];
+  /** GitHub: the allowlisted repo it was listed from. Linear: the untrusted resolved string, if any. */
+  repo?: string;
 }
 
 export interface Tracker {
   listReady(): Promise<Ticket[]>;
   listInProgress(): Promise<Ticket[]>;
   listInReview(): Promise<Ticket[]>;
-  isDone(id: string): Promise<boolean>;
+  isDone(id: string, repo: string): Promise<boolean>;
   claim(t: Ticket): Promise<void>;
   toReview(t: Ticket, prUrl: string): Promise<void>;
   comment(t: Ticket, body: string): Promise<void>;
   /** Creates a sub-ticket of `parent` with no labels; returns its ref ("" in dry-run). */
   createPhase(parent: Ticket, title: string, body: string): Promise<string>;
   listPhases(parent: Ticket): Promise<{ ref: string; title: string }[]>;
-  setPhase(ref: string, status: "in-progress" | "done"): Promise<void>;
+  setPhase(parent: Ticket, ref: string, status: "in-progress" | "done"): Promise<void>;
 }
 
 export type Run = (argv: string[], cwd?: string) => Promise<{ code: number; out: string; err: string }>;
@@ -69,14 +77,23 @@ const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
 const NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const AW_DIR = import.meta.dir;
 
+// Owner may not start with "-" (flag to gh/git) or "." (aw's own dirs in workspaceRoot); keys map 1:1 to <owner>/<name> dirs.
+const REPO = /^[A-Za-z0-9_][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+$/;
+export const validRepo = (s: unknown) => typeof s === "string" && REPO.test(s) && !s.includes("..") && !s.endsWith("/.") && !/\.git$/i.test(s);
+/** Canonical allowlist key for an untrusted repo string, or undefined. */
+export const allowedRepo = (cfg: Config, raw: unknown) => (validRepo(raw) ? Object.keys(cfg.repos).find((k) => k.toLowerCase() === (raw as string).toLowerCase()) : undefined);
+const LANE_KEYS = ["repo", "repoPath", "baseBranch", "agent", "sandbox", "maxConcurrent", "testCmd", "prompt"];
+
 const expand = (p: string, base: string) => resolve(base, p.replace(/^~(?=$|\/)/, homedir()));
 
 export function parseConfig(raw: any, base: string): Config {
   const errs: string[] = [];
   const check = (ok: unknown, msg: string) => ok || errs.push(msg);
   const str = (v: unknown) => typeof v === "string" && v.length > 0;
-  check(raw && typeof raw === "object", "config must be a JSON object");
-  raw ??= {};
+  const obj = (v: unknown): v is Record<string, any> => !!v && typeof v === "object" && !Array.isArray(v);
+  const posInt = (v: unknown) => Number.isInteger(v) && (v as number) > 0;
+  check(obj(raw), "config must be a JSON object");
+  raw = obj(raw) ? raw : {};
   check(str(raw.host) && /^[A-Za-z0-9._-]+$/.test(raw.host), "host: required, [A-Za-z0-9._-]");
   const defaultHost = raw.defaultHost ?? false;
   check(typeof defaultHost === "boolean", "defaultHost: boolean");
@@ -84,21 +101,57 @@ export function parseConfig(raw: any, base: string): Config {
   check(Number.isInteger(pollIntervalMs) && pollIntervalMs >= 5000, "pollIntervalMs: integer >= 5000");
   const tmuxSession = raw.tmuxSession ?? "aw";
   check(NAME.test(tmuxSession), "tmuxSession: [a-z0-9-]");
-  check(Array.isArray(raw.lanes) && raw.lanes.length > 0, "lanes: non-empty array required");
-  const lanes: Lane[] = (Array.isArray(raw.lanes) ? raw.lanes : []).map((r: any, i: number) => {
-    const at = `lanes[${i}]${str(r?.name) ? ` (${r.name})` : ""}`;
-    r ??= {};
-    const l: Lane = {
+  const maxConcurrent = raw.maxConcurrent ?? 2;
+  check(posInt(maxConcurrent), "maxConcurrent: positive integer");
+  const reposRoot = expand(raw.reposRoot ?? "~/agent-repos", base);
+  check(raw.lanes === undefined, "lanes: replaced by sources + repos + defaults (see README)");
+  const defaults = raw.defaults ?? {};
+  check(obj(defaults) && defaults.path === undefined, "defaults: object without path");
+
+  const shape = `array of "owner/name" or { "name": "owner/name", …overrides }`;
+  check(!obj(raw.repos), `repos: now an ${shape}; move each "owner/name": {…} entry to { "name": "owner/name", … } (see README)`);
+  check(obj(raw.repos) || (Array.isArray(raw.repos) && raw.repos.length > 0), `repos: non-empty ${shape}`);
+  const repos: Record<string, Repo> = {};
+  const keys: string[] = [];
+  for (const [i, e] of (Array.isArray(raw.repos) ? raw.repos : []).entries()) {
+    const { name: key, ...o } = typeof e === "string" ? { name: e } : obj(e) ? e : { name: undefined };
+    check(typeof e === "string" || obj(e), `repos[${i}]: ${shape}`);
+    check(validRepo(key), `repos[${i}]${typeof e === "string" ? "" : ".name"}: must be "owner/name"`);
+    if (!validRepo(key)) continue;
+    const at = `repos[${i}] (${key})`;
+    const v = { ...(obj(defaults) ? defaults : {}), ...o };
+    for (const k of ["path", "baseBranch", "prompt"]) check(v[k] === undefined || str(v[k]), `${at}.${k}: non-empty string`);
+    const r: Repo = {
+      key,
+      path: str(v.path) ? expand(v.path, base) : join(reposRoot, key),
+      baseBranch: str(v.baseBranch) ? v.baseBranch : "main",
+      agent: v.agent,
+      sandbox: v.sandbox,
+      testCmd: v.testCmd,
+      prompt: expand(str(v.prompt) ? v.prompt : join(AW_DIR, "prompts/default.md"), base),
+      maxConcurrent: v.maxConcurrent,
+    };
+    check(/^[\w./-]+$/.test(r.baseBranch) && !r.baseBranch.includes(".."), `${at}.baseBranch: invalid`);
+    check(["claude", "codex"].includes(r.agent), `${at}.agent: "claude" | "codex" (here or in defaults)`);
+    check(["nono", "none"].includes(r.sandbox), `${at}.sandbox: "nono" | "none" (here or in defaults)`);
+    check(str(r.testCmd), `${at}.testCmd: required (here or in defaults)`);
+    check(r.maxConcurrent === undefined || posInt(r.maxConcurrent), `${at}.maxConcurrent: positive integer`);
+    check(existsSync(r.prompt), `${at}.prompt: ${r.prompt} not found`);
+    repos[key] = r;
+    keys.push(key);
+  }
+  check(new Set(keys.map((k) => k.toLowerCase())).size === keys.length, "repos: names must be unique ignoring case");
+  check(new Set(Object.values(repos).map((r) => r.path)).size === keys.length, "repos: paths must be unique");
+
+  check(Array.isArray(raw.sources) && raw.sources.length > 0, "sources: non-empty array required");
+  const sources: Source[] = (Array.isArray(raw.sources) ? raw.sources : []).map((r: any, i: number) => {
+    const at = `sources[${i}]${str(r?.name) ? ` (${r.name})` : ""}`;
+    r = obj(r) ? r : {};
+    for (const k of LANE_KEYS) check(r[k] === undefined, `${at}.${k}: moved to repos / defaults`);
+    check(r.repos === undefined, `${at}.repos: removed; a GitHub source polls every repo in repos`);
+    const s: Source = {
       name: r.name,
       tracker: r.tracker,
-      repo: r.repo,
-      repoPath: str(r.repoPath) ? expand(r.repoPath, base) : "",
-      baseBranch: r.baseBranch ?? "main",
-      agent: r.agent,
-      sandbox: r.sandbox,
-      maxConcurrent: r.maxConcurrent ?? 2,
-      testCmd: r.testCmd,
-      prompt: expand(r.prompt ?? join(AW_DIR, "prompts/default.md"), base),
       readyLabel: r.readyLabel ?? "agent",
       inProgressLabel: r.inProgressLabel ?? "in-progress",
       inReviewLabel: r.inReviewLabel ?? "in-review",
@@ -108,26 +161,18 @@ export function parseConfig(raw: any, base: string): Config {
       inReview: r.inReview ?? "In Review",
       done: r.done ?? ["Done", "Canceled", "Duplicate"],
     };
-    check(NAME.test(l.name ?? ""), `${at}.name: required, [a-z0-9-]`);
-    check(["github", "linear"].includes(l.tracker), `${at}.tracker: "github" | "linear"`);
-    check(/^[\w.-]+\/[\w.-]+$/.test(l.repo ?? ""), `${at}.repo: "owner/name"`);
-    check(l.repoPath, `${at}.repoPath: required`);
-    check(/^[\w./-]+$/.test(l.baseBranch) && !l.baseBranch.includes(".."), `${at}.baseBranch: invalid`);
-    check(["claude", "codex"].includes(l.agent), `${at}.agent: "claude" | "codex"`);
-    check(["nono", "none"].includes(l.sandbox), `${at}.sandbox: "nono" | "none"`);
-    check(Number.isInteger(l.maxConcurrent) && l.maxConcurrent > 0, `${at}.maxConcurrent: positive integer`);
-    check(str(l.testCmd), `${at}.testCmd: required`);
-    check(existsSync(l.prompt), `${at}.prompt: ${l.prompt} not found`);
+    check(NAME.test(s.name ?? ""), `${at}.name: required, [a-z0-9-]`);
+    check(["github", "linear"].includes(s.tracker), `${at}.tracker: "github" | "linear"`);
     for (const k of ["readyLabel", "inProgressLabel", "inReviewLabel", "todo", "inProgress", "inReview"] as const)
-      check(str(l[k]), `${at}.${k}: non-empty string`);
-    check(Array.isArray(l.done) && l.done.length > 0 && l.done.every(str), `${at}.done: non-empty string array`);
-    if (l.tracker === "linear") check(/^[A-Z0-9]+$/.test(l.team ?? ""), `${at}.team: Linear team key, e.g. ENG`);
-    return l;
+      check(str(s[k]), `${at}.${k}: non-empty string`);
+    check(Array.isArray(s.done) && s.done.length > 0 && s.done.every(str), `${at}.done: non-empty string array`);
+    if (s.tracker === "linear") check(/^[A-Z0-9]+$/.test(s.team ?? ""), `${at}.team: Linear team key, e.g. ENG`);
+    return s;
   });
-  const names = lanes.map((l) => l.name);
-  check(new Set(names).size === names.length, "lane names must be unique");
+  const names = sources.map((s) => s.name);
+  check(new Set(names).size === names.length, "source names must be unique");
   if (errs.length) throw new Error(`invalid config:\n  ${errs.join("\n  ")}`);
-  return { host: raw.host, defaultHost, pollIntervalMs, workspaceRoot: expand(raw.workspaceRoot ?? "~/agent-ws", base), tmuxSession, lanes };
+  return { host: raw.host, defaultHost, pollIntervalMs, workspaceRoot: expand(raw.workspaceRoot ?? "~/agent-ws", base), reposRoot, tmuxSession, maxConcurrent, repos, sources };
 }
 
 async function read(io: Io, argv: string[], cwd?: string) {
@@ -172,31 +217,56 @@ const ours = (t: Ticket, host: string, defaultHost: boolean) => {
   return hosts.includes(`host:${host.toLowerCase()}`) || (defaultHost && !hosts.length);
 };
 
-export function github(l: Lane, host: string, io: Io, defaultHost = false): Tracker {
+export const canonCache = new Map<string, { name: string; at: number }>();
+const CANON_TTL_MS = 5 * 60_000;
+
+// GitHub serves a renamed/transferred repo under its old name, so the allowlist is checked against the name it resolves to.
+async function canonical(io: Io, key: string, fresh = false): Promise<string | undefined> {
+  const hit = canonCache.get(key);
+  if (!fresh && hit && Date.now() - hit.at < CANON_TTL_MS) return hit.name;
+  try {
+    const name = JSON.parse(await read(io, ["gh", "repo", "view", key, "--json", "nameWithOwner"])).nameWithOwner;
+    if (typeof name !== "string") throw new Error("no nameWithOwner");
+    canonCache.set(key, { name, at: Date.now() });
+    if (!sameRepo(name, key)) io.log(`repo ${key}: GitHub resolves it to ${JSON.stringify(name.slice(0, 100))}, skipped`);
+    return name;
+  } catch (e) {
+    io.log(`repo ${key}: lookup failed, skipped: ${(e as Error).message}`);
+  }
+}
+const sameRepo = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
+export function github(l: Source, host: string, io: Io, defaultHost: boolean, repos: string[]): Tracker {
   const hostLabel = `host:${host}`;
   const listMine = (labels: string[], search?: string) =>
     defaultHost ? list(labels, search).then((r) => r.filter((t) => ours(t, host, true))) : list([...labels, hostLabel], search);
   const list = async (labels: string[], search?: string): Promise<Ticket[]> => {
-    const argv = ["gh", "issue", "list", "--repo", l.repo, "--state", "open", "--limit", "100"];
-    for (const x of labels) argv.push("--label", x);
-    if (search) argv.push("--search", search);
-    const issues: any[] = JSON.parse(await read(io, [...argv, "--json", "number,title,body,url,labels"]));
-    return issues
-      .filter((i) => Number.isInteger(i.number))
-      .map((i) => ({ id: `gh-${i.number}`, ref: String(i.number), title: i.title ?? "", body: i.body ?? "", url: i.url ?? "", labels: (i.labels ?? []).map((x: any) => x.name) }));
+    const all: Ticket[] = [];
+    for (const repo of repos) {
+      const name = await canonical(io, repo);
+      if (!name || !sameRepo(name, repo)) continue;
+      const argv = ["gh", "issue", "list", "--repo", repo, "--state", "open", "--limit", "100"];
+      for (const x of labels) argv.push("--label", x);
+      if (search) argv.push("--search", search);
+      const issues: any[] = JSON.parse(await read(io, [...argv, "--json", "number,title,body,url,labels"]));
+      for (const i of issues)
+        if (Number.isInteger(i.number))
+          all.push({ id: `gh-${i.number}`, ref: String(i.number), title: i.title ?? "", body: i.body ?? "", url: i.url ?? "", labels: (i.labels ?? []).map((x: any) => x.name), repo });
+    }
+    return all;
   };
   const skip = [l.inProgressLabel, l.inReviewLabel];
-  const edit = (t: Ticket, add: string, rm?: string) => write(io, ["gh", "issue", "edit", t.ref, "--repo", l.repo, "--add-label", add, ...(rm ? ["--remove-label", rm] : [])]);
-  const comment = async (t: Ticket, body: string) => { await write(io, ["gh", "issue", "comment", t.ref, "--repo", l.repo, "--body", body]); };
+  const edit = (t: Ticket, add: string, rm?: string) => write(io, ["gh", "issue", "edit", t.ref, "--repo", t.repo!, "--add-label", add, ...(rm ? ["--remove-label", rm] : [])]);
+  const comment = async (t: Ticket, body: string) => { await write(io, ["gh", "issue", "comment", t.ref, "--repo", t.repo!, "--body", body]); };
   return {
     // Excluded server-side too: claimed tickets keep the ready label and would otherwise fill the 100 limit.
     listReady: async () => (await listMine([l.readyLabel], skip.map((x) => `-label:${JSON.stringify(x)}`).join(" "))).filter((t) => !skip.some((x) => t.labels?.includes(x))),
     listInProgress: () => listMine([l.readyLabel, l.inProgressLabel]),
     listInReview: () => listMine([l.readyLabel, l.inReviewLabel]),
-    async isDone(id) {
+    async isDone(id, repo) {
       const n = /^gh-(\d+)$/.exec(id)?.[1];
       if (!n) throw new Error(`not a github ticket id: ${id}`);
-      return JSON.parse(await read(io, ["gh", "issue", "view", n, "--repo", l.repo, "--json", "state"])).state === "CLOSED";
+      return JSON.parse(await read(io, ["gh", "issue", "view", n, "--repo", repo, "--json", "state"])).state === "CLOSED";
     },
     async claim(t) {
       await edit(t, l.inProgressLabel);
@@ -208,20 +278,32 @@ export function github(l: Lane, host: string, io: Io, defaultHost = false): Trac
     },
     comment,
     async createPhase(parent, title, body) {
-      const url = await write(io, ["gh", "issue", "create", "--repo", l.repo, "--parent", parent.ref, "--title", title, "--body", body]);
+      const url = await write(io, ["gh", "issue", "create", "--repo", parent.repo!, "--parent", parent.ref, "--title", title, "--body", body]);
       if (io.dry) return "";
       const n = /\/issues\/(\d+)\s*$/.exec(url)?.[1];
       if (!n) throw new Error(`gh issue create: unexpected output ${url.slice(0, 200)}`);
       return n;
     },
     listPhases: async (parent) =>
-      (JSON.parse(await read(io, ["gh", "api", `repos/${l.repo}/issues/${parent.ref}/sub_issues?per_page=100`])) as any[]).map((i) => ({ ref: String(i.number), title: i.title })),
-    setPhase: (ref, status) =>
-      write(io, status === "done" ? ["gh", "issue", "close", ref, "--repo", l.repo] : ["gh", "issue", "edit", ref, "--repo", l.repo, "--add-label", l.inProgressLabel]).then(() => {}),
+      (JSON.parse(await read(io, ["gh", "api", `repos/${parent.repo}/issues/${parent.ref}/sub_issues?per_page=100`])) as any[]).map((i) => ({ ref: String(i.number), title: i.title })),
+    setPhase: (parent, ref, status) =>
+      write(io, status === "done" ? ["gh", "issue", "close", ref, "--repo", parent.repo!] : ["gh", "issue", "edit", ref, "--repo", parent.repo!, "--add-label", l.inProgressLabel]).then(() => {}),
   };
 }
 
-export function linear(l: Lane, host: string, io: Io, defaultHost = false): Tracker {
+const REPO_LINE = /^repo:[ \t]*([^\r\n]*?)[ \t\r]*$/im;
+
+/** Untrusted repo string for a Linear issue: `repo:` label, then a `repo:` line in the description, project summary, then project overview. */
+export function linearRepo(labels: string[], texts: (string | null | undefined)[]) {
+  const label = labels.find((x) => /^repo:/i.test(x));
+  if (label !== undefined) return label.slice(5).trim();
+  for (const t of texts) {
+    const m = REPO_LINE.exec(t ?? "");
+    if (m) return m[1];
+  }
+}
+
+export function linear(l: Source, host: string, io: Io, defaultHost = false): Tracker {
   const gql = async (query: string, variables: object, mutate = false) => {
     if (mutate) io.log(`${io.dry ? "dry: " : ""}linear ${/\{\s*(\w+)/.exec(query)?.[1]} ${JSON.stringify(variables)}`);
     if (mutate && io.dry) return {};
@@ -250,10 +332,14 @@ export function linear(l: Lane, host: string, io: Io, defaultHost = false): Trac
   };
   const list = async (state: string, labels: string[]): Promise<Ticket[]> => {
     const filter = { team: { key: { eq: l.team } }, state: { name: { eq: state } }, and: labels.map((n) => ({ labels: { some: { name: { eq: n } } } })) };
-    const d = await gql(`query($f: IssueFilter) { issues(filter: $f, first: 100) { nodes { id identifier title description url labels { nodes { name } } } } }`, { f: filter });
+    const d = await gql(`query($f: IssueFilter) { issues(filter: $f, first: 100) { nodes { id identifier title description url labels { nodes { name } } project { description content } } } }`, { f: filter });
     return d.issues.nodes
       .filter((i: any) => /^[A-Z0-9]+-\d+$/.test(i.identifier))
-      .map((i: any) => ({ id: i.identifier, ref: i.id, title: i.title ?? "", body: i.description ?? "", url: i.url ?? "", labels: (i.labels?.nodes ?? []).map((x: any) => x.name) }));
+      .map((i: any) => {
+        const labels: string[] = (i.labels?.nodes ?? []).map((x: any) => x.name);
+        const repo = linearRepo(labels, [i.description, i.project?.description, i.project?.content]);
+        return { id: i.identifier, ref: i.id, title: i.title ?? "", body: i.description ?? "", url: i.url ?? "", labels, repo };
+      });
   };
   const comment = async (t: Ticket, body: string) => {
     await gql(`mutation($i: CommentCreateInput!) { commentCreate(input: $i) { success } }`, { i: { issueId: t.ref, body } }, true);
@@ -294,7 +380,7 @@ export function linear(l: Lane, host: string, io: Io, defaultHost = false): Trac
     },
     listPhases: async (parent) =>
       (await gql(`query($id: String!) { issue(id: $id) { children(first: 100) { nodes { id title } } } }`, { id: parent.ref })).issue.children.nodes.map((i: any) => ({ ref: i.id, title: i.title })),
-    setPhase: (ref, status) => move(ref, status === "done" ? l.done[0]! : l.inProgress),
+    setPhase: (_parent, ref, status) => move(ref, status === "done" ? l.done[0]! : l.inProgress),
   };
 }
 
@@ -302,10 +388,10 @@ export const render = (tpl: string, vars: Record<string, string>) => tpl.replace
 
 const q = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 
-export function launcher(l: Lane, t: Ticket, wt: string, promptFile: string, awDir = AW_DIR) {
+export function launcher(l: Repo, t: Ticket, wt: string, promptFile: string, awDir = AW_DIR) {
   const prompt = `"$(cat ${q(promptFile)})"`;
   const nono = l.sandbox === "nono";
-  const wrap = nono ? ["nono", "run", "--no-rollback-prompt", "--profile", q(join(awDir, "nono", `aw-${l.agent}.json`)), "--allow", q(wt), "--allow", q(join(l.repoPath, ".git")), "--"] : [];
+  const wrap = nono ? ["nono", "run", "--no-rollback-prompt", "--profile", q(join(awDir, "nono", `aw-${l.agent}.json`)), "--allow", q(wt), "--allow", q(join(l.path, ".git")), "--"] : [];
   const title = t.title.replace(/[^\w .,:()#-]/g, "").slice(0, 60).trim();
   const [env, cmd] =
     l.agent === "claude"
@@ -321,8 +407,8 @@ async function windows(cfg: Config, io: Io) {
   return m;
 }
 
-async function findPr(l: Lane, id: string, io: Io): Promise<string | undefined> {
-  const prs: any[] = JSON.parse(await read(io, ["gh", "pr", "list", "--repo", l.repo, "--head", `agent/${id}`, "--state", "all", "--json", "url,state"]));
+async function findPr(repo: string, id: string, io: Io): Promise<string | undefined> {
+  const prs: any[] = JSON.parse(await read(io, ["gh", "pr", "list", "--repo", repo, "--head", `agent/${id}`, "--state", "all", "--json", "url,state"]));
   return prs.find((p) => p.state !== "CLOSED")?.url;
 }
 
@@ -398,121 +484,239 @@ async function syncPhases(t: Ticket, tr: Tracker, io: Io, dir: string, final: bo
     const want = !final && p.status === "done" ? "in-progress" : p.status;
     if (RANK[want] < RANK[s.status]) io.log(`phase ${t.id}/${p.key}: ignoring ${s.status} -> ${want}`);
     if (RANK[want] <= RANK[s.status]) continue;
-    await tr.setPhase(s.ref, want as "in-progress" | "done");
+    await tr.setPhase(t, s.ref, want as "in-progress" | "done");
     s.status = want;
     save();
   }
 }
 
-async function start(cfg: Config, l: Lane, t: Ticket, tr: Tracker, io: Io, awDir: string) {
-  const dir = join(cfg.workspaceRoot, l.name);
+const repoDir = (cfg: Config, key: string) => join(cfg.workspaceRoot, key);
+const winName = (key: string, id: string) => `${key}/${id}`;
+const sourceOf = (dir: string, id: string) => {
+  const f = join(dir, `${id}.source`);
+  return existsSync(f) ? readFileSync(f, "utf8").trim() : undefined;
+};
+const subdirs = (d: string) => (existsSync(d) ? readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) : []);
+const diskRepos = (cfg: Config) => subdirs(cfg.workspaceRoot).filter((o) => !o.startsWith(".")).flatMap((o) => subdirs(join(cfg.workspaceRoot, o)).map((n) => `${o}/${n}`));
+const hasTrace = (cfg: Config, key: string, id: string) => existsSync(join(repoDir(cfg, key), id)) || existsSync(join(repoDir(cfg, key), `${id}.source`));
+// Linear only: ids are unique per workspace (one LINEAR_API_KEY), so the marker is shared by all Linear sources.
+const rejectFile = (cfg: Config, id: string) => join(cfg.workspaceRoot, ".rejected", id);
+
+// Clone beside the target and rename, so an interrupted clone never looks finished; never deletes anything.
+async function ensureClone(cfg: Config, io: Io, r: Repo) {
+  if (existsSync(r.path)) {
+    const real = realpathSync(r.path);
+    const git = await io.run(["git", "-C", r.path, "rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    // Also rejects a subdirectory or linked worktree of another clone, which would share its .git.
+    if (git.code !== 0 || git.out.trim() !== join(real, ".git")) throw new Error(`${r.path} is not the top of its own git clone (interrupted clone, subdirectory or worktree?); fix or remove it by hand`);
+    const twin = Object.values(cfg.repos).find((o) => o !== r && existsSync(o.path) && realpathSync(o.path) === real);
+    if (twin) throw new Error(`${r.path} is the same clone as ${twin.key}'s path`);
+    return;
+  }
+  const tmp = `${r.path}.tmp-${process.pid}-${Date.now()}`;
+  await write(io, ["gh", "repo", "clone", r.key, tmp]);
+  io.log(`${io.dry ? "dry: " : ""}mv ${tmp} ${r.path}`);
+  if (!io.dry) renameSync(tmp, r.path);
+}
+
+async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Tracker, io: Io, awDir: string) {
+  const dir = repoDir(cfg, r.key);
   const wt = join(dir, t.id);
   const branch = `agent/${t.id}`;
   const promptFile = join(dir, `${t.id}.prompt.md`);
   const script = join(dir, `${t.id}.sh`);
+  await ensureClone(cfg, io, r);
+  put(io, join(dir, `${t.id}.source`), s.name);
   await tr.claim(t);
   remove(io, join(dir, `${t.id}.ended`));
-  await write(io, ["git", "-C", l.repoPath, "fetch", "origin", l.baseBranch]);
+  await write(io, ["git", "-C", r.path, "fetch", "origin", r.baseBranch]);
   if (existsSync(wt)) io.log(`reuse ${wt}`);
   else {
-    const hasBranch = (await io.run(["git", "-C", l.repoPath, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`])).code === 0;
-    await write(io, ["git", "-C", l.repoPath, "worktree", "add", wt, ...(hasBranch ? [branch] : ["-b", branch, `origin/${l.baseBranch}`])]);
+    const hasBranch = (await io.run(["git", "-C", r.path, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`])).code === 0;
+    await write(io, ["git", "-C", r.path, "worktree", "add", wt, ...(hasBranch ? [branch] : ["-b", branch, `origin/${r.baseBranch}`])]);
   }
-  const vars = { id: t.id, title: t.title, body: t.body, url: t.url, branch, base: l.baseBranch, testCmd: l.testCmd, repo: l.repo };
+  const vars = { id: t.id, title: t.title, body: t.body, url: t.url, branch, base: r.baseBranch, testCmd: r.testCmd, repo: r.key };
   io.log(`${io.dry ? "dry: " : ""}write ${join(wt, ".aw", ".gitignore")}`);
   if (!io.dry) {
     mkdirSync(join(wt, ".aw"), { recursive: true });
     // Unlink + exclusive create: never write through a symlink or hardlink the agent left there.
     inAw(wt, (d) => (rmSync(`${d}/.gitignore`, { force: true }), writeFileSync(`${d}/.gitignore`, "*\n", { flag: "wx" })));
   }
-  put(io, promptFile, render(readFileSync(l.prompt, "utf8"), vars));
-  put(io, script, launcher(l, t, wt, promptFile, awDir), 0o755);
-  await write(io, ["tmux", "new-window", "-d", "-t", `=${cfg.tmuxSession}:`, "-n", `${l.name}/${t.id}`, script]);
+  put(io, promptFile, render(readFileSync(r.prompt, "utf8"), vars));
+  put(io, script, launcher(r, t, wt, promptFile, awDir), 0o755);
+  await write(io, ["tmux", "new-window", "-d", "-t", `=${cfg.tmuxSession}:`, "-n", winName(r.key, t.id), script]);
 }
 
-export async function reconcileLane(cfg: Config, l: Lane, tr: Tracker, io: Io, awDir = AW_DIR) {
-  const dir = join(cfg.workspaceRoot, l.name);
-  const wins = await windows(cfg, io);
-  const win = (id: string) => `${l.name}/${id}`;
-  const step = async (what: string, fn: () => Promise<unknown>) => {
-    try {
-      await fn();
-    } catch (e) {
-      io.log(`${what} failed: ${(e as Error).message}`);
-    }
-  };
+async function step(io: Io, what: string, fn: () => Promise<unknown>) {
+  try {
+    await fn();
+  } catch (e) {
+    io.log(`${what} failed: ${(e as Error).message}`);
+  }
+}
 
-  const worktrees = existsSync(dir) ? readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory() && SAFE_ID.test(d.name)).map((d) => d.name) : [];
-  for (const id of worktrees)
-    await step(`cleanup ${id}`, async () => {
-      if (!(await tr.isDone(id))) return;
-      const w = wins.get(win(id));
-      if (w) await write(io, ["tmux", "kill-window", "-t", w]);
-      wins.delete(win(id));
-      await write(io, ["git", "-C", l.repoPath, "worktree", "remove", join(dir, id)]);
-      for (const ext of [".prompt.md", ".sh", ".ended", ".phases.json"]) remove(io, join(dir, id + ext));
-    });
+const NO_REPO = "no repo set on this ticket: add a `repo:owner/name` label or a `repo: owner/name` line to its description";
 
-  let running = [...wins.keys()].filter((n) => n.startsWith(`${l.name}/`)).length;
-  if (running < l.maxConcurrent)
-    await step("list ready", async () => {
+const notAllowed = (t: Ticket) => (!t.repo ? NO_REPO : validRepo(t.repo) ? `repo ${t.repo} is not in the aw allowlist` : `repo ${JSON.stringify(t.repo.slice(0, 100))} is not a valid owner/name`);
+
+// One comment per ticket whatever the reason, ever. Marked before posting: a crash loses the comment rather than repeating it.
+async function reject(cfg: Config, t: Ticket, tr: Tracker, io: Io, reason: string) {
+  const f = rejectFile(cfg, t.id);
+  if (existsSync(f)) return;
+  put(io, f, reason);
+  try {
+    await tr.comment(t, `aw: ${reason}`);
+  } catch (e) {
+    remove(io, f);
+    throw e;
+  }
+}
+
+// GitHub ids are only unique per repo, so the listing repo decides; a Linear ticket keeps the repo it was started in,
+// even one since removed from aw.json (then left alone). Only the source recorded in <ID>.source may act on a worktree.
+function workRepo(cfg: Config, s: Source, t: Ticket) {
+  const started = s.tracker === "linear" ? diskRepos(cfg).find((k) => hasTrace(cfg, k, t.id)) : undefined;
+  if (started && !Object.hasOwn(cfg.repos, started)) return;
+  const key = started ?? allowedRepo(cfg, t.repo);
+  if (!key) return;
+  const owner = sourceOf(repoDir(cfg, key), t.id);
+  return (owner === undefined ? !existsSync(join(repoDir(cfg, key), t.id)) : owner === s.name) ? key : undefined;
+}
+
+// Linear ids are global: a ticket requeued with another repo must not start a second session.
+const startedElsewhere = (cfg: Config, key: string, id: string, wins: Map<string, string>) =>
+  [...wins.keys()].find((n) => n.endsWith(`/${id}`) && n !== winName(key, id))?.slice(0, -id.length - 1) ??
+  diskRepos(cfg).find((k) => k !== key && hasTrace(cfg, k, id));
+
+async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins: Map<string, string>, running: Map<string, number>, awDir: string) {
+  const total = () => [...running.values()].reduce((a, b) => a + b, 0);
+  if (total() < cfg.maxConcurrent)
+    await step(io, "list ready", async () => {
       for (const t of await tr.listReady()) {
-        if (running >= l.maxConcurrent) break;
-        if (!SAFE_ID.test(t.id) || wins.has(win(t.id))) continue;
-        await step(`start ${t.id}`, async () => {
-          await start(cfg, l, t, tr, io, awDir);
-          wins.set(win(t.id), "new");
-          running++;
+        if (total() >= cfg.maxConcurrent) break;
+        if (!SAFE_ID.test(t.id)) continue;
+        // GitHub tickets always carry an allowlisted repo, so only Linear tickets are ever rejected.
+        const isLinear = s.tracker === "linear";
+        const key = allowedRepo(cfg, t.repo);
+        if (!key) {
+          if (isLinear) await step(io, `reject ${t.id}`, () => reject(cfg, t, tr, io, notAllowed(t)));
+          continue;
+        }
+        const r = cfg.repos[key]!;
+        if (wins.has(winName(key, t.id)) || (running.get(key) ?? 0) >= (r.maxConcurrent ?? Infinity)) continue;
+        const owner = sourceOf(repoDir(cfg, key), t.id);
+        if (owner !== undefined && owner !== s.name) {
+          io.log(`skip ${t.id}: ${key}/${t.id} belongs to source ${JSON.stringify(owner)}`);
+          continue;
+        }
+        const other = isLinear && startedElsewhere(cfg, key, t.id, wins);
+        if (other) {
+          io.log(`skip ${t.id}: already started in ${other}`);
+          continue;
+        }
+        // Uncached: a transfer must stop new clones and starts at once, not after the listing cache expires.
+        const name = await canonical(io, key, true);
+        if (!name) continue;
+        if (!sameRepo(name, key)) {
+          if (isLinear) await step(io, `reject ${t.id}`, () => reject(cfg, t, tr, io, `repo ${key} now resolves to ${name} on GitHub, which is not in the aw allowlist`));
+          continue;
+        }
+        await step(io, `start ${t.id}`, async () => {
+          await start(cfg, s, r, { ...t, repo: key }, tr, io, awDir);
+          wins.set(winName(key, t.id), "new");
+          running.set(key, (running.get(key) ?? 0) + 1);
         });
       }
     });
 
-  await step("list in-progress", async () => {
+  await step(io, "list in-progress", async () => {
     for (const t of await tr.listInProgress())
-      await step(`check ${t.id}`, async () => {
-        if (!SAFE_ID.test(t.id)) return;
-        const pr = await findPr(l, t.id, io);
-        await step(`phases ${t.id}`, () => syncPhases(t, tr, io, dir, !!pr));
-        if (pr) return tr.toReview(t, pr);
+      await step(io, `check ${t.id}`, async () => {
+        const key = SAFE_ID.test(t.id) && workRepo(cfg, s, t);
+        if (!key) return;
+        const w = { ...t, repo: key };
+        const dir = repoDir(cfg, key);
+        const pr = await findPr(key, t.id, io);
+        await step(io, `phases ${t.id}`, () => syncPhases(w, tr, io, dir, !!pr));
+        if (pr) return tr.toReview(w, pr);
         const ended = join(dir, `${t.id}.ended`);
-        if (wins.has(win(t.id)) || existsSync(ended)) return;
-        await tr.comment(t, "session ended without a PR");
+        if (wins.has(winName(key, t.id)) || existsSync(ended)) return;
+        await tr.comment(w, "session ended without a PR");
         put(io, ended, new Date().toISOString());
       });
   });
 
   // Retries a final sync that failed when the parent moved to review; a no-op once in sync.
-  await step("list in-review", async () => {
-    for (const t of await tr.listInReview()) if (SAFE_ID.test(t.id)) await step(`phases ${t.id}`, () => syncPhases(t, tr, io, dir, true));
+  await step(io, "list in-review", async () => {
+    for (const t of await tr.listInReview()) {
+      const key = SAFE_ID.test(t.id) && workRepo(cfg, s, t);
+      if (key) await step(io, `phases ${t.id}`, () => syncPhases({ ...t, repo: key }, tr, io, repoDir(cfg, key), true));
+    }
   });
 }
 
-export function makeTracker(l: Lane, host: string, io: Io, defaultHost = false) {
-  return l.tracker === "github" ? github(l, host, io, defaultHost) : linear(l, host, io, defaultHost);
+const worktreeIds = (dir: string) => subdirs(dir).filter((d) => SAFE_ID.test(d));
+
+export function makeTracker(s: Source, host: string, io: Io, defaultHost: boolean, repos: string[]) {
+  return s.tracker === "github" ? github(s, host, io, defaultHost, repos) : linear(s, host, io, defaultHost);
 }
+
+const warned = new Set<string>();
 
 export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = AW_DIR) {
   if ((await io.run(["tmux", "has-session", "-t", `=${cfg.tmuxSession}`])).code !== 0)
     await write(io, ["tmux", "new-session", "-d", "-s", cfg.tmuxSession]).catch((e) => io.log(`tmux: ${e.message}`));
-  for (const l of cfg.lanes) {
-    const lio = { ...io, log: (m: string) => io.log(`[${l.name}] ${m}`) };
+  const srcs = new Map(
+    cfg.sources.map((s) => {
+      const sio = { ...io, log: (m: string) => io.log(`[${s.name}] ${m}`) };
+      return [s.name, { s, io: sio, tr: tracker(s, cfg.host, sio, cfg.defaultHost, Object.keys(cfg.repos)) }];
+    }),
+  );
+  const wins = await windows(cfg, io);
+
+  for (const r of Object.values(cfg.repos)) {
+    const dir = repoDir(cfg, r.key);
+    for (const id of worktreeIds(dir)) {
+      const x = srcs.get(sourceOf(dir, id) ?? "");
+      if (!x) {
+        if (!warned.has(join(dir, id))) io.log(`${r.key}/${id}: source ${JSON.stringify(sourceOf(dir, id) ?? "")} in ${id}.source is not configured; left alone`);
+        warned.add(join(dir, id));
+        continue;
+      }
+      await step(x.io, `cleanup ${r.key}/${id}`, async () => {
+        if (!(await x.tr.isDone(id, r.key))) return;
+        const w = wins.get(winName(r.key, id));
+        if (w) await write(x.io, ["tmux", "kill-window", "-t", w]);
+        wins.delete(winName(r.key, id));
+        await write(x.io, ["git", "-C", r.path, "worktree", "remove", join(dir, id)]);
+        for (const ext of [".prompt.md", ".sh", ".ended", ".phases.json", ".source"]) remove(x.io, join(dir, id + ext));
+      });
+    }
+  }
+
+  const running = new Map<string, number>();
+  for (const n of wins.keys()) {
+    const k = n.slice(0, n.lastIndexOf("/"));
+    if (Object.hasOwn(cfg.repos, k)) running.set(k, (running.get(k) ?? 0) + 1);
+  }
+  for (const { s, io: sio, tr } of srcs.values()) {
     try {
-      await reconcileLane(cfg, l, tracker(l, cfg.host, lio, cfg.defaultHost), lio, awDir);
+      await reconcileSource(cfg, s, tr, sio, wins, running, awDir);
     } catch (e) {
-      lio.log(`lane failed: ${(e as Error).message}`);
+      sio.log(`source failed: ${(e as Error).message}`);
     }
   }
 }
 
 async function status(cfg: Config, io: Io) {
   const wins = await windows(cfg, io);
-  for (const l of cfg.lanes) {
-    const dir = join(cfg.workspaceRoot, l.name);
-    const wts = existsSync(dir) ? readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name) : [];
-    const running = [...wins.keys()].filter((n) => n.startsWith(`${l.name}/`)).map((n) => n.slice(l.name.length + 1));
-    console.log(`${l.name}  ${l.tracker} ${l.repo}  ${l.agent}/${l.sandbox}  max ${l.maxConcurrent}`);
+  console.log(`max ${cfg.maxConcurrent} sessions`);
+  for (const s of cfg.sources) console.log(`source ${s.name}  ${s.tracker === "linear" ? `linear ${s.team}` : "github (all repos)"}`);
+  for (const r of Object.values(cfg.repos)) {
+    const running = [...wins.keys()].filter((n) => n.startsWith(`${r.key}/`)).map((n) => n.slice(r.key.length + 1));
+    console.log(`${r.key}  ${r.agent}/${r.sandbox}  max ${r.maxConcurrent ?? "-"}  ${r.path}`);
     console.log(`  windows:   ${running.join(" ") || "-"}`);
-    console.log(`  worktrees: ${wts.join(" ") || "-"}`);
+    console.log(`  worktrees: ${worktreeIds(repoDir(cfg, r.key)).join(" ") || "-"}`);
   }
 }
 

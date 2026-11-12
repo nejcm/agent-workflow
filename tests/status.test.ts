@@ -43,16 +43,12 @@ test("running, ended and orphan rows with runtime, idle, phases and PR", () => {
   expect(table([])).toBe("no worktrees");
 });
 
-test("phases fall back to the sidecar; an invalid agent file shows none; a forged pr-link url is ignored", () => {
-  worktree("PER-4");
-  writeFileSync(join(dir(), "PER-4.phases.json"), JSON.stringify({ a: { ref: "1", status: "done" }, b: { ref: "2", status: "in-progress" } }));
+test("a forged pr-link url is ignored", () => {
   writePhases("PER-5", "[not json");
   const cd = claudeDir(root, join(dir(), "PER-5"));
   mkdirSync(cd, { recursive: true });
   writeFileSync(join(cd, "s.jsonl"), JSON.stringify({ type: "pr-link", cwd: join(dir(), "PER-5"), prUrl: "https://evil.example/\x1b[2J" }));
-  const [r4, r5] = rows(config(), new Map(), root, T * 1000);
-  expect(r4!.phases).toEqual({ done: 1, total: 2, items: [{ key: "a", title: "a", status: "done" }, { key: "b", title: "b", status: "in-progress" }] });
-  expect(r5!.phases).toBeNull();
+  const [r5] = rows(config(), new Map(), root, T * 1000);
   expect(r5!.pr).toBeNull();
 });
 

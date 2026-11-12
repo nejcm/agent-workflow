@@ -1,4 +1,5 @@
 import type { State } from "./state";
+import type { PhaseStatus } from "./phases";
 import { dur, label, type Row } from "./status";
 import { clean, fit, KIND } from "./tail";
 
@@ -292,12 +293,12 @@ const when = (ms: number, now: number) => {
 const pct = (done: number, total: number) => (total ? Math.round((done / total) * 100) : 0);
 
 /** The phase strip: one group per phase coloured by its status, or one smooth bar when phases outnumber cells. */
-export function segments(items: { status: string }[], n: number, P: Palette): Line {
+export function segments(items: { status: PhaseStatus }[], n: number, P: Palette): Line {
   if (n <= 0) return [];
   if (!items.length) return clip([s(P, "faint", "─".repeat(n))], n);
   const gap = (n - items.length + 1) / items.length >= 2 ? 1 : 0;
   const size = Math.floor((n - gap * (items.length - 1)) / items.length);
-  const toneOf = (st: string): Tone => (st === "done" ? "ok" : st === "in-progress" ? "accent" : "faint");
+  const toneOf = (st: PhaseStatus): Tone => (st === "done" ? "ok" : st === "in-progress" ? "accent" : "faint");
   if (size < 1) {
     const done = items.filter((x) => x.status === "done").length;
     return [s(P, "ok", bar(done, items.length, n).replace(/ /g, P.mono ? "░" : " "), { bg: P.track })];
@@ -347,7 +348,7 @@ export function detail(r: Row | undefined, n: number, rows: number, ctx: DetailC
     ? [s(P, "dim", "PHASES", { b: true }), s(P, "fg", `  ${p.done}/${p.total}`, { b: true }), s(P, "dim", `  ${pct(p.done, p.total)}%`)]
     : [s(P, "dim", "PHASES", { b: true }), s(P, "dim", "  none reported")];
   const strip = p ? [segments(items, n, P)] : [];
-  const check = (x: { title: string; status: string }): Line =>
+  const check = (x: { title: string; status: PhaseStatus }): Line =>
     x.status === "done"
       ? [s(P, "ok", "✓ "), s(P, "fg", x.title)]
       : x.status === "in-progress"

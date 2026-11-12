@@ -19,6 +19,7 @@ ready ticket ──► resolve its repo; not in `repos`, or GitHub redirects it 
              ──► tmux window <owner>/<name>/<ID>: nono run … -- claude --remote-control … "<prompt>"
 .aw/phases.json changed  ──► create / update phase sub-tickets
 PR for agent/<ID> exists ──► In Review + comment with the PR link
+in review, autoMerge on   ──► gh pr merge --squash --delete-branch, ticket Done; or one "not auto-merged" comment per head SHA
 session ended, no PR     ──► one comment "session ended without a PR"
 ticket done / closed     ──► kill window, git worktree remove
 ```
@@ -47,6 +48,18 @@ The default prompt has the agent plan with the `agent-orchestration` skill. It f
 - `done` → shown as in-progress while the parent is In Progress; closed / first `done` state once the PR exists, just before the parent moves to In Review. Closing children mid-session could trip Linear's team setting "auto-close parent when all sub-issues are done" and `aw` would then clean up the running session.
 
 Phases are history, not a gate: the same session works the ticket to the PR, and the parent's lifecycle is unchanged. Sub-tickets lack the `agent` label, so they are never picked up as work, `defaultHost` included. Created refs and synced statuses live in `<workspaceRoot>/<owner>/<name>/<ID>.phases.json`, outside the sandbox, written atomically. Before creating a sub-ticket `aw` lists the parent's existing ones and adopts one with the same `<ID>: <title>` that it has no record of, so a crash or lost response between creating and recording doesn't duplicate it. Tickets in review keep syncing every poll, so a failed final sync is retried. The file is untrusted: max 64 KiB and 20 phases, `key` `[a-z0-9-]{1,40}` starting with a letter or digit, one-line title ≤ 120, body ≤ 4000; `.aw` and the file are opened without following symlinks (the directory is pinned by fd via `/proc`, so Linux only) and anything but a regular file is rejected. An invalid file is logged and skipped for that poll, and a status moving back is ignored. Cleanup leaves sub-tickets as they are.
+
+### Auto-merge
+
+`autoMerge` (in `defaults` or per repo) lets `aw` merge a ticket's PR; the prompt forbids the agent to merge. That is a prompt rule, not a boundary: the sandbox's GitHub token can reach `/repos/**` and `/graphql` (`gh pr create` needs GraphQL, and nono filters only method + path, not the mutation), so a prompt-injected agent can still `gh pr merge` or push to `baseBranch` itself, even with `autoMerge: "off"` or `no-automerge`. The real boundary is GitHub branch protection on `baseBranch` (required PR, required status checks); enable it. On every poll, for each in-review ticket with an open PR on `agent/<ID>`, `aw` reads `gh pr view --json …` and decides:
+
+- `off` (default): never merges.
+- `all`: merges when the PR is open, not a draft, from this repo (not a fork), targets `baseBranch`, has no conflicts, no check failed or pending (zero checks is fine), and neither the PR nor the ticket has the label `no-automerge`.
+- `intelligent`: the same, plus gates `aw` computes from the PR itself. Never merged: any changed file matching a critical path, or a large change. Size is additions + deletions and changed files: small ≤ 150 lines and ≤ 5 files, medium ≤ 500 and ≤ 15, else large. Small needs nothing more (zero checks is fine). A PR that renames a file is never merged (`files` gives only the new path). Medium also needs at least one check that succeeded (skipped or neutral ones don't count), and a valid `.aw/merge.json` from the agent with `tested: true`, `confidence: "high"`, `critical: false`.
+
+The agent writes `.aw/merge.json` (`{ "tested", "confidence": "high|medium|low", "critical", "reason" }`, max 4 KiB, read like the phases file: no symlinks, regular file only) just before opening the PR. Ticket text can steer the agent, so the file is untrusted: it can only hold a merge back (`critical: true` or `confidence: "low"` blocks any size; missing or invalid blocks medium), never let one through. Built-in critical paths (case-insensitive globs on the repo-relative path; a pattern without `/` matches the file name at any depth): `.github/**`, `**/Dockerfile*`, `docker-compose*`, `**/migrations/**`, `**/*.sql`, `package.json`, `bun.lock*`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `go.mod`, `go.sum`, `Cargo.toml`, `Cargo.lock`, `pyproject.toml`, `requirements*.txt`, `**/auth/**`, `**/*secret*`, `**/*.env*`, `**/*.pem`, `**/*.key`, `nono/**`, `aw.json`, `**/infra/**`, `**/terraform/**`, `**/deploy/**`. `criticalPaths` adds to them.
+
+Pending checks or unknown mergeability wait silently. A merge is `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>` (never `--admin`), so a push after the decision makes it fail. Right before merging `aw` views the PR again and re-runs every gate; `gh pr merge` cannot pin the base, so a retarget after that view still races. A failed merge is logged and retried next poll, and so is a PR not yet `MERGED` after the command (merge queue). After a merge `aw` comments once, closes the GitHub issue / moves the Linear ticket to the first `done` state, and cleanup follows. A PR found merged on a later poll (also by hand) moves the ticket the same way if it is from this repo and targets `baseBranch`, which retries a failed close. A PR that is not merged gets one `not auto-merged: <reason>` comment per head SHA, recorded in `<ID>.merge` next to the worktree; it is re-evaluated every poll, so a re-run check or a removed label still lets it merge without a new commit.
 
 ## Quick start
 
@@ -161,7 +174,7 @@ Or as a systemd user service (edit `WorkingDirectory` and `PATH` in the unit fir
 cp systemd/aw.service ~/.config/systemd/user/ && systemctl --user enable --now aw
 ```
 
-`KillMode=process` keeps agent sessions alive when the service restarts. `bun aw.ts status` lists sources, repos, running windows and worktrees.
+`KillMode=process` keeps agent sessions alive when the service restarts. `bun aw.ts status` lists sources, repos (with their `autoMerge`), running windows and worktrees.
 
 ### On a VM
 
@@ -186,6 +199,8 @@ Same steps on the VM (Tailscale for access), with `"sandbox": "none"` in `defaul
 | `defaults` / `repos[].testCmd` | required in one of them | the agent must pass it before opening a PR |
 | `defaults` / `repos[].maxConcurrent` | unlimited | sessions per repo, within the global `maxConcurrent` |
 | `defaults` / `repos[].prompt` | `prompts/default.md` | template, relative to the config file |
+| `defaults` / `repos[].autoMerge` | `off` | `off` \| `intelligent` \| `all`, see [Auto-merge](#auto-merge) |
+| `defaults` / `repos[].criticalPaths` | `[]` | extra globs never auto-merged in `intelligent`; a per-repo list replaces the `defaults` one |
 | `sources[].name` | required | `[a-z0-9-]`, unique |
 | `sources[].tracker` | required | `github` \| `linear` |
 | GitHub: `readyLabel`, `inProgressLabel`, `inReviewLabel` | `agent`, `in-progress`, `in-review` | done = issue closed |
@@ -226,6 +241,7 @@ The nono profiles have not been run yet; prove the boundaries on a throwaway rep
 - **One failing repo stops its source's listing:** a GitHub source lists its repos one by one, so a `gh issue list` error on one (no access) skips that poll's ready/in-progress lists for the whole source; it is logged. A renamed repo or a failed name lookup only skips that repo.
 - **Codex under nono runs with `--no-daemon`** (required on Linux), so sandboxed Codex sessions show in the app history but can't be live-steered; with `sandbox: "none"` they can.
 - **Claude sessions can run Codex:** the Claude profile also grants `~/.codex-aw`, `CODEX_HOME`, `chatgpt.com` and `auth.openai.com`, so `agent-orchestration` can delegate to Codex. This widens the sandbox: a session can read the agent's Codex login (a long-lived ChatGPT refresh token) and rewrite `~/.codex-aw/config.toml`, so a prompt-injected Claude session can plant code that later Codex sessions run. Claude and Codex sessions now share one trust domain. Remove those entries if you don't want it.
+- **Auto-merge:** unverified against live GitHub: `statusCheckRollup` item shapes (CheckRun `status`/`conclusion`, StatusContext `state`) and `mergeable` turning `UNKNOWN` → `MERGEABLE`; `gh issue close` on an issue `Closes #n` already closed. A small PR whose CI has not registered any check yet counts as "zero checks" and can merge at once. Branch protection that blocks the merge (required reviews) makes it fail and be logged every poll.
 - **Safety rests on the sandbox:** agents run with `bypassPermissions` / `--ask-for-approval never`.
 - **List limit with `defaultHost`:** each poll fetches at most 100 tickets per query (per repo on GitHub). With `defaultHost` the host filter is applied client-side (no query can express "no `host:` label"), so more than 100 ready tickets for other hosts can hide unlabelled ones.
 - **One `aw` per tracker and workspace:** a single `aw run` polls sequentially, and the checks that keep a ticket to one repo and one session are not atomic across processes. Two `aw` instances on the same tracker or `workspaceRoot` are unsupported; use `host:` labels to split work between machines.

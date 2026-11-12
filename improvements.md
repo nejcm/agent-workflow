@@ -87,6 +87,7 @@ Injection: when the state is `idle`, run `tmux load-buffer <ID>.inject` → `pas
 
 - Clones are `aw`-managed (`reposRoot`), but one clone is shared by every session on that repo and by `aw`'s own `git` calls, so `.git/hooks` planted by one agent still run outside its sandbox. Next step: a clone per session, or `core.hooksPath=/dev/null` on `aw`'s git calls.
 - Fine-grained PAT per repo instead of `gh auth token`.
+- The sandbox token can merge PRs (REST `PUT …/pulls/*/merge` or the GraphQL `mergePullRequest` mutation) and push to `baseBranch`, so `autoMerge` gates are advisory against a prompt-injected agent. nono's endpoint rules match method + path only and `gh pr create` needs `POST /graphql`, so the profile can't block it. Options: a token without merge rights (likely none: GitHub lists merging under the same Contents: write that push needs; unverified), have `aw` open the PR so the sandbox drops `/graphql`, or rely on branch protection with required checks.
 - Make `~/.codex-aw` read-only in `nono/aw-claude.json`, writable only for what Codex needs (sessions, `*.sqlite`, log, tmp, cache, `auth.json*`), so a Claude session can't rewrite `config.toml` for later Codex sessions. Untested whether Codex runs that way.
 - Every injection path above (2, 4, 11, 14) adds tracker text that a session reads. Keep the rule that this text goes only into files, and author allowlists default to the owner.
 

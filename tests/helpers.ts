@@ -44,6 +44,7 @@ export function fakeTracker(s: { ready?: Ticket[]; inProgress?: Ticket[]; inRevi
     toReview: async (t, pr) => void calls.push(`review ${t.id} ${pr}`),
     done: async (t) => void calls.push(`done ${t.id}`),
     comment: async (t, b) => void calls.push(`comment ${t.id} ${b}`),
+    comments: async () => [],
     createPhase: async (t, title) => (calls.push(`create ${t.id} ${title}`), subs.push({ ref: `sub-${calls.length}`, title }), `sub-${calls.length}`),
     listPhases: async () => subs,
     setPhase: async (_t, ref, st) => void calls.push(`set ${ref} ${st}`),

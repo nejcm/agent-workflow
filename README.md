@@ -36,6 +36,15 @@ The default prompt has the agent plan with the `agent-orchestration` skill. When
 
 Phases are history, not a gate: the same session works the ticket to the PR, and the parent's lifecycle is unchanged. Sub-tickets lack the `agent` label, so they are never picked up as work, `defaultHost` included. Created refs and synced statuses live in `<workspaceRoot>/<lane>/<ID>.phases.json`, outside the sandbox, written atomically. Before creating a sub-ticket `aw` lists the parent's existing ones and adopts one with the same `<ID>: <title>` that it has no record of, so a crash or lost response between creating and recording doesn't duplicate it. Tickets in review keep syncing every poll, so a failed final sync is retried. The file is untrusted: max 64 KiB and 20 phases, `key` `[a-z0-9-]{1,40}` starting with a letter or digit, one-line title ≤ 120, body ≤ 4000; `.aw` and the file are opened without following symlinks (the directory is pinned by fd via `/proc`, so Linux only) and anything but a regular file is rejected. An invalid file is logged and skipped for that poll, and a status moving back is ignored. Cleanup leaves sub-tickets as they are.
 
+## Quick start
+
+```bash
+./setup.sh owner/repo   # config dirs, nono, labels, .env and aw.json from the examples, login check
+./run.sh                # preflight (dry run), then poll in the foreground
+```
+
+Edit `aw.json` lanes before running. `./run.sh once` does a single pass; `./run.sh service` installs and starts the systemd user unit. The agent logins and the workspace trust dialog below are interactive; `setup.sh` prints what is still missing.
+
 ## Setup
 
 ### 1. Requirements

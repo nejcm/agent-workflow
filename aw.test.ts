@@ -61,7 +61,7 @@ const writePhases = (id: string, phases: unknown) => {
   mkdirSync(join(root, "web", id, ".aw"), { recursive: true });
   writeFileSync(join(root, "web", id, ".aw/phases.json"), typeof phases === "string" ? phases : JSON.stringify(phases));
 };
-const phase = (key: string, status: string, over: object = {}) => ({ key, title: `Do ${key}`, body: "b", status, ...over });
+const phase = (key: string, status: unknown, over: object = {}) => ({ key, title: `Do ${key}`, body: "b", status, ...over });
 
 const windowsOut =(names: string[]) => ({ out: names.map((n, i) => `@${i} ${n}`).join("\n") });
 const noPr = (argv: string[]) => (argv[1] === "pr" ? { out: "[]" } : undefined);

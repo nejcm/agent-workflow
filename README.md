@@ -43,7 +43,7 @@ Phases are history, not a gate: the same session works the ticket to the PR, and
 ./run.sh                # preflight (dry run), then poll in the foreground
 ```
 
-The same are available as `bun run setup owner/repo`, `bun run start`, `bun run once`, `bun run service`, `bun run status`, `bun run dry` and `bun run test`. Edit `aw.json` lanes before running. `./run.sh once` does a single pass; `./run.sh service` installs and starts the systemd user unit. The agent logins and the workspace trust dialog below are interactive; `setup.sh` prints what is still missing.
+The same are available as `bun run setup owner/repo`, `bun run start`, `bun run once`, `bun run service`, `bun run status`, `bun run dry`, `bun run test` and `bun run typecheck` (`tsc --noEmit`; run `bun install` once for the dev-only `typescript` and `bun-types`). Edit `aw.json` lanes before running. `./run.sh once` does a single pass; `./run.sh service` installs and starts the systemd user unit. The agent logins and the workspace trust dialog below are interactive; `setup.sh` prints what is still missing.
 
 ## Setup
 

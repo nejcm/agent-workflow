@@ -9,14 +9,14 @@ import { syncPhases } from "./phases";
 import type { Config, Io, Source, Ticket, Tracker } from "./types";
 import { AW_DIR, put, remove, write } from "./util";
 
-const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
+export const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
 
 const sourceOf = (dir: string, id: string) => {
   const f = join(dir, `${id}.source`);
   return existsSync(f) ? readFileSync(f, "utf8").trim() : undefined;
 };
 const subdirs = (d: string) => (existsSync(d) ? readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) : []);
-const diskRepos = (cfg: Config) => subdirs(cfg.workspaceRoot).filter((o) => !o.startsWith(".")).flatMap((o) => subdirs(join(cfg.workspaceRoot, o)).map((n) => `${o}/${n}`));
+export const diskRepos = (cfg: Config) => subdirs(cfg.workspaceRoot).filter((o) => !o.startsWith(".")).flatMap((o) => subdirs(join(cfg.workspaceRoot, o)).map((n) => `${o}/${n}`));
 const hasTrace = (cfg: Config, key: string, id: string) => existsSync(join(repoDir(cfg, key), id)) || existsSync(join(repoDir(cfg, key), `${id}.source`));
 // Linear only: ids are unique per workspace (one LINEAR_API_KEY), so the marker is shared by all Linear sources.
 const rejectFile = (cfg: Config, id: string) => join(cfg.workspaceRoot, ".rejected", id);

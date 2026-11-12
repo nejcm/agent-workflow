@@ -1,4 +1,4 @@
-import { chmodSync, closeSync, constants as C, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants as C, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Io, Ticket } from "./types";
 
@@ -43,6 +43,14 @@ export function inAw<T>(wt: string, fn: (dir: string) => T): T {
     closeSync(d);
   }
 }
+
+export const mtime = (p: string) => {
+  try {
+    return statSync(p).mtimeMs;
+  } catch {
+    return undefined;
+  }
+};
 
 export function remove(io: Io, path: string) {
   if (!existsSync(path)) return;

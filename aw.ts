@@ -48,6 +48,8 @@ export interface Ticket {
   labels?: string[];
   /** GitHub: the allowlisted repo it was listed from. Linear: the untrusted resolved string, if any. */
   repo?: string;
+  /** 1 (urgent) to 4 (low); undefined = no priority, started last. */
+  priority?: number;
 }
 
 export interface Tracker {
@@ -236,6 +238,14 @@ async function canonical(io: Io, key: string, fresh = false): Promise<string | u
 }
 const sameRepo = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
+const PRIORITIES = ["urgent", "high", "medium", "low"];
+/** Most urgent `priority:<urgent|high|medium|low>` label as a Linear-style rank, or undefined. */
+export const labelPriority = (labels: string[]) => {
+  const ranks = labels.map((x) => PRIORITIES.indexOf(/^priority:(\w+)$/i.exec(x)?.[1]?.toLowerCase() ?? "") + 1).filter((r) => r > 0);
+  return ranks.length ? Math.min(...ranks) : undefined;
+};
+export const byPriority = (a: Ticket, b: Ticket) => (a.priority ?? 5) - (b.priority ?? 5);
+
 export function github(l: Source, host: string, io: Io, defaultHost: boolean, repos: string[]): Tracker {
   const hostLabel = `host:${host}`;
   const listMine = (labels: string[], search?: string) =>
@@ -250,8 +260,10 @@ export function github(l: Source, host: string, io: Io, defaultHost: boolean, re
       if (search) argv.push("--search", search);
       const issues: any[] = JSON.parse(await read(io, [...argv, "--json", "number,title,body,url,labels"]));
       for (const i of issues)
-        if (Number.isInteger(i.number))
-          all.push({ id: `gh-${i.number}`, ref: String(i.number), title: i.title ?? "", body: i.body ?? "", url: i.url ?? "", labels: (i.labels ?? []).map((x: any) => x.name), repo });
+        if (Number.isInteger(i.number)) {
+          const labels: string[] = (i.labels ?? []).map((x: any) => x.name);
+          all.push({ id: `gh-${i.number}`, ref: String(i.number), title: i.title ?? "", body: i.body ?? "", url: i.url ?? "", labels, repo, priority: labelPriority(labels) });
+        }
     }
     return all;
   };
@@ -304,12 +316,13 @@ export function linearRepo(labels: string[], texts: (string | null | undefined)[
 // A label inside a Linear label group is named `<group>:<name>`, so a `repo` group holding `owner/name` reads `repo:owner/name`.
 const labelNames = (c: any): string[] => (c?.nodes ?? []).map((x: any) => (x.parent?.name ? `${x.parent.name}:${x.name}` : x.name));
 
-export const LINEAR_ISSUES = `query($f: IssueFilter) { issues(filter: $f, first: 100) { nodes { id identifier title description url labels { nodes { name parent { name } } } project { description content labels { nodes { name parent { name } } } } } } }`;
+export const LINEAR_ISSUES = `query($f: IssueFilter) { issues(filter: $f, first: 100) { nodes { id identifier title description url priority labels { nodes { name parent { name } } } project { description content labels { nodes { name parent { name } } } } } } }`;
 
 export function linearTicket(i: any): Ticket {
   const labels = labelNames(i.labels);
   const repo = linearRepo(labels, [i.description, i.project?.description, i.project?.content], labelNames(i.project?.labels));
-  return { id: i.identifier, ref: i.id, title: i.title ?? "", body: i.description ?? "", url: i.url ?? "", labels, repo };
+  const priority = [1, 2, 3, 4].includes(i.priority) ? i.priority : undefined;
+  return { id: i.identifier, ref: i.id, title: i.title ?? "", body: i.description ?? "", url: i.url ?? "", labels, repo, priority };
 }
 
 export function linear(l: Source, host: string, io: Io, defaultHost = false): Tracker {
@@ -591,47 +604,36 @@ const startedElsewhere = (cfg: Config, key: string, id: string, wins: Map<string
   [...wins.keys()].find((n) => n.endsWith(`/${id}`) && n !== winName(key, id))?.slice(0, -id.length - 1) ??
   diskRepos(cfg).find((k) => k !== key && hasTrace(cfg, k, id));
 
-async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins: Map<string, string>, running: Map<string, number>, awDir: string) {
-  const total = () => [...running.values()].reduce((a, b) => a + b, 0);
-  if (total() < cfg.maxConcurrent)
-    await step(io, "list ready", async () => {
-      for (const t of await tr.listReady()) {
-        if (total() >= cfg.maxConcurrent) break;
-        if (!SAFE_ID.test(t.id)) continue;
-        // GitHub tickets always carry an allowlisted repo, so only Linear tickets are ever rejected.
-        const isLinear = s.tracker === "linear";
-        const key = allowedRepo(cfg, t.repo);
-        if (!key) {
-          if (isLinear) await step(io, `reject ${t.id}`, () => reject(cfg, t, tr, io, notAllowed(t)));
-          continue;
-        }
-        const r = cfg.repos[key]!;
-        if (wins.has(winName(key, t.id)) || (running.get(key) ?? 0) >= (r.maxConcurrent ?? Infinity)) continue;
-        const owner = sourceOf(repoDir(cfg, key), t.id);
-        if (owner !== undefined && owner !== s.name) {
-          io.log(`skip ${t.id}: ${key}/${t.id} belongs to source ${JSON.stringify(owner)}`);
-          continue;
-        }
-        const other = isLinear && startedElsewhere(cfg, key, t.id, wins);
-        if (other) {
-          io.log(`skip ${t.id}: already started in ${other}`);
-          continue;
-        }
-        // Uncached: a transfer must stop new clones and starts at once, not after the listing cache expires.
-        const name = await canonical(io, key, true);
-        if (!name) continue;
-        if (!sameRepo(name, key)) {
-          if (isLinear) await step(io, `reject ${t.id}`, () => reject(cfg, t, tr, io, `repo ${key} now resolves to ${name} on GitHub, which is not in the aw allowlist`));
-          continue;
-        }
-        await step(io, `start ${t.id}`, async () => {
-          await start(cfg, s, r, { ...t, repo: key }, tr, io, awDir);
-          wins.set(winName(key, t.id), "new");
-          running.set(key, (running.get(key) ?? 0) + 1);
-        });
-      }
-    });
+async function startReady(cfg: Config, s: Source, tr: Tracker, io: Io, t: Ticket, wins: Map<string, string>, running: Map<string, number>, awDir: string) {
+  if (!SAFE_ID.test(t.id)) return;
+  // GitHub tickets always carry an allowlisted repo, so only Linear tickets are ever rejected.
+  const isLinear = s.tracker === "linear";
+  const key = allowedRepo(cfg, t.repo);
+  if (!key) {
+    if (isLinear) await step(io, `reject ${t.id}`, () => reject(cfg, t, tr, io, notAllowed(t)));
+    return;
+  }
+  const r = cfg.repos[key]!;
+  if (wins.has(winName(key, t.id)) || (running.get(key) ?? 0) >= (r.maxConcurrent ?? Infinity)) return;
+  const owner = sourceOf(repoDir(cfg, key), t.id);
+  if (owner !== undefined && owner !== s.name) return io.log(`skip ${t.id}: ${key}/${t.id} belongs to source ${JSON.stringify(owner)}`);
+  const other = isLinear && startedElsewhere(cfg, key, t.id, wins);
+  if (other) return io.log(`skip ${t.id}: already started in ${other}`);
+  // Uncached: a transfer must stop new clones and starts at once, not after the listing cache expires.
+  const name = await canonical(io, key, true);
+  if (!name) return;
+  if (!sameRepo(name, key)) {
+    if (isLinear) await step(io, `reject ${t.id}`, () => reject(cfg, t, tr, io, `repo ${key} now resolves to ${name} on GitHub, which is not in the aw allowlist`));
+    return;
+  }
+  await step(io, `start ${t.id}`, async () => {
+    await start(cfg, s, r, { ...t, repo: key }, tr, io, awDir);
+    wins.set(winName(key, t.id), "new");
+    running.set(key, (running.get(key) ?? 0) + 1);
+  });
+}
 
+async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins: Map<string, string>) {
   await step(io, "list in-progress", async () => {
     for (const t of await tr.listInProgress())
       await step(io, `check ${t.id}`, async () => {
@@ -702,9 +704,20 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
     const k = n.slice(0, n.lastIndexOf("/"));
     if (Object.hasOwn(cfg.repos, k)) running.set(k, (running.get(k) ?? 0) + 1);
   }
+  const total = () => [...running.values()].reduce((a, b) => a + b, 0);
+  if (total() < cfg.maxConcurrent) {
+    const ready: { s: Source; io: Io; tr: Tracker; t: Ticket }[] = [];
+    for (const x of srcs.values()) await step(x.io, "list ready", async () => void ready.push(...(await x.tr.listReady()).map((t) => ({ ...x, t }))));
+    // Stable sort: equal priorities keep source order, then tracker order.
+    ready.sort((a, b) => byPriority(a.t, b.t));
+    for (const { s, io: sio, tr, t } of ready) {
+      if (total() >= cfg.maxConcurrent) break;
+      await step(sio, `ready ${t.id}`, () => startReady(cfg, s, tr, sio, t, wins, running, awDir));
+    }
+  }
   for (const { s, io: sio, tr } of srcs.values()) {
     try {
-      await reconcileSource(cfg, s, tr, sio, wins, running, awDir);
+      await reconcileSource(cfg, s, tr, sio, wins);
     } catch (e) {
       sio.log(`source failed: ${(e as Error).message}`);
     }

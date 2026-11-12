@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LINEAR_ISSUES, type Config, type Io, type Ticket, type Tracker, allowedRepo, canonCache, github, launcher, linear, linearRepo, linearTicket, parseConfig, parsePhases, pass, render, validRepo } from "./aw";
+import { LINEAR_ISSUES, type Config, type Io, type Ticket, type Tracker, allowedRepo, byPriority, canonCache, github, labelPriority, launcher, linear, linearRepo, linearTicket, parseConfig, parsePhases, pass, render, validRepo } from "./aw";
 
 let root: string;
 beforeEach(() => {
@@ -238,13 +238,13 @@ test("dry-run logs side effects and executes none", async () => {
 test("github adapter: ready requires host label, skips claimed, edits labels", async () => {
   const l = config().sources[0]!;
   const issues = [
-    { number: 7, title: "t", body: null, url: "u", labels: [{ name: "agent" }] },
+    { number: 7, title: "t", body: null, url: "u", labels: [{ name: "agent" }, { name: "priority:High" }] },
     { number: 8, title: "t", body: "", url: "u", labels: [{ name: "agent" }, { name: "in-progress" }] },
     { number: 9, title: "t", body: "", url: "u", labels: [{ name: "agent" }, { name: "in-review" }] },
   ];
   const { io, cmds } = fakeIo((a) => (a[2] === "list" ? { out: JSON.stringify(issues) } : a[1] === "issue" && a[2] === "view" ? { out: '{"state":"CLOSED"}' } : undefined));
   const tr = github(l, "box", io, false, ["acme/web"]);
-  expect((await tr.listReady()).map((t) => t.id)).toEqual(["gh-7"]);
+  expect((await tr.listReady()).map((t) => [t.id, t.priority])).toEqual([["gh-7", 2]]);
   expect(cmds[0]).toBe("gh repo view acme/web --json nameWithOwner");
   expect(cmds[1]).toContain("--label agent --label host:box");
   await tr.claim((await tr.listReady())[0]!);
@@ -671,6 +671,31 @@ test("concurrency: per-repo limit and global limit both apply", async () => {
   const r = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(["acme/api/gh-1"]) : noPr(a)));
   await pass(c, r.io, (s) => (s.name === "gh" ? busy.tr : fakeTracker({}).tr), "/aw");
   expect(busy.calls).toEqual(["claim gh-6"]);
+});
+
+test("priority: Linear field and GitHub priority:* labels map to one rank", () => {
+  expect(LINEAR_ISSUES).toContain(" priority ");
+  expect([0, 1, 2, 3, 4, undefined, null, 9].map((priority) => linearTicket({ identifier: "ENG-1", priority }).priority)).toEqual([undefined, 1, 2, 3, 4, undefined, undefined, undefined]);
+  expect(labelPriority(["bug", "Priority:HIGH"])).toBe(2);
+  expect(labelPriority(["priority:low", "priority:urgent"])).toBe(1);
+  expect(labelPriority(["priority:medium"])).toBe(3);
+  for (const l of [[], ["priority:p0"], ["p1"], ["prio:high"], ["priority: high"], ["priority:highest"]]) expect(labelPriority(l)).toBeUndefined();
+});
+
+test("priority: sort is stable with no priority last", () => {
+  const t = (n: number, priority?: number) => ({ ...ticket(n), priority });
+  expect([t(1), t(2, 4), t(3, 1), t(4), t(5, 4), t(6, 1)].sort(byPriority).map((x) => x.id)).toEqual(["gh-3", "gh-6", "gh-2", "gh-5", "gh-1", "gh-4"]);
+});
+
+test("priority: ready tickets from all sources start most urgent first, before the maxConcurrent cut", async () => {
+  const c = two();
+  c.maxConcurrent = 2;
+  const gh = fakeTracker({ ready: [ticket(1), { ...ticket(2), priority: 3 }] });
+  const lin = fakeTracker({ ready: [{ ...ticket(3), id: "ENG-3", repo: "acme/api", priority: 1 }, { ...ticket(4), id: "ENG-4", repo: "acme/api" }] });
+  const { io, cmds } = fakeIo(noPr);
+  await pass(c, io, (s) => (s.name === "gh" ? gh.tr : lin.tr), "/aw");
+  expect(cmds.filter((x) => x.includes("new-window")).map((x) => x.split(" ")[6])).toEqual(["acme/api/ENG-3", "acme/web/gh-2"]);
+  expect([...gh.calls, ...lin.calls]).toEqual(["claim gh-2", "claim ENG-3"]);
 });
 
 test("after a restart cleanup and findPr use the repo and source recorded next to the worktree", async () => {

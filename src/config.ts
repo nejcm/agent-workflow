@@ -61,6 +61,7 @@ export function parseConfig(raw: any, base: string): Config {
       maxConcurrent: v.maxConcurrent,
       autoMerge: v.autoMerge === undefined ? "off" : v.autoMerge,
       criticalPaths: v.criticalPaths === undefined ? [] : v.criticalPaths,
+      feedbackAuthors: v.feedbackAuthors === undefined ? [] : v.feedbackAuthors,
     };
     check(/^[\w./-]+$/.test(r.baseBranch) && !r.baseBranch.includes(".."), `${at}.baseBranch: invalid`);
     check(["claude", "codex"].includes(r.agent), `${at}.agent: "claude" | "codex" (here or in defaults)`);
@@ -70,6 +71,7 @@ export function parseConfig(raw: any, base: string): Config {
     check(existsSync(r.prompt), `${at}.prompt: ${r.prompt} not found`);
     check(["off", "intelligent", "all"].includes(r.autoMerge), `${at}.autoMerge: "off" | "intelligent" | "all"`);
     check(Array.isArray(r.criticalPaths) && r.criticalPaths.every(str), `${at}.criticalPaths: array of non-empty glob strings`);
+    check(Array.isArray(r.feedbackAuthors) && r.feedbackAuthors.every(str), `${at}.feedbackAuthors: array of non-empty strings (GitHub logins / Linear emails)`);
     repos[key] = r;
     keys.push(key);
   }

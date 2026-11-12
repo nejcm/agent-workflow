@@ -39,7 +39,7 @@ async function reject(cfg: Config, t: Ticket, tr: Tracker, io: Io, reason: strin
   if (existsSync(f)) return;
   put(io, f, reason);
   try {
-    await tr.comment(t, `aw: ${reason}`);
+    await tr.comment(t, reason);
   } catch (e) {
     remove(io, f);
     throw e;

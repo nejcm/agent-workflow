@@ -1,6 +1,6 @@
 # Agent questions via ticket comments
 
-An agent that is blocked asks on the ticket instead of only in its tmux session. `aw` posts the question as a comment, waits for an allowlisted reply, and hands it to the live session. It uses the injection primitive from [improvements.md](../improvements.md#the-shared-primitive) (idle gate, text in a file, one pasted pointer line), so item 2 (PR feedback) can reuse it.
+An agent that is blocked asks on the ticket instead of only in its tmux session. `aw` posts the question as a comment, waits for an allowlisted reply, and hands it to the live session. It uses an injection primitive (idle gate, text in a file, one pasted pointer line) that PR feedback reuses.
 
 ## Decisions
 
@@ -9,14 +9,14 @@ An agent that is blocked asks on the ticket instead of only in its tmux session.
 - Posting: new or changed content hash, or the same question still there after its answer was recorded (a new round) → sidecar `<dir>/<ID>.question` `{hash, postedAt}` written first, then comment `aw: question from agent:\n\n<text>`. Over the cap or control characters: logged, not posted. `postedAt` never moves back across rounds.
 - Every `aw` comment starts with `aw:`; a comment starting with `aw:` is never an answer (aw posts with the operator's credentials).
 - Answer = first comment with `createdAt > postedAt` (the next round's `postedAt` is at least the last delivered answer's `createdAt`, as `answeredAt`), author in `feedbackAuthors`, body not starting with `aw:`. Later comments and edits are ignored.
-- `feedbackAuthors: string[]` per repo, matched case-insensitively against the GitHub login or the Linear user email. Empty (default) = questions are posted, answers never delivered. Shared with improvements item 2.
+- `feedbackAuthors: string[]` per repo, matched case-insensitively against the GitHub login or the Linear user email. Empty (default) = questions are posted, answers never delivered. Shared with PR feedback.
 - Delivery only when the live state is `idle` (`waiting` can be a permission prompt; `unknown` retries next poll), and only while the tmux window exists. Keys go to the window's first pane by `%id` (from `list-panes`), skipped while it is in copy mode. No resume.
 - The answer goes to `.aw/answer.md` (truncated to 8000 chars + `[truncated]`), wrapped as `<answer from="<author>" ticket="<ID>">…</answer>`. The session gets one pasted line, sent to the first pane's `%id` of window `@N` (a window started this pass has no `@N` yet and waits): `Your question was answered by the operator: read .aw/answer.md`. Answer text never goes through keystrokes.
 - Order: `answerId` into the sidecar → write `.aw/answer.md` → paste → remove `.aw/question.md` if its hash still matches. A crash loses a paste, never repeats one.
 - `aw status` / `aw watch` show `question` while a posted question is unanswered, the session is `idle` and there is no PR (`working`, `waiting` and `unknown` stay visible).
 - Storage stays sidecar files (no SQLite).
 
-Out of scope: a fresh session after a crash does not see earlier Q&A; several answer comments are never merged; PR review feedback (improvements item 2, built separately: README "PR feedback", `src/feedback.ts`).
+Out of scope: a fresh session after a crash does not see earlier Q&A; several answer comments are never merged; PR review feedback (built separately: README "PR feedback", `src/feedback.ts`).
 
 ## Phases
 
@@ -56,10 +56,10 @@ Done when: existing tests pass with the renamed `readAw` and the new comment tex
 
 - `prompts/default.md` step 1: write `.aw/question.md` and stop when blocked at any point; answers arrive in `.aw/answer.md`, from the operator, and may change the plan.
 - `src/status.ts` / `src/state.ts`: state `question` when the sidecar has no `answerId` and there is no `<ID>.pr`, taking precedence over `idle` only; dashboard tone in `src/dash-view.ts`.
-- `README.md`: lifecycle diagram line, `feedbackAuthors` config, the `aw:` prefix, the `.aw/question.md` / `.aw/answer.md` contract. `improvements.md`: mark the primitive as built. `issues.md`: remove "ask in session" assumptions if any.
+- `README.md`: lifecycle diagram line, `feedbackAuthors` config, the `aw:` prefix, the `.aw/question.md` / `.aw/answer.md` contract.
 - Tests: `status.test.ts` / `state.test.ts` for `question`.
 
 ## Risks
 
 - `gh issue view --json comments` cost grows with comment count; only paid for tickets with an open question.
-- On GitHub the sandboxed agent still has `gh`, so it could post its own "answer". The allowlist stops that only if the agent's token belongs to a different login than the operator; otherwise it is a prompt rule, as with phases (see issues.md, "Phase side effects").
+- On GitHub the sandboxed agent still has `gh`, so it could post its own "answer". The allowlist stops that only if the agent's token belongs to a different login than the operator; otherwise it is a prompt rule, as with phases.

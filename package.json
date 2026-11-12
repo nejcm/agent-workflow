@@ -1,6 +1,8 @@
 {
   "name": "aw",
   "private": true,
+  "description": "Start sandboxed Claude Code or Codex sessions for ready GitHub issues and Linear tickets",
+  "license": "MIT",
   "scripts": {
     "setup": "scripts/setup.sh",
     "start": "scripts/run.sh",

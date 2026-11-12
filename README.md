@@ -55,7 +55,7 @@ Phases are history, not a gate: the same session works the ticket to the PR, and
 
 Every comment `aw` posts starts with `aw:`. A blocked agent writes `.aw/question.md` (Markdown, ≤ 8000 chars after trimming, no control characters but newline and tab, read like `phases.json`) and stops. While the ticket is in progress with no PR and its window open, each poll `aw` hashes the file and, when it changed (or the same question is still there after its answer was recorded), records `{hash, postedAt}` in `<ID>.question` before commenting `aw: question from agent:` and the text (a crash or failed post loses the question, never doubles it; an invalid file is logged and not posted).
 
-The answer is the first comment created after `postedAt` whose author is in the repo's `feedbackAuthors` (GitHub login or Linear user email, case-insensitive) and whose body does not start with `aw:` (aw posts with your credentials). Later comments and edits are ignored. Empty `feedbackAuthors` (default): questions are posted, answers never delivered. Once the session is `idle` (see [Live state](#live-state); `waiting` may be a permission prompt) and its tmux window exists, `aw` records the answer's id in the sidecar, writes `.aw/answer.md` as `<answer from="<author>" ticket="<ID>">…</answer>` (truncated to 8000 chars), pastes `Your question was answered by the operator: read .aw/answer.md` plus Enter into the window's first pane (skipped while in copy mode), and removes `.aw/question.md` if unchanged. Answer text never goes through keystrokes. Each answer is pasted at most once; a new question starts a new round. `aw status` / `aw watch` show `question` while a posted question is open, the session is `idle` and there is no PR. Trade-offs: [issues.md](issues.md), design: [docs/agent-questions.md](docs/agent-questions.md).
+The answer is the first comment created after `postedAt` whose author is in the repo's `feedbackAuthors` (GitHub login or Linear user email, case-insensitive) and whose body does not start with `aw:` (aw posts with your credentials). Later comments and edits are ignored. Empty `feedbackAuthors` (default): questions are posted, answers never delivered. Once the session is `idle` (see [Live state](#live-state); `waiting` may be a permission prompt) and its tmux window exists, `aw` records the answer's id in the sidecar, writes `.aw/answer.md` as `<answer from="<author>" ticket="<ID>">…</answer>` (truncated to 8000 chars), pastes `Your question was answered by the operator: read .aw/answer.md` plus Enter into the window's first pane (skipped while in copy mode), and removes `.aw/question.md` if unchanged. Answer text never goes through keystrokes. Each answer is pasted at most once; a new question starts a new round. `aw status` / `aw watch` show `question` while a posted question is open, the session is `idle` and there is no PR. Design: [docs/agent-questions.md](docs/agent-questions.md).
 
 ### PR feedback
 
@@ -86,7 +86,7 @@ The same are available as `bun run setup owner/repo`, `bun run start`, `bun run 
 
 ### 1. Requirements
 
-On `PATH`: `bun`, `git`, `gh` (logged in: `gh auth status`), `tmux`, and `claude` and/or `codex`. The default prompt needs the `agent-orchestration` skill installed globally in `~/.claude/skills` (`scripts/setup.sh` links that dir into both agent config dirs). For sandboxed repos, install nono:
+Linux. On `PATH`: `bun`, `git`, `gh` (logged in: `gh auth status`), `tmux`, and `claude` and/or `codex`. The default prompt needs the `agent-orchestration` skill installed globally in `~/.claude/skills` (`scripts/setup.sh` links that dir into both agent config dirs). For sandboxed repos, install nono:
 
 ```bash
 curl -fsSL https://nono.sh/install.sh | sh
@@ -180,7 +180,7 @@ Foreground:
 bun aw.ts run
 ```
 
-Or as a systemd user service (edit `WorkingDirectory` and `PATH` in the unit first; the unit's `WorkingDirectory` holds the `.env`):
+Or as a systemd user service (edit `WorkingDirectory` (it points at `~/Work/agent-workflow`) and `PATH` in the unit first; the unit's `WorkingDirectory` holds the `.env`):
 
 ```bash
 cp systemd/aw.service ~/.config/systemd/user/ && systemctl --user enable --now aw
@@ -306,6 +306,10 @@ Prove the sandbox boundaries on a throwaway repo first.
 - [ ] A Linear ticket for a repo not in `repos` gets one comment and no worktree, also after restarting `aw`.
 - [ ] Issue → PR → `in-review`; closing the issue removes the window and the worktree.
 
-## Known issues
+## Status
 
-Bugs, gaps and unverified assumptions are tracked in [issues.md](issues.md); planned work is in [improvements.md](improvements.md).
+Early and used by one person. Linux only (the pinned `.aw` reader uses `/proc`); macOS is untested. Auto-merge and the sandbox are guard rails, not guarantees: read [Auto-merge](#auto-merge) before enabling it, and protect `baseBranch` on GitHub. Bugs and ideas: open an issue.
+
+## License
+
+[MIT](LICENSE)

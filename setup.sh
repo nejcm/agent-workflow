@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: ./setup.sh [owner/repo ...]   Idempotent; never overwrites real files.
+# Usage: ./setup.sh [owner/repo ...]   Idempotent; never overwrites real files. Creates labels for the repos given.
 set -euo pipefail
 
 link() {
@@ -31,27 +31,30 @@ else
 fi
 
 host=$(hostname -s)
-cat <<MSG
+export PATH="$HOME/.local/bin:$PATH"
 
-Next, by hand:
+if ! command -v nono >/dev/null; then
+  echo "install nono -> ~/.local/bin"
+  curl -fsSL https://nono.sh/install.sh | NONO_INSTALL_DIR="$HOME/.local/bin" sh
+fi
 
-1. Log in the agent-owned configs (separate from your own ~/.claude and ~/.codex):
-     CLAUDE_CONFIG_DIR=~/.claude-aw claude          # then /login
-       or: CLAUDE_CONFIG_DIR=~/.claude-aw claude setup-token
-     CODEX_HOME=~/.codex-aw codex login
+for c in bun git gh tmux; do command -v "$c" >/dev/null || { echo "MISSING: $c"; exit 1; }; done
+gh auth status >/dev/null 2>&1 || { echo "MISSING: gh login (gh auth login)"; exit 1; }
 
-2. Pre-trust ~/agent-ws for Remote Control (accept the trust dialog once):
-     cd ~/agent-ws && CLAUDE_CONFIG_DIR=~/.claude-aw claude
+for f in nono/aw-claude.json nono/aw-codex.json; do nono profile validate "$f" >/dev/null && echo "ok   $f"; done
 
-3. GitHub labels (per repo):
-MSG
-for repo in "${@:-<owner/repo>}"; do
+[ -e .env ] || { cp .env.example .env && echo "write .env (set LINEAR_API_KEY if you use Linear)"; }
+[ -e aw.json ] || { cp aw.example.json aw.json && sed -i "s/\"host\": \"laptop\"/\"host\": \"$host\"/" aw.json && echo "write aw.json (edit the lanes)"; }
+
+for repo in "$@"; do
   for l in agent in-progress in-review "host:$host"; do
-    echo "     gh label create '$l' --repo $repo --force"
+    gh label create "$l" --repo "$repo" --force >/dev/null && echo "label $repo $l"
   done
 done
-cat <<MSG
 
-4. Linear: create labels agent and host:$host; export LINEAR_API_KEY.
-5. cp aw.example.json aw.json, edit, then: bun aw.ts once --dry-run
-MSG
+todo=0
+CLAUDE_CONFIG_DIR=~/.claude-aw claude auth status 2>/dev/null | grep -q '"loggedIn": true' || { todo=1; echo "TODO: CLAUDE_CONFIG_DIR=~/.claude-aw claude   # then /login"; }
+CODEX_HOME=~/.codex-aw codex login status >/dev/null 2>&1 || { todo=1; echo "TODO: CODEX_HOME=~/.codex-aw codex login"; }
+echo "Linear lanes: create labels agent and host:$host in the team."
+[ "$todo" = 0 ] && echo "Setup done. Next: ./run.sh"
+exit 0

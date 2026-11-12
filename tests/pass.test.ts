@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { validRepo } from "../src/config";
 import { canonCache, github } from "../src/github";
-import { adminDir, launcher, render } from "../src/launcher";
+import { adminDir, launcher, render, trustClaude } from "../src/launcher";
 import { pass } from "../src/pass";
 import type { Io, Ticket, Tracker } from "../src/types";
 import { GIT } from "../src/util";
@@ -63,6 +63,55 @@ test("starts ready tickets up to maxConcurrent", async () => {
   const prompt = readFileSync(join(root, "acme/web/gh-1.prompt.md"), "utf8");
   expect(prompt).toContain("body; rm -rf ~ $(whoami)");
   expect(prompt).toContain("git push origin agent/gh-1");
+  const trust = JSON.parse(readFileSync(join(root, ".claude-aw/.claude.json"), "utf8"));
+  expect(trust.projects).toEqual({ [realpathSync(join(root, "src-web"))]: { hasTrustDialogAccepted: true } });
+});
+
+test("trustClaude adds one key atomically, keeps the rest, and refuses a symlink", () => {
+  const file = join(root, ".claude-aw/.claude.json");
+  mkdirSync(join(root, ".claude-aw"));
+  writeFileSync(file, JSON.stringify({ oauthAccount: { a: 1 }, projects: { "/r": { allowedTools: ["x"] }, "/o": { hasTrustDialogAccepted: true } } }), { mode: 0o600 });
+  const { io, logs } = fakeIo();
+  trustClaude({ ...io, dry: true }, "/r");
+  expect(JSON.parse(readFileSync(file, "utf8")).projects["/r"]).toEqual({ allowedTools: ["x"] });
+  trustClaude(io, "/r");
+  trustClaude(io, "/o");
+  expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ oauthAccount: { a: 1 }, projects: { "/r": { allowedTools: ["x"], hasTrustDialogAccepted: true }, "/o": { hasTrustDialogAccepted: true } } });
+  expect(statSync(file).mode & 0o777).toBe(0o600);
+  expect(logs).toEqual([`dry: trust /r in ${file}`, `trust /r in ${file}`]);
+  expect(readdirSync(join(root, ".claude-aw"))).toEqual([".claude.json"]);
+  rmSync(file);
+  symlinkSync(join(root, "elsewhere.json"), file);
+  writeFileSync(join(root, "elsewhere.json"), "{}");
+  expect(() => trustClaude(io, "/r")).toThrow();
+  expect(readFileSync(join(root, "elsewhere.json"), "utf8")).toBe("{}");
+});
+
+test("trustClaude waits for Claude's lock, then skips without touching it; a FIFO fails instead of blocking", () => {
+  const file = join(root, ".claude-aw/.claude.json");
+  mkdirSync(`${file}.lock`, { recursive: true });
+  writeFileSync(file, "{}");
+  const { io, logs } = fakeIo();
+  trustClaude(io, "/r", 100);
+  expect(logs).toEqual([`skip trust /r: ${file}.lock is held`]);
+  expect(readFileSync(file, "utf8")).toBe("{}");
+  expect(existsSync(`${file}.lock`)).toBe(true);
+  rmSync(`${file}.lock`, { recursive: true });
+  rmSync(file);
+  expect(Bun.spawnSync(["mkfifo", file]).exitCode).toBe(0);
+  for (const dry of [true, false]) expect(() => trustClaude({ ...io, dry }, "/r")).toThrow("is not a regular file");
+  expect(existsSync(`${file}.lock`)).toBe(false);
+});
+
+test("trustClaude publishes nothing and leaves the lock once held past maxHoldMs", () => {
+  const file = join(root, ".claude-aw/.claude.json");
+  mkdirSync(join(root, ".claude-aw"));
+  writeFileSync(file, "{}");
+  const { io, logs } = fakeIo();
+  trustClaude(io, "/r", 100, -1);
+  expect(logs).toEqual([`trust /r in ${file}`, `skip trust /r: lost ${file}.lock`]);
+  expect(readFileSync(file, "utf8")).toBe("{}");
+  expect(readdirSync(join(root, ".claude-aw")).sort()).toEqual([".claude.json", ".claude.json.lock"]);
 });
 
 test("reuses existing worktree dir and existing branch", async () => {

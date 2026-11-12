@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { parseConfig } from "./src/config";
 import { dashboard, watch } from "./src/dash";
@@ -67,7 +68,7 @@ async function main(argv: string[]) {
     console.error(`${path}: ${(e as Error).message}`);
     process.exit(1);
   }
-  const io: Io = { run: spawnRun, fetch, dry: argv.includes("--dry-run"), log: (m) => console.log(`${new Date().toISOString()} ${m}`) };
+  const io: Io = { run: spawnRun, fetch, dry: argv.includes("--dry-run"), log: (m) => console.log(`${new Date().toISOString()} ${m}`), home: homedir() };
   if (cmd === "status") return console.log(argv.includes("--json") ? JSON.stringify(await snapshot(cfg, io), null, 2) : await status(cfg, io));
   if (cmd === "watch")
     return watch({

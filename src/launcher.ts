@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, constants as C, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { AGENTS } from "./agents";
 import { repoDir } from "./config";
@@ -63,6 +63,74 @@ async function ensureClone(cfg: Config, io: Io, r: Repo) {
   if (!io.dry) renameSync(tmp, r.path);
 }
 
+// Claude keys folder trust on the clone root, which covers its worktrees; an untrusted one stalls the session on the dialog.
+export function trustClaude(io: Io, root: string, waitMs = 2000, maxHoldMs = 5000) {
+  const file = join(io.home, ".claude-aw", ".claude.json");
+  const lock = `${file}.lock`;
+  let ino = 0;
+  let dev = 0;
+  let t0 = 0;
+  // Claude takes a lock older than 10 s; never publish or unlock once ours may have been taken over.
+  const held = () => {
+    const st = lstatSync(lock, { throwIfNoEntry: false });
+    return !!st && st.ino === ino && st.dev === dev && performance.now() - t0 < maxHoldMs;
+  };
+  if (!io.dry) {
+    mkdirSync(dirname(file), { recursive: true });
+    // Claude's own config lock (proper-lockfile: mkdir, stale after 10 s by mtime); we hold it for milliseconds.
+    for (const end = Date.now() + waitMs; ; Bun.sleepSync(50)) {
+      try {
+        mkdirSync(lock);
+        ({ ino, dev } = lstatSync(lock));
+        t0 = performance.now();
+        break;
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+        if (Date.now() >= end) return io.log(`skip trust ${root}: ${lock} is held`);
+      }
+    }
+  }
+  try {
+    let o: any = {};
+    let mode = 0o600;
+    try {
+      const fd = openSync(file, C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK);
+      try {
+        const st = fstatSync(fd);
+        if (!st.isFile()) throw new Error(`${file} is not a regular file`);
+        mode = st.mode & 0o777;
+        o = JSON.parse(readFileSync(fd, "utf8"));
+      } finally {
+        closeSync(fd);
+      }
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+    }
+    if (!o || typeof o !== "object" || Array.isArray(o)) throw new Error(`${file} is not a JSON object`);
+    if (o.projects?.[root]?.hasTrustDialogAccepted === true) return;
+    io.log(`${io.dry ? "dry: " : ""}trust ${root} in ${file}`);
+    if (io.dry) return;
+    o.projects = { ...o.projects, [root]: { ...o.projects?.[root], hasTrustDialogAccepted: true } };
+    const tmp = `${file}.aw-${process.pid}.tmp`;
+    rmSync(tmp, { force: true });
+    try {
+      const fd = openSync(tmp, C.O_WRONLY | C.O_CREAT | C.O_EXCL | C.O_NOFOLLOW, mode);
+      try {
+        writeFileSync(fd, JSON.stringify(o, null, 2));
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+      if (!held()) return io.log(`skip trust ${root}: lost ${lock}`);
+      renameSync(tmp, file);
+    } finally {
+      rmSync(tmp, { force: true });
+    }
+  } finally {
+    if (!io.dry && held()) rmSync(lock, { recursive: true, force: true });
+  }
+}
+
 export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Tracker, io: Io, awDir: string) {
   const dir = repoDir(cfg, r.key);
   const wt = join(dir, t.id);
@@ -70,6 +138,7 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   const promptFile = join(dir, `${t.id}.prompt.md`);
   const script = join(dir, `${t.id}.sh`);
   await ensureClone(cfg, io, r);
+  if (r.agent === "claude") trustClaude(io, existsSync(r.path) ? realpathSync(r.path) : r.path);
   put(io, join(dir, `${t.id}.source`), s.name);
   remove(io, join(dir, `${t.id}.ended`));
   await write(io, [...GIT, "-C", r.path, "fetch", "origin", r.baseBranch]);

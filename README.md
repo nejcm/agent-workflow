@@ -80,7 +80,7 @@ scripts/setup.sh owner/repo   # config dirs, nono, labels, .env and aw.json from
 scripts/run.sh                # preflight (dry run), then poll in the foreground
 ```
 
-The same are available as `bun run setup owner/repo`, `bun run start`, `bun run once`, `bun run service`, `bun run status`, `bun run watch`, `bun run dry`, `bun run test` and `bun run typecheck` (`tsc --noEmit`; run `bun install` once for `@opentui/core`, the `watch` dashboard's only runtime dependency, and the dev-only `typescript` and `bun-types`; if it cannot be loaded `watch` falls back to plain output, and nothing else needs it). Edit `repos` and `sources` in `aw.json` before running. `scripts/run.sh once` does a single pass; `scripts/run.sh service` installs and starts the systemd user unit. The agent logins and the workspace trust dialog below are interactive; `scripts/setup.sh` prints what is still missing.
+The same are available as `bun run setup owner/repo`, `bun run start`, `bun run once`, `bun run service`, `bun run status`, `bun run watch`, `bun run dry`, `bun run test` and `bun run typecheck` (`tsc --noEmit`; run `bun install` once for `@opentui/core`, the `watch` dashboard's only runtime dependency, and the dev-only `typescript` and `bun-types`; if it cannot be loaded `watch` falls back to plain output, and nothing else needs it). Edit `repos` and `sources` in `aw.json` before running. `scripts/run.sh once` does a single pass; `scripts/run.sh service` installs and starts the systemd user unit. The agent logins below are interactive; `scripts/setup.sh` prints what is still missing.
 
 ## Setup
 
@@ -110,11 +110,7 @@ Run `/login` inside, then exit.
 CODEX_HOME=~/.codex-aw codex login
 ```
 
-Trust the workspace once, so Remote Control can start there (accept the dialog, then exit):
-
-```bash
-cd ~/agent-ws && CLAUDE_CONFIG_DIR=~/.claude-aw claude
-```
+No trust step: Claude keys folder trust on the git repository root, and a worktree uses its main clone's ([docs](https://code.claude.com/docs/en/permissions#project-allow-rules-and-workspace-trust)), so trusting `~/agent-ws` or your home does not cover the clones. Before starting a Claude session `aw` sets `projects["<clone>"].hasTrustDialogAccepted` in `~/.claude-aw/.claude.json` (the documented way to trust a folder by hand) if it is missing, so the first ticket on a repo does not stall on the dialog. It holds Claude's own lock on that file (`.claude.json.lock`) while it rewrites the file atomically with only that key changed, and refuses anything there but a regular file (that fails the start). If Claude holds the lock for more than 2 s, `aw` logs `skip trust` and starts without trusting the clone, and that session may stall on the dialog.
 
 Check the sandbox profiles parse:
 

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type PrFacts, isCritical, mergeDecision, parseAssessment } from "../src/merge";
 import { pass } from "../src/pass";
@@ -116,6 +116,25 @@ test("auto-merge pass: merges only when enabled, pinned to the head; not-merged 
 
   facts = { ...facts, state: "MERGED" };
   expect((await run("intelligent")).calls).toEqual(["done gh-1"]);
+});
+
+test("auto-merge pass: a held marker for an older head is cleared while the new head waits", async () => {
+  const facts = { ...prFacts({ statusCheckRollup: [{ status: "IN_PROGRESS" }] }), number: 7, url: "https://github.com/acme/web/pull/7", headRefOid: "b".repeat(40) };
+  const respond = (a: string[]) => (a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"OPEN"}]' } : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(facts) } : undefined);
+  const c = config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "intelligent" }] });
+  const marker = join(root, "acme/web/gh-1.merge");
+  worktree("gh-1");
+  for (const [sha, kept] of [["a".repeat(40), false], ["b".repeat(40), true]] as const) {
+    writeFileSync(marker, sha);
+    const { tr, calls } = fakeTracker({ inReview: [ticket(1)] });
+    await pass(c, fakeIo(respond).io, () => tr, "/aw");
+    expect([existsSync(marker), calls]).toEqual([kept, []]);
+  }
+  facts.state = "MERGED";
+  const { tr, calls } = fakeTracker({ inReview: [ticket(1)] });
+  writeFileSync(marker, "a".repeat(40));
+  await pass(c, fakeIo(respond).io, () => tr, "/aw");
+  expect([existsSync(marker), calls]).toEqual([false, ["done gh-1"]]);
 });
 
 test("auto-merge pass: medium needs the agent's merge.json; a symlinked one is ignored", async () => {

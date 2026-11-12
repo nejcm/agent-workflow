@@ -104,8 +104,11 @@ export async function autoMerge(cfg: Config, r: Repo, t: Ticket, tr: Tracker, io
     return !!name && sameRepo(name, r.key);
   };
   const pr = await view();
-  if (pr.state === "MERGED" && !pr.isCrossRepository && pr.baseRefName === r.baseBranch && (await ours())) return tr.done(t);
   const dir = repoDir(cfg, r.key);
+  const f = join(dir, `${t.id}.merge`);
+  const held = existsSync(f) && readFileSync(f, "utf8") === pr.headRefOid;
+  if (!held) remove(io, f);
+  if (pr.state === "MERGED" && !pr.isCrossRepository && pr.baseRefName === r.baseBranch && (await ours())) return tr.done(t);
   let a: Assessment | undefined;
   try {
     const raw = readAw(join(dir, t.id), "merge", MAX_MERGE_BYTES);
@@ -126,8 +129,7 @@ export async function autoMerge(cfg: Config, r: Repo, t: Ticket, tr: Tracker, io
     await tr.comment(t, `auto-merged ${pr.url}: ${d.reason}`);
     return tr.done(t);
   }
-  const f = join(dir, `${t.id}.merge`);
-  if (existsSync(f) && readFileSync(f, "utf8") === pr.headRefOid) return;
+  if (held) return;
   put(io, f, pr.headRefOid);
   try {
     await tr.comment(t, `not auto-merged: ${d.reason}`);

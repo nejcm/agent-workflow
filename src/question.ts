@@ -38,6 +38,16 @@ export function readQuestionSidecar(file: string): QuestionSidecar | undefined {
 const readQuestion = (wt: string) => readAw(wt, "question.md", MAX_QUESTION_BYTES)?.replace(/\r\n?/g, "\n").trim();
 const hashOf = (text: string) => createHash("sha256").update(text).digest("hex");
 
+/** A posted question still waiting for its answer; an unreadable sidecar counts as none. */
+export function openQuestion(dir: string, id: string) {
+  try {
+    const q = readQuestionSidecar(join(dir, `${id}.question`));
+    return !!q && q.answerId === undefined;
+  } catch {
+    return false;
+  }
+}
+
 // Sidecar first: a crash or failed post loses the question rather than posting it twice.
 export async function syncQuestion(t: Ticket, tr: Tracker, io: Io, dir: string, wt: string) {
   const text = readQuestion(wt);

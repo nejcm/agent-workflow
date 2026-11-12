@@ -22,6 +22,10 @@ Bugs, gaps, accepted trade-offs and unverified assumptions in the current code. 
 - **List limit with `defaultHost`:** each poll fetches at most 100 tickets per query (per repo on GitHub). With `defaultHost` the host filter is applied client-side (no query can express "no `host:` label"), so more than 100 ready tickets for other hosts can hide unlabelled ones.
 - **One `aw` per tracker and workspace:** a single `aw run` polls sequentially, and the checks that keep a ticket to one repo and one session are not atomic across processes. Two `aw` instances on the same tracker or `workspaceRoot` are unsupported; use `host:` labels to split work between machines.
 - **Codex under nono runs with `--no-daemon`** (required on Linux), so sandboxed Codex sessions show in the app history but can't be live-steered; with `sandbox: "none"` they can.
+- **Questions, self-answers:** on GitHub the sandboxed agent shares the operator's `gh` login, so it could post an "answer" from an allowlisted login; only a comment starting with `aw:` is excluded. It is a prompt rule unless the agent's token is a different account.
+- **Questions, clock skew:** `postedAt` is the local clock, `createdAt` the tracker's. A local clock behind the tracker can make an answer picked but not yet delivered (session busy) count for a new question too. A delivered answer is safe: `postedAt` never moves back, so every later round starts at or after its `createdAt`.
+- **Questions, clock ahead:** with the local clock N seconds ahead of the tracker, an answer posted within N seconds of the question is missed (Linear also filters it out server-side); reply again.
+- **Questions, Linear window:** `comments(filter: createdAt > postedAt, last: 100)`; more than 100 non-answer comments after a question would hide the answer.
 - **No review feedback:** PR review comments are not fed back into the session yet (see improvements.md, item 2).
 
 ## Accepted trade-offs
@@ -29,6 +33,13 @@ Bugs, gaps, accepted trade-offs and unverified assumptions in the current code. 
 - A row's PR appears only after the next poll finds it (`<ID>.pr`), not the moment the agent opens it.
 - With `autoMerge: off`, an In Review ticket without a PR costs one `gh pr list` per poll until it has one.
 - `aw tail` and `status` read only the last 256 KiB of a transcript.
+- An answer is pasted at most once: a crash or failed write or `send-keys` after its id is recorded loses the paste. The question file is still there, so the next poll posts it again as a new round and the previous answer does not count for it.
+- A crash between the paste and removing `.aw/question.md` reposts the question once, although the agent got the answer.
+- The live state is read once per poll (Claude: one `claude agents --json`), so the session may have left `idle` by the time the line is pasted. A pane in copy mode is skipped until the next poll.
+- The agent's pane is taken to be the window's lowest-index pane, so after `split-window -b` or `swap-pane` in that window the line can land in another pane. The agent then never sees it; the next poll reposts the question as a new round.
+- An open question costs one comments call (`gh issue view --json comments` / Linear GraphQL) per poll until it is answered; none when `feedbackAuthors` is empty.
+- A modal at idle takes the answer's keys: An idle session can still show a dialog (Codex's "switch to a cheaper model" rate-limit prompt was seen live); the pasted line and `Enter` then go to it, e.g. selecting its first option. The question is lost to the at-most-once paste and is reposted.
+- Codex delivery needs aw's state hooks: Without them in `~/.codex-aw/config.toml` (`scripts/setup.sh`) a Codex session never reads as `idle`, so answers are never delivered.
 
 ## Unverified
 
@@ -39,6 +50,7 @@ Never exercised end-to-end: the nono profiles (run the README's first-run checkl
 - `gh repo clone` into a nested path on first use; whether trusting `~/agent-ws` covers worktrees below it; that `gh repo view --json nameWithOwner` reports the new name for a renamed or transferred repo.
 - Phase sub-tickets: `gh issue create --parent`, `gh api …/sub_issues`, Linear `children`, Linear `issueCreate` with `parentId`, and that Linear adds no default labels to child issues.
 - Codex picking up skills from `~/.codex-aw/skills`.
+- Questions: that `gh issue view --json comments` returns every comment; Linear's `last` ordering on `comments`. (Checked live: the bracketed paste plus `Enter` submits in Claude Code and Codex; plain `send-keys -l` plus an immediate `Enter` does not submit in Codex.)
 - Auto-merge: `statusCheckRollup` item shapes (CheckRun `status`/`conclusion`, StatusContext `state`), `mergeable` turning `UNKNOWN` → `MERGEABLE`, and `gh issue close` on an issue `Closes #n` already closed.
 
 ## Tests

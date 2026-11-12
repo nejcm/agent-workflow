@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { State } from "../src/state";
 import { dur, rows, table } from "../src/status";
 import { claudeFile, config, phase, root, useTempRoot, worktree, writePhases } from "./helpers";
 
@@ -72,4 +73,18 @@ test("status skips a FIFO transcript and sanitizes table cells", () => {
   expect(r7!.transcript).toBe(s7);
   const t = table([{ ...r7!, repo: "\x1b]52;c;ZXZpbA==\x07acme/web" }]);
   expect(t).not.toMatch(/[\x00-\x09\x0b-\x1f]/);
+});
+
+test("an open question shows over idle only, and not once the ticket has a PR", () => {
+  const states: Record<string, State> = { "PER-1": "idle", "PER-2": "unknown", "PER-3": "working", "PER-4": "waiting", "PER-5": "idle", "PER-6": "idle", "PER-7": "idle", "PER-8": "idle", "PER-9": "idle" };
+  for (const id of Object.keys(states)) worktree(id);
+  for (const id of ["PER-1", "PER-2", "PER-3", "PER-4", "PER-7", "PER-8", "PER-9"]) writeFileSync(join(dir(), `${id}.question`), JSON.stringify({ hash: "h", postedAt: 1 }));
+  writeFileSync(join(dir(), "PER-5.question"), JSON.stringify({ hash: "h", postedAt: 1, answerId: "c1" }));
+  writeFileSync(join(dir(), "PER-6.question"), "{broken");
+  at(join(dir(), "PER-7.ended"), T);
+  writeFileSync(join(dir(), "PER-8.pr"), "https://github.com/acme/web/pull/8");
+  const feed = (wt: string) => ({ state: states[wt.slice(wt.lastIndexOf("/") + 1)]!, since: null, waitingFor: null });
+  const rs = rows(config(), wins(...Object.keys(states).filter((id) => id !== "PER-9")), root, T * 1000, { claude: feed });
+  expect(rs.map((r) => `${r.id}:${r.state}`)).toEqual(["PER-1:question", "PER-2:unknown", "PER-3:working", "PER-4:waiting", "PER-5:idle", "PER-6:idle", "PER-7:ended", "PER-8:idle", "PER-9:ended"]);
+  expect(table(rs).split("\n").at(-1)).toMatch(/^PER-9\s+acme\/web\s+claude\s+orphan\s+orphan\s/);
 });

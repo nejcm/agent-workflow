@@ -1,4 +1,4 @@
-export type State = "working" | "waiting" | "idle" | "ended" | "unknown";
+export type State = "working" | "waiting" | "idle" | "question" | "ended" | "unknown";
 export interface Live {
   state: State;
   /** ms epoch the state was recorded; null when the feed does not say. */

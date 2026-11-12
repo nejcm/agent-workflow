@@ -25,20 +25,21 @@ test("running, ended and orphan rows with runtime, idle, phases and PR", () => {
   const prLink = JSON.stringify({ type: "pr-link", sessionId: "s", prNumber: 4, prUrl: "https://github.com/acme/web/pull/4", prRepository: "acme/web", timestamp: "2026-11-12T05:43:59.187Z" });
   writeFileSync(join(cd, "s.jsonl"), `{"type":"user","cwd":"${join(dir(), "PER-1")}"}\n${prLink}\n{"type":"assistant"}\n`);
   utimesSync(join(cd, "s.jsonl"), T - 30, T - 30);
-  writePhases("PER-1", [phase("a", "done"), phase("b", "in-progress"), phase("c", "todo")]);
+  writePhases("PER-1", [phase("a", "done", { title: "Fix ‮ bidi" }), phase("b", "in-progress"), phase("c", "todo")]);
 
   const rs = rows(config(), wins("PER-1", "PER-2"), root, T * 1000);
-  expect(rs.map((r) => [r.id, r.state])).toEqual([["PER-1", "running"], ["PER-2", "ended"], ["PER-3", "orphan"]]);
+  expect(rs.map((r) => [r.id, r.session, r.state])).toEqual([["PER-1", "running", "unknown"], ["PER-2", "ended", "ended"], ["PER-3", "orphan", "ended"]]);
   const [a, b, c] = rs;
-  expect(a).toMatchObject({ repo: "acme/web", agent: "claude", runtimeMs: 3_600_000, idleMs: 30_000, phases: { done: 1, total: 3 }, pr: "https://github.com/acme/web/pull/4", merge: null });
-  expect(b).toMatchObject({ runtimeMs: 540_000, idleMs: null, phases: null, pr: null, merge: "held", transcript: null });
+  expect(a).toMatchObject({ repo: "acme/web", agent: "claude", startedAt: (T - 3600) * 1000, runtimeMs: 3_600_000, idleMs: 30_000, phases: { done: 1, total: 3, items: [{ key: "a", title: "Fix bidi", status: "done" }, { key: "b", title: "Do b", status: "in-progress" }, { key: "c", title: "Do c", status: "todo" }] }, pr: "https://github.com/acme/web/pull/4", merge: null, window: "@0" });
+  expect(b).toMatchObject({ runtimeMs: 540_000, idleMs: null, phases: null, pr: null, merge: "held", transcript: null, window: null });
   expect(c!.runtimeMs).toBeGreaterThanOrEqual(0);
   expect(JSON.parse(JSON.stringify(rs))).toEqual(rs);
 
   const t = table(rs).split("\n");
-  expect(t[0]).toMatch(/^ID\s+REPO\s+AGENT\s+STATE\s+RUNTIME\s+IDLE\s+PHASES\s+PR$/);
-  expect(t[1]).toMatch(/^PER-1\s+acme\/web\s+claude\s+running\s+1h00m\s+30s\s+1\/3\s+#4$/);
-  expect(t[2]).toMatch(/ended\s+9m\s+-\s+-\s+held$/);
+  expect(t[0]).toMatch(/^ID\s+REPO\s+AGENT\s+SESSION\s+STATE\s+RUNTIME\s+IDLE\s+PHASES\s+PR$/);
+  expect(t[1]).toMatch(/^PER-1\s+acme\/web\s+claude\s+running\s+unknown\s+1h00m\s+30s\s+1\/3\s+#4$/);
+  expect(t[2]).toMatch(/ended\s+ended\s+9m\s+-\s+-\s+held$/);
+  expect(t[3]).toMatch(/^PER-3\s+acme\/web\s+claude\s+orphan\s+orphan\s/);
   expect(table([])).toBe("no worktrees");
 });
 
@@ -50,7 +51,7 @@ test("phases fall back to the sidecar; an invalid agent file shows none; a forge
   mkdirSync(cd, { recursive: true });
   writeFileSync(join(cd, "s.jsonl"), JSON.stringify({ type: "pr-link", cwd: join(dir(), "PER-5"), prUrl: "https://evil.example/\x1b[2J" }));
   const [r4, r5] = rows(config(), new Map(), root, T * 1000);
-  expect(r4!.phases).toEqual({ done: 1, total: 2 });
+  expect(r4!.phases).toEqual({ done: 1, total: 2, items: [{ key: "a", title: "a", status: "done" }, { key: "b", title: "b", status: "in-progress" }] });
   expect(r5!.phases).toBeNull();
   expect(r5!.pr).toBeNull();
 });

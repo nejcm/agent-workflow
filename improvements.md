@@ -101,7 +101,7 @@ Injection: when the state is `idle`, run `tmux load-buffer <ID>.inject` → `pas
 | Headless `stream-json` / Agent SDK runs | Sortie, Cyrus | Loses visibility in claude.ai/code and the ChatGPT app, which is the reason aw exists. |
 | Token / cost accounting | Sortie, Symphony | Not readable from interactive sessions; `maxAttempts` + `maxRounds` bound spend instead. |
 | Auto-merge | Optio, Sortie | Merging stays a human decision. |
-| Dashboard, k8s, warm pools, snapshots, prebuilt images | Optio, Open-Inspect, Ramp | Solves cloud cold-start; a local worktree is instant. `tmux attach` + the apps are the dashboard. |
+| Web dashboard, k8s, warm pools, snapshots, prebuilt images | Optio, Open-Inspect, Ramp | Solves cloud cold-start; a local worktree is instant. `aw watch` (terminal), `tmux attach` and the apps are the dashboard. |
 | Orchestrator agent splitting work, parallel child sessions, multiplayer | Orchestrator.inc, Open-Inspect | Coordination state. Split at ticket level. |
 | Claude channels, Codex app-server websocket for injection | Claude Code, Codex | Channels: research preview, needs `@modelcontextprotocol/sdk`, and shows a dev-flag dialog on every start. app-server ws: experimental. Revisit when stable; they would replace tmux paste. |
 | Hot reload, template engine, plugins, Prometheus, SSH worker pool | Sortie, Symphony | Restart is instant; `{{x}}` replacement is enough. |

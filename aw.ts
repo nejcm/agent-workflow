@@ -2,9 +2,8 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { parseConfig } from "./src/config";
-import { windows } from "./src/launcher";
 import { pass } from "./src/pass";
-import { rows, table } from "./src/status";
+import { snapshot, table } from "./src/status";
 import { tail } from "./src/tail";
 import type { Config, Io, Run } from "./src/types";
 
@@ -14,7 +13,7 @@ async function status(cfg: Config, io: Io) {
     ...cfg.sources.map((s) => `source ${s.name}  ${s.tracker === "linear" ? `linear ${s.team}` : "github (all repos)"}`),
     ...Object.values(cfg.repos).map((r) => `${r.key}  ${r.agent}/${r.sandbox}  max ${r.maxConcurrent ?? "-"}  merge ${r.autoMerge}  ${r.path}`),
     "",
-    table(rows(cfg, await windows(cfg, io))),
+    table(await snapshot(cfg, io)),
   ].join("\n");
 }
 
@@ -68,7 +67,7 @@ async function main(argv: string[]) {
     process.exit(1);
   }
   const io: Io = { run: spawnRun, fetch, dry: argv.includes("--dry-run"), log: (m) => console.log(`${new Date().toISOString()} ${m}`) };
-  if (cmd === "status") return console.log(argv.includes("--json") ? JSON.stringify(rows(cfg, await windows(cfg, io)), null, 2) : await status(cfg, io));
+  if (cmd === "status") return console.log(argv.includes("--json") ? JSON.stringify(await snapshot(cfg, io), null, 2) : await status(cfg, io));
   if (cmd === "watch")
     for (;;) {
       process.stdout.write(`\x1b[H\x1b[2J${new Date().toLocaleTimeString()}  every ${interval}s, Ctrl-C to stop\n\n${await status(cfg, io)}\n`);

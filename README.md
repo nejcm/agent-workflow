@@ -181,9 +181,16 @@ cp systemd/aw.service ~/.config/systemd/user/ && systemctl --user enable --now a
 Claude Code and Codex can't import a session while it runs, so observe it instead of resuming it:
 
 - `tmux attach -t aw`: the live terminals, one window per ticket (`owner/name/ID`). Detach with `Ctrl-b d`; typing there steers the agent.
-- `bun aw.ts status [--json]`: per worktree its agent, state (`running`: tmux window and no `<ID>.ended`; `ended`; `orphan`: neither), runtime (since `<ID>.sh` was written), idle (since the transcript was last written), phases `done/total` (`.aw/phases.json`, else the `<ID>.phases.json` sidecar) and PR (from Claude's `pr-link` transcript entry; `held` when `<ID>.merge` records a "not auto-merged" decision). No network calls.
+- `bun aw.ts status [--json]`: per worktree its agent, session (`running`: tmux window and no `<ID>.ended`; `ended`; `orphan`: neither), live state (see [Live state](#live-state)), runtime (since `<ID>.sh` was written), idle (since the transcript was last written), phases `done/total` (`.aw/phases.json`, else the `<ID>.phases.json` sidecar) and PR (from Claude's `pr-link` transcript entry; `held` when `<ID>.merge` records a "not auto-merged" decision). No network calls.
 - `bun aw.ts watch [--interval 5]`: the same, redrawn every few seconds until `Ctrl-C`.
 - `bun aw.ts tail <ID | owner/repo/ID> [-n 20] [--no-follow]`: read-only, one line per assistant message, tool call (name and a short argument) or tool error from the newest transcript (last 256 KiB), then follows it. Claude's are `~/.claude-aw/projects/<cwd, non-alphanumerics as ->/*.jsonl`; Codex's are `~/.codex-aw/sessions/**/*.jsonl`; both are matched by the `cwd` they record, and symlinks and non-regular files are skipped. An ID with transcripts in several repos is refused; name the repo. Tool output is never printed; text is capped and stripped of control and escape characters. Works for a finished ticket whose worktree is gone, as long as its transcript is.
+
+### Live state
+
+`state` (`working`, `waiting`, `idle`, `ended`, `unknown`; JSON also has `waitingFor` and `stateSince`, ms epoch or `null`). An `ended` or `orphan` session is `ended`; otherwise:
+
+- Claude: `CLAUDE_CONFIG_DIR=~/.claude-aw claude agents --json`, run once per refresh (3 s timeout) and only while a Claude ticket has a tmux window; `busy` is `working`, `waiting` carries `waitingFor`. The session must report the worktree path as its exact `cwd`. That command is a research preview: if it fails, times out or changes shape, Claude rows show `unknown`.
+- Codex: hooks installed by `scripts/setup.sh` (via `scripts/codex-hooks.sh`, a marked block in `~/.codex-aw/config.toml`; the rest of the file is left alone, and the script refuses damaged markers or a result that is not valid TOML) write `{state, ts}` to `<worktree>/.aw/codex-state.json` on `SessionStart`/`Stop` (idle), `UserPromptSubmit`/`PostToolUse` (working), `PermissionRequest` (waiting) and `SessionEnd` (ended), only when `.aw` is a real directory. The sandbox only lets an agent write its own worktree, so it can at most misreport its own state. The hook runs with the agent's own privileges, so a race on `.aw` or the temp file reaches nothing the agent could not write anyway. It assumes the session starts at the worktree root, as the launcher does. Codex skips hooks until they are trusted: run `CODEX_HOME=~/.codex-aw codex` once, open `/hooks` and trust them (again whenever the block changes). `aw` reads the file like `phases.json` (no symlinks, regular file under 4 KiB) and only if it is newer than the launcher; a `working` older than 10 minutes with no transcript write since is `unknown`.
 
 ### On a VM
 
@@ -237,9 +244,11 @@ CLI: `bun aw.ts <run|once|status|watch|tail> [--dry-run] [--json] [--interval s]
 - `src/merge.ts`: `.aw/merge.json`, critical paths, the merge decision and auto-merge.
 - `src/launcher.ts`: clone, worktree, prompt and launcher script, tmux window.
 - `src/pass.ts`: one poll: cleanup, start ready tickets by priority, reconcile.
-- `src/status.ts`: per-worktree status rows and the table.
+- `src/status.ts`: per-worktree status rows, the `claude agents` snapshot and the table.
+- `src/state.ts`: live state: `claude agents --json` (bounded run and parse), the Codex hook state file, precedence.
 - `src/tail.ts`: transcript lookup, line condensing and control-char stripping, `tail`.
 - `src/util.ts`: logged/dry-run-aware command and file helpers, the pinned `.aw` reader.
+- `scripts/codex-hooks.sh`: installs or refreshes aw's Codex state hooks in a `config.toml`.
 - `tests/`: one file per module (launcher tests are in `pass.test.ts`); shared fakes in `tests/helpers.ts`.
 
 ## First-run checklist

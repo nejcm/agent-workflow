@@ -28,7 +28,7 @@ test("running, ended and orphan rows with runtime, idle, phases and PR", () => {
   writePhases("PER-1", [phase("a", "done"), phase("b", "in-progress"), phase("c", "todo")]);
 
   const rs = rows(config(), wins("PER-1", "PER-2"), root, T * 1000);
-  expect(rs.map((r) => [r.id, r.state])).toEqual([["PER-1", "running"], ["PER-2", "ended"], ["PER-3", "orphan"]]);
+  expect(rs.map((r) => [r.id, r.session, r.state])).toEqual([["PER-1", "running", "unknown"], ["PER-2", "ended", "ended"], ["PER-3", "orphan", "ended"]]);
   const [a, b, c] = rs;
   expect(a).toMatchObject({ repo: "acme/web", agent: "claude", runtimeMs: 3_600_000, idleMs: 30_000, phases: { done: 1, total: 3 }, pr: "https://github.com/acme/web/pull/4", merge: null });
   expect(b).toMatchObject({ runtimeMs: 540_000, idleMs: null, phases: null, pr: null, merge: "held", transcript: null });
@@ -36,9 +36,9 @@ test("running, ended and orphan rows with runtime, idle, phases and PR", () => {
   expect(JSON.parse(JSON.stringify(rs))).toEqual(rs);
 
   const t = table(rs).split("\n");
-  expect(t[0]).toMatch(/^ID\s+REPO\s+AGENT\s+STATE\s+RUNTIME\s+IDLE\s+PHASES\s+PR$/);
-  expect(t[1]).toMatch(/^PER-1\s+acme\/web\s+claude\s+running\s+1h00m\s+30s\s+1\/3\s+#4$/);
-  expect(t[2]).toMatch(/ended\s+9m\s+-\s+-\s+held$/);
+  expect(t[0]).toMatch(/^ID\s+REPO\s+AGENT\s+SESSION\s+STATE\s+RUNTIME\s+IDLE\s+PHASES\s+PR$/);
+  expect(t[1]).toMatch(/^PER-1\s+acme\/web\s+claude\s+running\s+unknown\s+1h00m\s+30s\s+1\/3\s+#4$/);
+  expect(t[2]).toMatch(/ended\s+ended\s+9m\s+-\s+-\s+held$/);
   expect(table([])).toBe("no worktrees");
 });
 

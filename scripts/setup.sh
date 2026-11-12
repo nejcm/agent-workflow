@@ -30,6 +30,7 @@ TOML
 else
   echo "ok   ~/.codex-aw/config.toml"
 fi
+scripts/codex-hooks.sh ~/.codex-aw/config.toml
 
 host=$(hostname -s)
 export PATH="$HOME/.local/bin:$PATH"

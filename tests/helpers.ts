@@ -57,6 +57,7 @@ export function fakeIo(respond: (argv: string[]) => { code?: number; out?: strin
   const logs: string[] = [];
   const io: Io = {
     dry,
+    home: root,
     fetch: (() => Promise.reject(new Error("no network"))) as any,
     log: (m) => logs.push(m),
     run: async (timed) => {

@@ -83,4 +83,5 @@ export interface Io {
   fetch: typeof fetch;
   dry: boolean;
   log: (msg: string) => void;
+  home: string;
 }

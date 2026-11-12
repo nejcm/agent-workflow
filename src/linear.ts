@@ -81,6 +81,12 @@ export function linear(l: Source, host: string, io: Io, defaultHost = false): Tr
     },
     done: (t) => move(t.ref, l.done[0]!),
     comment,
+    // `last` returns oldest first (`first` is newest first). shortcut: the 100 oldest after `since`, paginate if 100 non-answers pile up.
+    async comments(t, since) {
+      const q = `query($id: String!, $since: DateTimeOrDuration!) { issue(id: $id) { comments(filter: { createdAt: { gt: $since } }, last: 100) { nodes { id body createdAt user { email } } } } }`;
+      const d = await gql(q, { id: t.ref, since: new Date(since).toISOString() });
+      return (d.issue?.comments?.nodes ?? []).map((c: any) => ({ id: String(c.id), body: c.body ?? "", createdAt: c.createdAt ?? "", author: c.user?.email ?? undefined }));
+    },
     async createPhase(parent, title, description) {
       const todo = await stateId(l.todo);
       const d = await gql(

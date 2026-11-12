@@ -76,6 +76,10 @@ export function github(l: Source, host: string, io: Io, defaultHost: boolean, re
     },
     done: (t) => write(io, ["gh", "issue", "close", t.ref, "--repo", t.repo!]).then(() => {}),
     comment,
+    async comments(t) {
+      const cs: any[] = JSON.parse(await read(io, ["gh", "issue", "view", t.ref, "--repo", t.repo!, "--json", "comments"])).comments ?? [];
+      return cs.map((c) => ({ id: String(c.id), body: c.body ?? "", createdAt: c.createdAt ?? "", author: c.author?.login ?? undefined }));
+    },
     async createPhase(parent, title, body) {
       const url = await write(io, ["gh", "issue", "create", "--repo", parent.repo!, "--parent", parent.ref, "--title", title, "--body", body]);
       if (io.dry) return "";

@@ -49,11 +49,13 @@ export CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CODEX_HOME
   const codex = (d: string) => String.raw`codex ${d}--dangerously-bypass-hook-trust --sandbox danger-full-access --ask-for-approval never -C '/ws/it'\''s' "$(cat '/ws/p.md')"
 `;
   const s = (agent: string, sandbox: string) => launcher(web(config({ repos: [{ name: "acme/web", path: "/src/web", agent, sandbox }] })), "/ws/it's", "/ws/p.md", "/aw");
-  expect(s("claude", "nono")).toBe(`${head}${claudeEnv}exec ${nono("claude", String.raw`--allow '/ws/it'\''s.claude' --allow '/ws/it'\''s.codex' `)}${claude}`);
+  const gh = String.raw`export GH_CONFIG_DIR='/ws/it'\''s'.gh
+`;
+  expect(s("claude", "nono")).toBe(`${head}${gh}${claudeEnv}exec ${nono("claude", String.raw`--allow '/ws/it'\''s.claude' --allow '/ws/it'\''s.codex' `)}${claude}`);
   expect(s("claude", "none")).toBe(`${head}${claudeEnv}exec ${claude}`);
   const codexEnv = String.raw`export CODEX_HOME='/ws/it'\''s'.codex
 `;
-  expect(s("codex", "nono")).toBe(`${head}${codexEnv}exec ${nono("codex", String.raw`--allow '/ws/it'\''s.codex' `)}${codex("--no-daemon ")}`);
+  expect(s("codex", "nono")).toBe(`${head}${gh}${codexEnv}exec ${nono("codex", String.raw`--allow '/ws/it'\''s.codex' `)}${codex("--no-daemon ")}`);
   expect(s("codex", "none")).toBe(`${head}${codexEnv}exec ${codex("")}`);
 });
 

@@ -65,7 +65,8 @@
       "CLAUDE_CONFIG_DIR",
       "CLAUDE_CODE_TMPDIR",
       "CLAUDE_CODE_OAUTH_TOKEN",
-      "CODEX_HOME"
+      "CODEX_HOME",
+      "GH_CONFIG_DIR"
     ]
   },
   "network": {

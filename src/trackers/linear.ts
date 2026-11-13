@@ -96,7 +96,7 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
     },
     async claim(t) {
       await move(t.ref, l.inProgress);
-      // Best-effort: once the ticket is in progress, a throw here would strand it with its session killed.
+      // Best-effort: once the ticket is in progress the claim has succeeded; a throw would only report it as failed.
       await comment(t, `picked up on ${host}`).catch((e) => io.log(`${t.id}: picked-up comment failed: ${e.message}`));
     },
     async toReview(t, prUrl) {

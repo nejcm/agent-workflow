@@ -430,22 +430,42 @@ test("a failed pickup comment after the label edit keeps the session running", a
   expect(existsSync(join(root, "acme/web/gh-1.ended"))).toBe(false);
 });
 
-test("a failed start leaves the ticket unclaimed and retries next poll; a failed claim kills the window", async () => {
-  const c = config();
-  const { tr, calls } = fakeTracker({ ready: [ticket(1)] });
+test("a failed start leaves the ticket unclaimed and retries next poll; a failed claim keeps the session, counts it and retries the claim only while the ticket is ready", async () => {
+  const c = config({ maxConcurrent: 1 });
+  const ready = [ticket(1), ticket(2)];
+  const { tr, calls } = fakeTracker({ ready });
+  let lists = 0;
+  const listReady = tr.listReady;
+  tr.listReady = () => (lists++, listReady());
   let tmuxDown = true;
-  const { io, cmds, logs } = fakeIo((a) => ((a[1] === "new-window" && tmuxDown) || a[1] === "kill-window" ? { code: 1 } : noPr(a)));
+  let open: string[] = [];
+  const { io, cmds, logs } = fakeIo((a) => (a[1] === "new-window" && tmuxDown ? { code: 1 } : a[1] === "list-windows" ? windowsOut(open) : noPr(a)));
   await pass(c, io, () => tr, "/aw");
   expect(calls).toEqual([]);
   expect(logs.some((l) => l.includes("start gh-1 failed"))).toBe(true);
   tmuxDown = false;
+  const before = cmds.length;
+  const claim = tr.claim;
   tr.claim = () => Promise.reject(new Error("tracker down"));
   await pass(c, io, () => tr, "/aw");
   expect(logs).toContain(`[web] reuse ${root}/acme/web/gh-1`);
-  expect(cmds).toContain("tmux kill-window -t =aw:=acme/web/gh-1");
-  expect(cmds.filter((x) => x.startsWith("systemctl --user kill")).at(-1)).toBe(`systemctl --user kill --signal=KILL ${unit("gh-1")}`);
-  expect(logs.some((l) => l.includes("start gh-1 failed: tracker down"))).toBe(true);
-  expect(logs.some((l) => l.includes("kill window acme/web/gh-1 by hand"))).toBe(true);
+  expect(logs).toContain("[web] gh-1: claim failed, session left running and the claim retried next poll: tracker down");
+  expect(cmds.slice(before).filter((x) => x.includes("kill-window") || x.includes("new-window"))).toEqual([`tmux new-window -d -t =aw: -n acme/web/gh-1 ${root}/acme/web/gh-1.sh`]);
+  const pending = join(root, "acme/web/gh-1.claim");
+  expect(existsSync(pending)).toBe(true);
+  open = ["acme/web/gh-1"];
+  tr.claim = claim;
+  ready.shift();
+  await pass(c, io, () => tr, "/aw");
+  expect(calls).toEqual([]);
+  expect(existsSync(pending)).toBe(true);
+  expect(cmds.filter((x) => x.includes("new-window"))).toHaveLength(3);
+  ready.unshift(ticket(1));
+  lists = 0;
+  await pass(config({ maxConcurrent: 2 }), io, () => tr, "/aw");
+  expect(lists).toBe(1);
+  expect(calls).toEqual(["claim gh-1", "claim gh-2"]);
+  expect(existsSync(pending)).toBe(false);
 });
 
 test("a start first kills a stale scope by its name, and fails unclaimed when systemd --user is unreachable", async () => {
@@ -474,7 +494,7 @@ test("one ticket or source failing does not stop the rest", async () => {
   const { io, logs } = fakeIo(noPr);
   await pass(c, io, (l) => (l.name === "web" ? bad : good.tr), "/aw");
   expect(logs.some((l) => l.includes("[web] list ready failed: api down"))).toBe(true);
-  expect(logs.some((l) => l.includes("[api] start gh-1 failed: nope"))).toBe(true);
+  expect(logs.some((l) => l.includes("[api] gh-1: claim failed, session left running and the claim retried next poll: nope"))).toBe(true);
   expect(good.calls).toEqual(["claim gh-2"]);
 });
 

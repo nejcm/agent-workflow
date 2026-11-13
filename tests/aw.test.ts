@@ -51,14 +51,17 @@ test("spawnRun leaves normal commands unchanged", async () => {
   expect(await spawnRun(["sh", "-c", "echo out; echo err >&2; exit 3"])).toEqual({ code: 3, out: "out\n", err: "err\n" });
 });
 
-test("spawnRun kills a TERM-ignoring grandchild that holds the pipes", async () => {
+test("spawnRun returns at the deadline even when a TERM-ignoring grandchild holds the pipes", async () => {
   const mark = `${10_000 + (process.pid % 10_000)}.75`;
   const t0 = performance.now();
-  const r = await spawnRun(["sh", "-c", `(trap '' TERM; sleep ${mark}) & echo partial; sleep ${mark}`], undefined, 1);
-  expect(performance.now() - t0).toBeLessThan(4000);
-  expect(r).toMatchObject({ code: 124, out: "partial\n" });
-  expect(Bun.spawnSync(["pgrep", "-f", `sleep ${mark}`]).exitCode).toBe(1);
-});
+  try {
+    const r = await spawnRun(["sh", "-c", `(trap '' TERM; sleep ${mark}) & echo partial; sleep ${mark}`], undefined, 1);
+    expect(performance.now() - t0).toBeLessThan(8000);
+    expect(r).toMatchObject({ code: 124, err: `sh -c (trap '' TERM; sleep ${mark}) & echo partial; sleep ${mark} timed out after 1s` });
+  } finally {
+    Bun.spawnSync(["pkill", "-9", "-fx", `sleep ${mark}`]);
+  }
+}, 15_000);
 
 const fds = () => readdirSync("/proc/self/fd").length;
 
@@ -66,8 +69,8 @@ test("spawnRun gives up on output a finished command left open, and releases its
   for (const [mark, prefix] of [[`${10_000 + (process.pid % 10_000)}.5`, ""], [`${10_000 + (process.pid % 10_000)}.6`, "setsid "]]) {
     const before = fds();
     const t0 = performance.now();
-    const r = await spawnRun(["sh", "-c", `${prefix}sleep ${mark} & echo partial; exit 0`]);
     try {
+      const r = await spawnRun(["sh", "-c", `${prefix}sleep ${mark} & echo partial; exit 0`]);
       expect(performance.now() - t0).toBeLessThan(7000);
       expect(r).toMatchObject({ code: 1, err: `sh -c ${prefix}sleep ${mark} & echo partial; exit 0 exited 0 but left its output open` });
       expect(Bun.spawnSync(["pgrep", "-fx", `sleep ${mark}`]).exitCode).toBe(0);

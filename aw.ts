@@ -19,8 +19,8 @@ async function status(cfg: Config, io: Io) {
   ].join("\n");
 }
 
-// timeout leads its own process group and still fires if aw is killed, but exits once its child dies: on a timeout, kill
-// what is left of the group (a grandchild ignoring TERM). The drain bound covers anything else still holding the pipes.
+// timeout signals its whole group and still fires if aw is killed. The drain bound covers what outlives it holding the pipes;
+// shortcut: a grandchild ignoring TERM keeps running (signalling after the reap could hit a reused group id).
 export const spawnRun: Run = async (argv, cwd, secs = 60) => {
   const start = performance.now();
   const cmd = argv.slice(0, 3).join(" ");
@@ -35,17 +35,11 @@ export const spawnRun: Run = async (argv, cwd, secs = 60) => {
   const output = Promise.all(readers.map(text));
   const code = await p.exited;
   const timedOut = (code === 124 || code === 137) && performance.now() - start >= secs * 1000;
-  if (timedOut)
-    try {
-      process.kill(-p.pid, "SIGKILL");
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "ESRCH") throw e;
-    }
   let timer: number | undefined;
   const drained = await Promise.race([output, new Promise<undefined>((r) => (timer = setTimeout(r, 5000)))]).finally(() => clearTimeout(timer));
   if (!drained) {
     for (const r of readers) r.cancel().catch(() => {});
-    return { code: code || 1, out: "", err: `${cmd} exited ${code} but left its output open` };
+    return { code: code || 1, out: "", err: timedOut ? `${cmd} timed out after ${secs}s` : `${cmd} exited ${code} but left its output open` };
   }
   const [out, err] = drained;
   return { code, out, err: timedOut ? `${cmd} timed out after ${secs}s ${err.trim()}`.trim() : err };

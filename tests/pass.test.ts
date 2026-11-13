@@ -280,15 +280,13 @@ test("reuses an existing session dir; a branch a legacy worktree left in the bas
 test("in-progress: PR moves to review; missing window comments once", async () => {
   const c = config();
   const { tr, calls } = fakeTracker({ inProgress: [ticket(1), ticket(2), ticket(3)] });
-  const { io, cmds, logs } = fakeIo((a) => {
+  const { io, logs } = fakeIo((a) => {
     if (a[1] === "list-windows") return windowsOut(["acme/web/gh-3"]);
     if (a[1] === "pr") return { out: a.includes("agent/gh-1") ? '[{"url":"https://pr/1","state":"OPEN"}]' : "[]" };
   });
   await pass(c, io, () => tr, "/aw");
   await pass(c, io, () => tr, "/aw");
   expect(calls).toEqual(["review gh-1 https://pr/1", "comment gh-2 session ended without a PR", "review gh-1 https://pr/1"]);
-  // Windowless sessions lose their scope once per aw process, PR or not.
-  expect(cmds.filter((x) => x.startsWith("systemctl"))).toEqual(["gh-1", "gh-2"].map((id) => `systemctl --user kill --signal=KILL aw-acme:web:${id}.scope`));
   expect(existsSync(join(root, "acme/web/gh-2.ended"))).toBe(true);
   expect(readFileSync(join(root, "acme/web/gh-1.pr"), "utf8")).toBe("https://pr/1");
   expect(logs.filter((l) => l.endsWith("write " + join(root, "acme/web/gh-1.pr")))).toHaveLength(1);
@@ -365,7 +363,7 @@ test("canceled: kills the window once, keeps the clone and files, posts nothing;
   expect(cmds.filter((x) => x.includes("kill-window"))).toEqual(["tmux kill-window -t @0"]);
   expect(cmds.some((x) => x.startsWith("rm "))).toBe(false);
   // gh-2 has no window, but a session that left it may still run in its scope.
-  expect(cmds.filter((x) => x.startsWith("systemctl")).sort()).toEqual(["gh-1", "gh-2"].map((id) => `systemctl --user kill --signal=KILL aw-acme:web:${id}.scope`));
+  expect(cmds.filter((x) => x.startsWith("systemctl --user kill")).sort()).toEqual(["gh-1", "gh-2"].map((id) => `systemctl --user kill --signal=KILL aw-acme:web:${id}.scope`));
   for (const f of ["gh-1", "gh-1.claude", "gh-1.sh", "gh-1.source", "gh-1.ended", "gh-2", "gh-2.source"]) expect(existsSync(join(root, "acme/web", f))).toBe(true);
   // gh-2's session had already exited: still marked ended, so a reopen never reads as "ended without a PR".
   expect(existsSync(join(root, "acme/web/gh-2.ended"))).toBe(true);
@@ -374,7 +372,7 @@ test("canceled: kills the window once, keeps the clone and files, posts nothing;
   wins = [];
   await pass(c, io, () => tr, "/aw");
   expect(cmds.filter((x) => x.includes("kill-window"))).toHaveLength(1);
-  expect(cmds.filter((x) => x.startsWith("systemctl"))).toHaveLength(2);
+  expect(cmds.filter((x) => x.startsWith("systemctl --user kill"))).toHaveLength(2);
   expect(logs.filter((l) => l.includes("stopped"))).toHaveLength(2);
   expect(calls).toEqual([]);
   s.canceled = [];
@@ -441,7 +439,7 @@ test("a failed start leaves the ticket unclaimed and retries next poll; a failed
   await pass(c, io, () => tr, "/aw");
   expect(logs).toContain(`[web] reuse ${root}/acme/web/gh-1`);
   expect(cmds).toContain("tmux kill-window -t =aw:=acme/web/gh-1");
-  expect(cmds.filter((x) => x.startsWith("systemctl")).at(-1)).toBe("systemctl --user kill --signal=KILL aw-acme:web:gh-1.scope");
+  expect(cmds.filter((x) => x.startsWith("systemctl --user kill")).at(-1)).toBe("systemctl --user kill --signal=KILL aw-acme:web:gh-1.scope");
   expect(logs.some((l) => l.includes("start gh-1 failed: tracker down"))).toBe(true);
   expect(logs.some((l) => l.includes("kill window acme/web/gh-1 by hand"))).toBe(true);
 });
@@ -482,7 +480,7 @@ test("dry-run logs side effects and executes none", async () => {
   const { tr } = fakeTracker({ ready: [ticket(1)], inProgress: [ticket(2)], done: ["gh-5"] });
   const { io, cmds, logs } = fakeIo((a) => (a[1] === "has-session" ? { code: 1 } : a[1] === "pr" && a.includes("agent/gh-2") ? { out: '[{"url":"https://pr/2","state":"OPEN"}]' } : noPr(a)), true);
   await pass(c, io, () => tr, "/aw");
-  expect(cmds.every((x) => /has-session|list-windows|rev-parse|remote get-url|gh pr list|gh repo view/.test(x))).toBe(true);
+  expect(cmds.every((x) => /has-session|list-windows|list-units|rev-parse|remote get-url|gh pr list|gh repo view/.test(x))).toBe(true);
   expect(logs.some((l) => l.includes("dry: tmux new-session -d -s aw"))).toBe(true);
   expect(logs.some((l) => l.startsWith("[web] dry: nono run --no-rollback-prompt --profile /aw/nono/aw-check.json ") && l.endsWith(`-C ${root}/acme/web/gh-5 status --porcelain --ignore-submodules=none`))).toBe(true);
   expect(logs.some((l) => l.startsWith("[web] dry: nono run ") && l.endsWith(`-C ${root}/acme/web/gh-5 log --format=%h --branches --not --remotes`))).toBe(true);
@@ -1030,12 +1028,11 @@ test("no sandbox profile grants /dev/pts, so a session cannot open another termi
   }
 });
 
-test("a parked session whose window is gone still has its scope killed, once per aw process", async () => {
-  const t = { ...ticket(7), labels: ["needs-human"] };
-  const { tr, calls } = fakeTracker({ inProgress: [t] });
-  const { io, cmds } = fakeIo((a) => (a[1] === "pr" ? { out: "[]" } : undefined));
+test("each pass kills every live scope of a configured repo whose window is gone, whatever the ticket's state", async () => {
+  const units = ["aw-acme:web:gh-7.scope loaded active running gh-7", "aw-acme:web:gh-3.scope loaded active running gh-3", "aw-other:x:gh-1.scope loaded active running x", "aw-junk.scope loaded active running j"].join("\n");
+  const { tr, calls } = fakeTracker({});
+  const { io, cmds } = fakeIo((a) => (a[2] === "list-units" ? { out: units } : a[1] === "list-windows" ? windowsOut(["acme/web/gh-3"]) : noPr(a)));
   await pass(config(), io, () => tr, "/aw");
-  await pass(config(), io, () => tr, "/aw");
-  expect(cmds.filter((x) => x.startsWith("systemctl"))).toEqual(["systemctl --user kill --signal=KILL aw-acme:web:gh-7.scope"]);
+  expect(cmds.filter((x) => x.startsWith("systemctl --user kill"))).toEqual(["systemctl --user kill --signal=KILL aw-acme:web:gh-7.scope"]);
   expect(calls).toEqual([]);
 });

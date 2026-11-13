@@ -23,6 +23,15 @@ export const stopScope = (io: Io, key: string, id: string) =>
     if (!/ not loaded\.$/.test(e.message)) throw e;
   });
 
+/** Stops every live scope of a configured repo whose window is gone, whatever its ticket's state; `wins` must predate any start this pass. */
+export async function sweepScopes(cfg: Config, io: Io, wins: Map<string, string>) {
+  const out = await read(io, ["systemctl", "--user", "list-units", "--type=scope", "--plain", "--no-legend", "aw-*"]);
+  for (const unit of out.split("\n").map((l) => l.trim().split(/\s+/)[0])) {
+    const m = /^aw-([^:]+):([^:]+):([^:]+)\.scope$/.exec(unit ?? "");
+    if (m && cfg.repos[`${m[1]}/${m[2]}`] && !wins.has(winName(`${m[1]}/${m[2]}`, m[3]!))) await stopScope(io, `${m[1]}/${m[2]}`, m[3]!);
+  }
+}
+
 // A session clone only reads the base's objects (alternates).
 export function launcher(l: Repo, wt: string, promptFile: string, awDir = AW_DIR) {
   const prompt = `"$(cat ${q(promptFile)})"`;

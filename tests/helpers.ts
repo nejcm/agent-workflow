@@ -42,10 +42,13 @@ export const config = (over: object = {}): Config => parseConfig(raw(over), AW_D
 export const web = (c: Config) => c.repos["acme/web"]!;
 export const ticket = (n: number, repo = "acme/web"): Ticket => ({ id: `gh-${n}`, ref: String(n), title: `Fix thing ${n}`, body: "body; rm -rf ~ $(whoami)", url: `https://x/${n}`, repo });
 
-export function fakeTracker(s: { ready?: Ticket[]; inProgress?: Ticket[]; inReview?: Ticket[]; done?: string[]; canceled?: string[] }) {
+export function fakeTracker(s: { ready?: Ticket[]; inProgress?: Ticket[]; inReview?: Ticket[]; done?: string[]; canceled?: string[]; globalIds?: boolean }) {
   const calls: string[] = [];
   const subs: { ref: string; title: string }[] = [];
   const tr: Tracker = {
+    globalIds: s.globalIds ?? false,
+    restartHint: () => "remove the in-progress label",
+    describe: () => "fake",
     listReady: async () => s.ready ?? [],
     listInProgress: async () => s.inProgress ?? [],
     listInReview: async () => s.inReview ?? [],

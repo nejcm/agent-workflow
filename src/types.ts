@@ -62,6 +62,12 @@ export interface TicketComment {
 }
 
 export interface Tracker {
+  /** Ticket ids are unique across the whole tracker, not per repo, so one ticket may name any repo. */
+  globalIds: boolean;
+  /** How a human requeues a ticket whose session ended, e.g. "remove the in-progress label". */
+  restartHint(): string;
+  /** One-line summary for `aw status`. */
+  describe(): string;
   listReady(): Promise<Ticket[]>;
   listInProgress(): Promise<Ticket[]>;
   listInReview(): Promise<Ticket[]>;

@@ -1,5 +1,5 @@
-import type { Io, Source, Ticket, Tracker } from "./types";
-import { hasLabel, ours } from "./util";
+import type { Io, Source, Ticket, Tracker } from "../types";
+import { hasLabel, ours } from "../util";
 
 const REPO_LINE = /^repo:[ \t]*([^\r\n]*?)[ \t\r]*$/im;
 
@@ -74,6 +74,9 @@ export function linear(l: Source, host: string, io: Io, defaultHost = false): Tr
   const hostLabel = `host:${host}`;
   const listMine = (state: string, labels: string[]) => defaultHost ? list(state, labels).then((r) => r.filter((t) => ours(t, host, true))) : list(state, [...labels, hostLabel]);
   return {
+    globalIds: true,
+    restartHint: () => `move it to ${l.todo}`,
+    describe: () => `linear ${l.team}`,
     listReady: async () => (await listMine(l.todo, [l.readyLabel])).filter((t) => !hasLabel(t.labels, l.needsHumanLabel)),
     listInProgress: () => listMine(l.inProgress, [l.readyLabel]),
     listInReview: () => listMine(l.inReview, [l.readyLabel]),

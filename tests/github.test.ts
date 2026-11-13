@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
-import { byPriority, github, labelPriority } from "../src/github";
-import { LINEAR_ISSUES, linear, linearTicket } from "../src/linear";
+import { github } from "../src/trackers/github";
+import { LINEAR_ISSUES, linear, linearTicket } from "../src/trackers/linear";
+import { byPriority, labelPriority } from "../src/util";
 import { pass } from "../src/pass";
 import { config, fakeIo, phase, src, ticket, useTempRoot, web, windowsOut, withLinearKey, writePhases } from "./helpers";
 

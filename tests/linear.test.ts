@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { allowedRepo } from "../src/config";
-import { LINEAR_ISSUES, linear, linearRepo, linearTicket } from "../src/linear";
+import { LINEAR_ISSUES, linear, linearRepo, linearTicket } from "../src/trackers/linear";
 import { pass } from "../src/pass";
 import { config, fakeIo, phase, src, two, useTempRoot, windowsOut, withLinearKey, writePhases } from "./helpers";
 

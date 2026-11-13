@@ -315,7 +315,8 @@ CLI: `bun aw.ts <run|once|status|watch|tail> [--dry-run] [--json] [--interval s]
 - `aw.ts`: CLI entry (`run`, `once`, `status`, `watch`, `tail`).
 - `src/types.ts`: shared types (`Config`, `Repo`, `Source`, `Ticket`, `Tracker`, `Io`).
 - `src/config.ts`: `aw.json` parsing and the repo allowlist.
-- `src/github.ts`, `src/linear.ts`: tracker adapters, priority, canonical-repo lookup.
+- `src/trackers/`: tracker adapters (`github.ts`, `linear.ts`) and the `TRACKERS` registry.
+- `src/github.ts`: canonical-repo and PR lookup.
 - `src/phases.ts`: `.aw/phases.json` validation and sub-ticket sync.
 - `src/findings.ts`: `.aw/findings.json` validation, sanitizing and filing.
 - `src/feedback.ts`: PR reviews, comments, failed checks and conflicts fed back into an idle In Review session.

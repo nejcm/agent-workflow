@@ -125,3 +125,11 @@ export function removeAw(wt: string, file: string) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
 }
+
+const PRIORITIES = ["urgent", "high", "medium", "low"];
+/** Most urgent `priority:<urgent|high|medium|low>` label as a Linear-style rank, or undefined. */
+export const labelPriority = (labels: string[]) => {
+  const ranks = labels.map((x) => PRIORITIES.indexOf(/^priority:(\w+)$/i.exec(x)?.[1]?.toLowerCase() ?? "") + 1).filter((r) => r > 0);
+  return ranks.length ? Math.min(...ranks) : undefined;
+};
+export const byPriority = (a: Ticket, b: Ticket) => (a.priority ?? 5) - (b.priority ?? 5);

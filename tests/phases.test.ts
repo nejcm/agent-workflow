@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { github } from "../src/github";
+import { github } from "../src/trackers/github";
 import { pass } from "../src/pass";
 import { parsePhases, phaseProgress } from "../src/phases";
 import { config, fakeIo, fakeTracker, noPr, phase, root, ticket, useTempRoot, windowsOut, worktree, writePhases } from "./helpers";

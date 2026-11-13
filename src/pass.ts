@@ -3,15 +3,15 @@ import { join } from "node:path";
 import { allowedRepo, repoDir, validRepo } from "./config";
 import { deliverFeedback, feedbackFields } from "./feedback";
 import { fileFindings } from "./findings";
-import { byPriority, canonical, findPr, github, sameRepo } from "./github";
+import { canonical, findPr, sameRepo } from "./github";
 import { nonoRun, SLOW_SECS, start, stopScope, sweepScopes, windows, winName } from "./launcher";
-import { linear } from "./linear";
 import { autoMerge } from "./merge";
 import { syncPhases } from "./phases";
 import { agentPane, deliverAnswer, liveStates, syncQuestion } from "./question";
 import { lastSay, transcript } from "./tail";
+import { TRACKERS } from "./trackers";
 import type { Config, Io, Repo, Source, Ticket, Tracker } from "./types";
-import { AW_DIR, diskRepos, GIT, hasLabel, mtime, put, read, remove, SAFE_ID, strip, subdirs, write } from "./util";
+import { AW_DIR, byPriority, diskRepos, GIT, hasLabel, mtime, put, read, remove, SAFE_ID, strip, subdirs, write } from "./util";
 
 const sourceOf = (dir: string, id: string) => {
   const f = join(dir, `${id}.source`);
@@ -48,8 +48,8 @@ async function reject(cfg: Config, t: Ticket, tr: Tracker, io: Io, reason: strin
 
 // GitHub ids are only unique per repo, so the listing repo decides; a Linear ticket keeps the repo it was started in,
 // even one since removed from aw.json (then left alone). Only the source recorded in <ID>.source may act on a worktree.
-function workRepo(cfg: Config, s: Source, t: Ticket) {
-  const started = s.tracker === "linear" ? diskRepos(cfg).find((k) => hasTrace(cfg, k, t.id)) : undefined;
+function workRepo(cfg: Config, s: Source, tr: Tracker, t: Ticket) {
+  const started = tr.globalIds ? diskRepos(cfg).find((k) => hasTrace(cfg, k, t.id)) : undefined;
   if (started && !Object.hasOwn(cfg.repos, started)) return;
   const key = started ?? allowedRepo(cfg, t.repo);
   if (!key) return;
@@ -65,23 +65,22 @@ const startedElsewhere = (cfg: Config, key: string, id: string, wins: Map<string
 async function startReady(cfg: Config, s: Source, tr: Tracker, io: Io, t: Ticket, wins: Map<string, string>, running: Map<string, number>, awDir: string) {
   if (!SAFE_ID.test(t.id)) return;
   // GitHub tickets always carry an allowlisted repo, so only Linear tickets are ever rejected.
-  const isLinear = s.tracker === "linear";
   const key = allowedRepo(cfg, t.repo);
   if (!key) {
-    if (isLinear) await step(io, `reject ${t.id}`, () => reject(cfg, t, tr, io, notAllowed(t)));
+    if (tr.globalIds) await step(io, `reject ${t.id}`, () => reject(cfg, t, tr, io, notAllowed(t)));
     return;
   }
   const r = cfg.repos[key]!;
   if (wins.has(winName(key, t.id)) || (running.get(key) ?? 0) >= (r.maxConcurrent ?? Infinity)) return;
   const owner = sourceOf(repoDir(cfg, key), t.id);
   if (owner !== undefined && owner !== s.name) return io.log(`skip ${t.id}: ${key}/${t.id} belongs to source ${JSON.stringify(owner)}`);
-  const other = isLinear && startedElsewhere(cfg, key, t.id, wins);
+  const other = tr.globalIds && startedElsewhere(cfg, key, t.id, wins);
   if (other) return io.log(`skip ${t.id}: already started in ${other}`);
   // Uncached: a transfer must stop new clones and starts at once, not after the listing cache expires.
   const name = await canonical(io, key, true);
   if (!name) return;
   if (!sameRepo(name, key)) {
-    if (isLinear) await step(io, `reject ${t.id}`, () => reject(cfg, t, tr, io, `repo ${key} now resolves to ${name} on GitHub, which is not in the aw allowlist`));
+    if (tr.globalIds) await step(io, `reject ${t.id}`, () => reject(cfg, t, tr, io, `repo ${key} now resolves to ${name} on GitHub, which is not in the aw allowlist`));
     return;
   }
   await step(io, `start ${t.id}`, async () => {
@@ -137,7 +136,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
   await step(io, "list in-progress", async () => {
     for (const t of await tr.listInProgress())
       await step(io, `check ${t.id}`, async () => {
-        const key = SAFE_ID.test(t.id) && workRepo(cfg, s, t);
+        const key = SAFE_ID.test(t.id) && workRepo(cfg, s, tr, t);
         if (!key) return;
         const w = { ...t, repo: key };
         const dir = repoDir(cfg, key);
@@ -160,7 +159,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
           const seen = `${ended}@${statSync(ended).mtimeMs}`;
           if (warned.has(seen) || (await tr.closed(t.id, key))) return;
           warned.add(seen);
-          return io.log(`${key}/${t.id}: session ended, ticket still in progress; ${s.tracker === "linear" ? `move it to ${s.todo}` : `remove the ${s.inProgressLabel} label`} to start it again`);
+          return io.log(`${key}/${t.id}: session ended, ticket still in progress; ${tr.restartHint()} to start it again`);
         }
         if (await tr.closed(t.id, key)) return;
         await tr.comment(w, endedNotice(lastMessage(join(dir, t.id), cfg.repos[key]!.agent)));
@@ -171,7 +170,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
   // Retries a final sync that failed when the parent moved to review; a no-op once in sync.
   await step(io, "list in-review", async () => {
     for (const t of await tr.listInReview()) {
-      const key = SAFE_ID.test(t.id) && workRepo(cfg, s, t);
+      const key = SAFE_ID.test(t.id) && workRepo(cfg, s, tr, t);
       if (!key) continue;
       const w = { ...t, repo: key };
       const dir = repoDir(cfg, key);
@@ -194,7 +193,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
 export const worktreeIds = (dir: string) => subdirs(dir).filter((d) => SAFE_ID.test(d));
 
 export function makeTracker(s: Source, host: string, io: Io, defaultHost: boolean, repos: string[]) {
-  return s.tracker === "github" ? github(s, host, io, defaultHost, repos) : linear(s, host, io, defaultHost);
+  return TRACKERS[s.tracker].make(s, host, io, defaultHost, repos);
 }
 
 const warned = new Set<string>();

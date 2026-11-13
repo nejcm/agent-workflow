@@ -1,5 +1,5 @@
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { AGENTS, CLAUDE_TOKEN, claudeHome, codexHome, tmpHome } from "./agents";
 import { repoDir } from "./config";
 import type { Config, Io, Repo, Source, Ticket, Tracker } from "./types";
@@ -14,38 +14,18 @@ const q = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 export const nonoRun = (l: Repo, awDir: string, grants: [string, string][], quote = (s: string) => s) =>
   ["nono", "run", "--no-rollback-prompt", "--profile", quote(join(awDir, "nono", `aw-${l.agent}.json`)), ...grants.flatMap(([flag, path]) => [flag, quote(path)]), "--"];
 
-// `admin` only for a legacy worktree, which writes the shared clone; a session clone only reads its objects (alternates).
-export function launcher(l: Repo, wt: string, promptFile: string, awDir = AW_DIR, admin?: string) {
+// A session clone only reads the base's objects (alternates).
+export function launcher(l: Repo, wt: string, promptFile: string, awDir = AW_DIR) {
   const prompt = `"$(cat ${q(promptFile)})"`;
   const nono = l.sandbox === "nono";
   const git = join(l.path, ".git");
-  const rw = admin ? [join(git, "objects"), join(git, "refs"), join(git, "logs"), admin].map((p): [string, string] => ["--allow", p]) : [];
   const own = [...(l.agent === "claude" ? [claudeHome(wt)] : []), codexHome(wt)].map((p): [string, string] => ["--allow", p]);
   const tmp = tmpHome(wt);
-  const wrap = nono ? nonoRun(l, awDir, [["--allow", wt], ["--allow-unix-socket-subtree-bind", wt], ["--allow", tmp], ["--allow-unix-socket-subtree-bind", tmp], ...own, ["--read", admin ? git : join(git, "objects")], ...rw], q) : [];
+  const wrap = nono ? nonoRun(l, awDir, [["--allow", wt], ["--allow-unix-socket-subtree-bind", wt], ["--allow", tmp], ["--allow-unix-socket-subtree-bind", tmp], ...own, ["--read", join(git, "objects")]], q) : [];
   const [env, cmd] = AGENTS[l.agent].launch(q(wt), prompt, nono);
   // gh exits if it cannot read its config dir; <ID>.gh is never created, so gh runs on defaults plus nono's GH_TOKEN.
   const gh = nono ? `export GH_CONFIG_DIR=${q(wt)}.gh\n` : "";
   return `#!/usr/bin/env bash\ncd ${q(wt)} || exit 1\nunset LINEAR_API_KEY\nexport TMPDIR=${q(tmp)} TMP=${q(tmp)} TEMP=${q(tmp)}\n${gh}${env}\nexec ${[...wrap, ...cmd].join(" ")}\n`;
-}
-
-/** `worktree` for a session started before per-session clones (its `.git` is a file), `clone` for its own `.git` dir. */
-export function sessionKind(wt: string) {
-  const s = lstatSync(join(wt, ".git"), { throwIfNoEntry: false });
-  return s?.isFile() ? "worktree" : s?.isDirectory() ? "clone" : undefined;
-}
-
-const gitFile = (p: string) => {
-  if (!lstatSync(p).isFile()) throw new Error(`${p} is not a regular file`);
-  return readFileSync(p, "utf8").trim();
-};
-
-// git names the admin dir <id>1 on a clash; trust it only if it sits in <clone>/.git/worktrees and links back to wt.
-export function adminDir(l: Repo, wt: string) {
-  const admin = realpathSync(resolve(wt, gitFile(join(wt, ".git")).replace(/^gitdir: /, "")));
-  if (dirname(admin) !== realpathSync(join(l.path, ".git", "worktrees")) || realpathSync(resolve(admin, gitFile(join(admin, "gitdir")))) !== realpathSync(join(wt, ".git")))
-    throw new Error(`${wt}/.git does not point to its own admin dir in ${l.path}/.git/worktrees`);
-  return admin;
 }
 
 export async function windows(cfg: Config, io: Io) {
@@ -169,7 +149,7 @@ async function cloneSession(io: Io, r: Repo, wt: string, branch: string) {
   try {
     // file:// only for this copy of aw's own clone; the session clone then pushes to the real origin.
     await write(io, [...GIT, "-c", "protocol.file.allow=always", "-c", "advice.detachedHead=false", "clone", "-q", "--shared", "--revision", base, "--", r.path, tmp], undefined, SLOW_SECS);
-    for (const a of [["remote", "set-url", "origin", url], ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"], ["update-ref", base, "HEAD"]]) await write(io, [...GIT, "-C", tmp, ...a]);
+    for (const a of [["remote", "set-url", "origin", url], ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"], ["config", "remote.origin.tagOpt", "--no-tags"], ["update-ref", base, "HEAD"]]) await write(io, [...GIT, "-C", tmp, ...a]);
     // A branch left in the base by a legacy worktree keeps its commits.
     await write(io, [...GIT, "-C", tmp, "switch", "-q", "-c", branch, ...(old.code === 0 && old.out.trim() ? [old.out.trim()] : [])], undefined, SLOW_SECS);
   } catch (e) {
@@ -202,9 +182,7 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   await write(io, [...GIT, "-C", r.path, "fetch", "origin", r.baseBranch], undefined, SLOW_SECS);
   if (existsSync(wt)) io.log(`reuse ${wt}`);
   else await cloneSession(io, r, wt, branch);
-  const legacy = sessionKind(wt) === "worktree";
-  const gitRoot = legacy ? r.path : wt;
-  if (r.agent === "claude") seedClaude(io, claudeHome(wt), existsSync(gitRoot) ? realpathSync(gitRoot) : gitRoot);
+  if (r.agent === "claude") seedClaude(io, claudeHome(wt), existsSync(wt) ? realpathSync(wt) : wt);
   const vars = { id: t.id, title: t.title, body: t.body, url: t.url, branch, base: r.baseBranch, testCmd: r.testCmd, repo: r.key };
   io.log(`${io.dry ? "dry: " : ""}write ${join(wt, ".aw", ".gitignore")}`);
   if (!io.dry) {
@@ -213,7 +191,7 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
     inAw(wt, (d) => (rmSync(`${d}/.gitignore`, { force: true }), writeFileSync(`${d}/.gitignore`, "*\n", { flag: "wx" })));
   }
   put(io, promptFile, render(readFileSync(r.prompt, "utf8"), vars));
-  put(io, script, launcher(r, wt, promptFile, awDir, legacy && !io.dry && r.sandbox === "nono" ? adminDir(r, wt) : undefined), 0o755);
+  put(io, script, launcher(r, wt, promptFile, awDir), 0o755);
   await write(io, ["tmux", "new-window", "-d", "-t", `=${cfg.tmuxSession}:`, "-n", winName(r.key, t.id), script]);
   // Claimed last so a failed start leaves the ticket ready for the next poll; the open window stops a double start.
   try {

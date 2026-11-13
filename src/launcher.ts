@@ -14,6 +14,9 @@ const q = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 export const nonoRun = (l: Repo, awDir: string, grants: [string, string][], quote = (s: string) => s) =>
   ["nono", "run", "--no-rollback-prompt", "--profile", quote(join(awDir, "nono", `aw-${l.agent}.json`)), ...grants.flatMap(([flag, path]) => [flag, quote(path)]), "--"];
 
+// The pane's own pty, resolved when the script runs; the profiles grant no other /dev/pts entry.
+const PANE_TTY = `"$(tty)"`;
+
 // A session clone only reads the base's objects (alternates).
 export function launcher(l: Repo, wt: string, promptFile: string, awDir = AW_DIR) {
   const prompt = `"$(cat ${q(promptFile)})"`;
@@ -21,7 +24,8 @@ export function launcher(l: Repo, wt: string, promptFile: string, awDir = AW_DIR
   const git = join(l.path, ".git");
   const own = [...(l.agent === "claude" ? [claudeHome(wt)] : []), codexHome(wt)].map((p): [string, string] => ["--allow", p]);
   const tmp = tmpHome(wt);
-  const wrap = nono ? nonoRun(l, awDir, [["--allow", wt], ["--allow-unix-socket-subtree-bind", wt], ["--allow", tmp], ["--allow-unix-socket-subtree-bind", tmp], ...own, ["--read", join(git, "objects")]], q) : [];
+  const grants: [string, string][] = [["--allow", wt], ["--allow-unix-socket-subtree-bind", wt], ["--allow", tmp], ["--allow-unix-socket-subtree-bind", tmp], ...own, ["--read", join(git, "objects")], ["--allow-file", PANE_TTY]];
+  const wrap = nono ? nonoRun(l, awDir, grants, (s) => (s === PANE_TTY ? s : q(s))) : [];
   const [env, cmd] = AGENTS[l.agent].launch(q(wt), prompt, nono);
   // gh exits if it cannot read its config dir; <ID>.gh is never created, so gh runs on defaults plus nono's GH_TOKEN.
   const gh = nono ? `export GH_CONFIG_DIR=${q(wt)}.gh\n` : "";

@@ -23,7 +23,7 @@ test("launcher: claude under nono, token read on the host, never written; the ba
   expect(s).toContain(`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-aw/oauth-token")" || exit 1\nexport CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/web/gh-1'.claude CODEX_HOME='/ws/web/gh-1'.codex CLAUDE_CODE_TMPDIR='/ws/web/gh-1'.tmpdir\n`);
   expect(s).toContain(`unset LINEAR_API_KEY\nexport TMPDIR='/ws/web/gh-1.tmpdir' TMP='/ws/web/gh-1.tmpdir' TEMP='/ws/web/gh-1.tmpdir'\n`);
   expect(s).toContain("--no-rollback-prompt");
-  expect(s).toContain(`exec nono run --no-rollback-prompt --profile '/aw/nono/aw-claude.json' --allow '/ws/web/gh-1' --allow-unix-socket-subtree-bind '/ws/web/gh-1' --allow '/ws/web/gh-1.tmpdir' --allow-unix-socket-subtree-bind '/ws/web/gh-1.tmpdir' --allow '/ws/web/gh-1.claude' --allow '/ws/web/gh-1.codex' --read '${root}/src-web/.git/objects' -- claude --permission-mode`);
+  expect(s).toContain(`exec nono run --no-rollback-prompt --profile '/aw/nono/aw-claude.json' --allow '/ws/web/gh-1' --allow-unix-socket-subtree-bind '/ws/web/gh-1' --allow '/ws/web/gh-1.tmpdir' --allow-unix-socket-subtree-bind '/ws/web/gh-1.tmpdir' --allow '/ws/web/gh-1.claude' --allow '/ws/web/gh-1.codex' --read '${root}/src-web/.git/objects' --allow-file "$(tty)" -- claude --permission-mode`);
   expect(s).toContain(`--permission-mode bypassPermissions "$(cat '/ws/web/gh-1.prompt.md')"`);
 });
 
@@ -44,7 +44,7 @@ export TMPDIR='/ws/it'\''s.tmpdir' TMP='/ws/it'\''s.tmpdir' TEMP='/ws/it'\''s.tm
   const claudeEnv = String.raw`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-aw/oauth-token")" || exit 1
 export CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CODEX_HOME='/ws/it'\''s'.codex CLAUDE_CODE_TMPDIR='/ws/it'\''s'.tmpdir
 `;
-  const nono = (a: string, own = "") => String.raw`nono run --no-rollback-prompt --profile '/aw/nono/aw-${a}.json' --allow '/ws/it'\''s' --allow-unix-socket-subtree-bind '/ws/it'\''s' --allow '/ws/it'\''s.tmpdir' --allow-unix-socket-subtree-bind '/ws/it'\''s.tmpdir' ${own}--read '/src/web/.git/objects' -- `;
+  const nono = (a: string, own = "") => String.raw`nono run --no-rollback-prompt --profile '/aw/nono/aw-${a}.json' --allow '/ws/it'\''s' --allow-unix-socket-subtree-bind '/ws/it'\''s' --allow '/ws/it'\''s.tmpdir' --allow-unix-socket-subtree-bind '/ws/it'\''s.tmpdir' ${own}--read '/src/web/.git/objects' --allow-file "$(tty)" -- `;
   const claude = String.raw`claude --permission-mode bypassPermissions "$(cat '/ws/p.md')"
 `;
   const codex = (d: string) => String.raw`codex ${d}--dangerously-bypass-hook-trust --sandbox danger-full-access --ask-for-approval never -C '/ws/it'\''s' "$(cat '/ws/p.md')"
@@ -85,7 +85,7 @@ test("starts ready tickets up to maxConcurrent", async () => {
   expect(prompt).toContain("git push origin agent/gh-1");
   const seeded = JSON.parse(readFileSync(join(root, "acme/web/gh-1.claude/.claude.json"), "utf8"));
   expect(seeded.projects).toEqual({ [realpathSync(wt)]: { hasTrustDialogAccepted: true } });
-  expect(readFileSync(join(root, "acme/web/gh-1.sh"), "utf8")).toContain(`--read '${root}/src-web/.git/objects' --`);
+  expect(readFileSync(join(root, "acme/web/gh-1.sh"), "utf8")).toContain(`--read '${root}/src-web/.git/objects' --allow-file "$(tty)" --`);
   expect(existsSync(join(root, "acme/web/gh-1.codex"))).toBe(true);
   expect(readdirSync(`${wt}.tmpdir`)).toEqual([]);
   expect(statSync(`${wt}.tmpdir`).mode & 0o777).toBe(0o700);

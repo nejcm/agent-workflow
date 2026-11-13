@@ -33,7 +33,6 @@
       "/dev/stdout",
       "/dev/stderr",
       "/dev/fd",
-      "/dev/pts",
       "/proc/self/fd"
     ],
     "read": [

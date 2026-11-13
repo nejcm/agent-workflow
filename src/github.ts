@@ -55,6 +55,7 @@ export function github(l: Source, host: string, io: Io, defaultHost: boolean, re
   };
   const skip = [l.inProgressLabel, l.inReviewLabel, l.needsHumanLabel];
   const edit = (t: Ticket, add: string, rm?: string) => write(io, ["gh", "issue", "edit", t.ref, "--repo", t.repo!, "--add-label", add, ...(rm ? ["--remove-label", rm] : [])]);
+  const create = (t: Ticket, title: string, body: string, extra: string[] = []) => write(io, ["gh", "issue", "create", "--repo", t.repo!, ...extra, "--title", title, "--body", body]);
   const comment = async (t: Ticket, body: string) => { await write(io, ["gh", "issue", "comment", t.ref, "--repo", t.repo!, "--body", `aw: ${body}`]); };
   return {
     // Excluded server-side too: claimed tickets keep the ready label and would otherwise fill the 100 limit.
@@ -83,12 +84,13 @@ export function github(l: Source, host: string, io: Io, defaultHost: boolean, re
       return cs.map((c) => ({ id: String(c.id), body: c.body ?? "", createdAt: c.createdAt ?? "", author: c.author?.login ?? undefined }));
     },
     async createPhase(parent, title, body) {
-      const url = await write(io, ["gh", "issue", "create", "--repo", parent.repo!, "--parent", parent.ref, "--title", title, "--body", body]);
+      const url = await create(parent, title, body, ["--parent", parent.ref]);
       if (io.dry) return "";
       const n = /\/issues\/(\d+)\s*$/.exec(url)?.[1];
       if (!n) throw new Error(`gh issue create: unexpected output ${url.slice(0, 200)}`);
       return n;
     },
+    createTicket: async (from, title, body) => (await create(from, title, body)).trim(),
     listPhases: async (parent) =>
       (JSON.parse(await read(io, ["gh", "api", `repos/${parent.repo}/issues/${parent.ref}/sub_issues?per_page=100`])) as any[]).map((i) => ({ ref: String(i.number), title: i.title })),
     setPhase: (parent, ref, status) =>

@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { allowedRepo, repoDir, validRepo } from "./config";
 import { deliverFeedback } from "./feedback";
+import { fileFindings } from "./findings";
 import { byPriority, canonical, findPr, github, sameRepo } from "./github";
 import { nonoRun, start, windows, winName } from "./launcher";
 import { linear } from "./linear";
@@ -143,7 +144,10 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
         const dir = repoDir(cfg, key);
         const pr = await findPr(key, t.id, io, dir);
         await step(io, `phases ${t.id}`, () => syncPhases(w, tr, io, dir, !!pr));
-        if (pr) return tr.toReview(w, pr);
+        if (pr) {
+          if (!hasLabel(t.labels, s.needsHumanLabel)) await step(io, `findings ${t.id}`, () => fileFindings(w, tr, io, dir));
+          return tr.toReview(w, pr);
+        }
         const ended = join(dir, `${t.id}.ended`);
         const win = wins.get(winName(key, t.id));
         if (win) {
@@ -171,6 +175,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
       if (win && !hasLabel(w.labels, s.needsHumanLabel)) await step(io, `stall ${t.id}`, () => checkStall(cfg, s, r, w, tr, io, dir, win, state));
       const parked = hasLabel(w.labels, s.needsHumanLabel);
       await step(io, `phases ${t.id}`, () => syncPhases(w, tr, io, dir, true));
+      if (!parked) await step(io, `findings ${t.id}`, () => fileFindings(w, tr, io, dir));
       if (r.autoMerge !== "off") await step(io, `merge ${t.id}`, () => autoMerge(cfg, r, w, tr, io, parked));
       // autoMerge looks the PR up anyway; otherwise every poll while the session lives (feedback needs the current PR), else once.
       else if (win || !existsSync(join(dir, `${t.id}.pr`))) await step(io, `pr ${t.id}`, () => findPr(key, t.id, io, dir));
@@ -222,7 +227,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
         // A double force never reads the agent-writable `locked` file, so a planted lock cannot block a done ticket.
         await write(x.io, [...GIT, "-C", r.path, "worktree", "remove", ...(r.sandbox === "nono" ? ["--force", "--force"] : []), wt]);
         // After the worktree, so a remove that fails (dirty without nono) keeps the transcripts too.
-        for (const ext of [".claude", ".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".stall", ".source"]) remove(x.io, join(dir, id + ext));
+        for (const ext of [".claude", ".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".stall", ".findings", ".source"]) remove(x.io, join(dir, id + ext));
       });
     }
   }

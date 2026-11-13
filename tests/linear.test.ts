@@ -157,8 +157,31 @@ test("linear adapter: comments parsed, author is the user email, none for a null
     { id: "c1", body: "ok", createdAt: "2026-01-01T10:00:00Z", author: "a@b.c" },
     { id: "c2", body: "bot", createdAt: "2026-01-01T11:00:00Z", author: undefined },
   ]);
-  expect(bodies[0].variables).toEqual({ id: "u-1", since: "2026-01-01T09:00:00.000Z" });
-  expect(bodies[0].query).toContain("comments(filter: { createdAt: { gt: $since } }, last: 100) { nodes { id body createdAt user { email } } }");
+  expect(bodies[0].variables).toEqual({ id: "u-1", since: "2026-01-01T09:00:00.000Z", after: null });
+  expect(bodies[0].query).toContain("comments(filter: { createdAt: { gt: $since } }, first: 100, after: $after) { nodes { id body createdAt user { email } } pageInfo { hasNextPage endCursor } }");
+});
+
+test("linear adapter: comments are read across pages, so a marker past comment 100 is seen; past 20 pages it throws", async () => {
+  const l = config({ sources: [src({ tracker: "linear", team: "ENG" })] }).sources[0]!;
+  const t = { id: "ENG-1", ref: "u-1", title: "", body: "", url: "" };
+  const afters: unknown[] = [];
+  const { io } = fakeIo();
+  let pages = 2;
+  io.fetch = (async (_url: string, init: any) => {
+    const { after } = JSON.parse(init.body).variables;
+    afters.push(after);
+    const n = afters.length;
+    const nodes = Array.from({ length: n < pages ? 100 : 1 }, (_, i) => ({ id: `c${n}-${i}`, body: n === 2 ? "aw: x\n\naw-findings aaaaaaaaaaaa" : "hi", createdAt: "", user: null }));
+    return Response.json({ data: { issue: { comments: { nodes, pageInfo: { hasNextPage: n < pages, endCursor: `p${n}` } } } } });
+  }) as any;
+  const cs = await withLinearKey(() => linear(l, "box", io, false).comments(t, 0));
+  expect(cs).toHaveLength(101);
+  expect(cs.at(-1)!.body).toContain("aw-findings aaaaaaaaaaaa");
+  expect(afters).toEqual([null, "p1"]);
+  afters.length = 0;
+  pages = 99;
+  await expect(withLinearKey(() => linear(l, "box", io, false).comments(t, 0))).rejects.toThrow("more than 2000");
+  expect(afters).toHaveLength(20);
 });
 
 test("linear adapter: park adds an ungrouped team or workspace label, fails clearly otherwise; parked reads fresh labels", async () => {

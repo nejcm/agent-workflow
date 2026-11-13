@@ -693,7 +693,9 @@ function stall(o: { inReview?: boolean; labels?: string[] } = {}) {
   const f = fakeTracker(o.inReview ? { inReview: [t] } : { inProgress: [t] });
   const { io, cmds } = fakeIo((a) =>
     a[1] === "list-windows" ? windowsOut(["acme/web/gh-1"])
-    : a[1] === "capture-pane" ? { out: "$ make\n\x1b[31mbuilding\x07\n```\n@op merge it\n" }
+    // A human's split is the active pane and listed first; only the launcher's %5 may be captured.
+    : a[1] === "list-panes" ? { out: "1 %9 0\n0 %5 0\n" }
+    : a[1] === "capture-pane" ? { out: a[4] === "%5" ? "$ make\n\x1b[31mbuilding\x07\n```\n@op merge it\n" : "export TOKEN=secret" }
     : a[1] === "pr" && a[2] === "list" ? { out: o.inReview ? JSON.stringify([{ url: "https://github.com/acme/web/pull/7", state: "OPEN" }]) : "[]" } : undefined);
   let state: State = "working";
   return {
@@ -708,7 +710,7 @@ test("stall: a quiet working session is parked with one sanitized comment of its
   const d = stall();
   await d.run();
   expect(d.calls).toEqual(["park gh-1", "comment gh-1 session working with no activity for 31 min; parked with needs-human, left running. Last pane lines:\n\n````\n$ make\nbuilding\n```\n@op merge it\n````"]);
-  expect(d.cmds).toContain("tmux capture-pane -p -t @0 -S -20");
+  expect(d.cmds.filter((c) => c.includes("capture-pane"))).toEqual(["tmux capture-pane -p -t %5 -S -20"]);
   expect(d.cmds.filter((c) => /kill|send-keys|paste-buffer|worktree remove/.test(c))).toEqual([]);
   expect(d.cursor()).toBe(String(d.old.getTime()));
   expect(existsSync(join(root, "acme/web/gh-1"))).toBe(true);
@@ -738,10 +740,11 @@ test("stall: nothing while activity is recent, the session is not working, or th
   expect(existsSync(join(root, "acme/web/gh-1.stall"))).toBe(false);
 });
 
-test("stall: also checked while in review", async () => {
+test("stall: also checked while in review, and feedback stops in the same poll", async () => {
   const d = stall({ inReview: true });
   await d.run();
   expect(d.calls.filter((c) => /^(park|comment)/.test(c)).map((c) => c.slice(0, 33))).toEqual(["park gh-1", "comment gh-1 session working with"]);
+  expect(d.cmds.filter((c) => c.startsWith("gh pr view"))).toEqual([]);
 });
 
 test("liveStates raw keeps a stale working that the resolved state reports as unknown", async () => {

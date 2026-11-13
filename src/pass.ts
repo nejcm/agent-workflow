@@ -7,7 +7,7 @@ import { nonoRun, start, windows, winName } from "./launcher";
 import { linear } from "./linear";
 import { autoMerge } from "./merge";
 import { syncPhases } from "./phases";
-import { deliverAnswer, liveStates, syncQuestion } from "./question";
+import { agentPane, deliverAnswer, liveStates, syncQuestion } from "./question";
 import { lastSay, transcript } from "./tail";
 import type { Config, Io, Repo, Source, Ticket, Tracker } from "./types";
 import { AW_DIR, diskRepos, GIT, hasLabel, mtime, put, read, remove, SAFE_ID, strip, subdirs, write } from "./util";
@@ -113,7 +113,7 @@ export function quoted(head: string, label: string, text: string | undefined) {
 export const endedNotice = (say: string | undefined) => quoted("session ended without a PR", "Last message", say);
 
 // Transcript writes, not tmux activity: the agent's spinner redraws the pane while it is busy, even when stuck.
-// `<ID>.stall` holds the activity stamp already reported, so one stall gets one comment; marked before posting.
+// `<ID>.stall` holds the activity stamp already reported, so one stall gets one comment; a failed comment retries once unparked.
 async function checkStall(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Tracker, io: Io, dir: string, win: string, state: ReturnType<typeof liveStates>) {
   const now = Date.now();
   const wt = join(dir, t.id);
@@ -124,10 +124,13 @@ async function checkStall(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Tracke
   const at = Math.max(started, (tx ? mtime(tx) : undefined) ?? 0);
   const file = join(dir, `${t.id}.stall`);
   if (!quiet(at) || (existsSync(file) && readFileSync(file, "utf8").trim() === String(at)) || !/^@\d+$/.test(win)) return;
-  const pane = await read(io, ["tmux", "capture-pane", "-p", "-t", win, "-S", "-20"]).catch(() => "");
+  // The launcher's own pane only: a human's split may hold secrets.
+  const pane = await agentPane(io, win);
+  const lines = pane ? await read(io, ["tmux", "capture-pane", "-p", "-t", pane, "-S", "-20"]).catch(() => "") : "";
   await tr.park(t);
+  t.labels = [...(t.labels ?? []), s.needsHumanLabel];
+  await tr.comment(t, quoted(`session working with no activity for ${Math.floor((now - at) / 60_000)} min; parked with ${s.needsHumanLabel}, left running`, "Last pane lines", lines));
   put(io, file, String(at));
-  await tr.comment(t, quoted(`session working with no activity for ${Math.floor((now - at) / 60_000)} min; parked with ${s.needsHumanLabel}, left running`, "Last pane lines", pane));
 }
 
 async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins: Map<string, string>, state: ReturnType<typeof liveStates>) {
@@ -164,12 +167,13 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
       const dir = repoDir(cfg, key);
       const r = cfg.repos[key]!;
       const win = wins.get(winName(key, t.id));
-      const parked = hasLabel(t.labels, s.needsHumanLabel);
+      // checkStall marks w parked, so feedback and auto-merge stop in the same poll.
+      if (win && !hasLabel(w.labels, s.needsHumanLabel)) await step(io, `stall ${t.id}`, () => checkStall(cfg, s, r, w, tr, io, dir, win, state));
+      const parked = hasLabel(w.labels, s.needsHumanLabel);
       await step(io, `phases ${t.id}`, () => syncPhases(w, tr, io, dir, true));
       if (r.autoMerge !== "off") await step(io, `merge ${t.id}`, () => autoMerge(cfg, r, w, tr, io, parked));
       // autoMerge looks the PR up anyway; otherwise every poll while the session lives (feedback needs the current PR), else once.
       else if (win || !existsSync(join(dir, `${t.id}.pr`))) await step(io, `pr ${t.id}`, () => findPr(key, t.id, io, dir));
-      if (win && !parked) await step(io, `stall ${t.id}`, () => checkStall(cfg, s, r, w, tr, io, dir, win, state));
       if (win && !parked) await step(io, `feedback ${t.id}`, () => deliverFeedback(r, w, tr, io, dir, win, () => state(r, dir, t.id)));
     }
   });

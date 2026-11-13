@@ -51,7 +51,7 @@ ticket canceled          ──► kill session, keep the session clone and its 
 
 ### Phases
 
-The default prompt has the agent plan with the `agent-orchestration` skill. It forbids any attribution (`Co-Authored-By`, "Generated with ...", emoji signatures) in commits, PR titles/bodies and ticket comments. When it splits the work into phases it writes them to `.aw/phases.json` in its worktree (git-ignored via `.aw/.gitignore`): an array of `{ key, title, body, status }`, status `todo` → `in-progress` → `done`. The agent never talks to the tracker; on every poll, for each of its in-progress and in-review tickets, `aw` mirrors the file:
+The default prompt has the agent plan with the `orchestration` skill. It forbids any attribution (`Co-Authored-By`, "Generated with ...", emoji signatures) in commits, PR titles/bodies and ticket comments. When it splits the work into phases it writes them to `.aw/phases.json` in its worktree (git-ignored via `.aw/.gitignore`): an array of `{ key, title, body, status }`, status `todo` → `in-progress` → `done`. The agent never talks to the tracker; on every poll, for each of its in-progress and in-review tickets, `aw` mirrors the file:
 
 - a new `key` → a sub-ticket of the parent titled `<ID>: <title>`, with no labels (GitHub: `gh issue create --parent`; Linear: child issue in `Todo`, same team);
 - `in-progress` → the `in-progress` label / `In Progress` state;
@@ -98,7 +98,7 @@ The same are available as `bun run setup owner/repo`, `bun run start`, `bun run 
 
 ### 1. Requirements
 
-Linux. On `PATH`: `bun`, `git`, `gh` (logged in: `gh auth status`), `tmux`, GNU `timeout` (coreutils; bounds every command `aw` runs), a systemd user manager (`systemd-run --user`, `systemctl --user`; each session runs in its own scope), and `claude` and/or `codex`. The default prompt needs the `agent-orchestration` skill installed globally in `~/.claude/skills` (`scripts/setup.sh` links that dir into both agent config dirs). For sandboxed repos, install nono:
+Linux. On `PATH`: `bun`, `git`, `gh` (logged in: `gh auth status`), `tmux`, GNU `timeout` (coreutils; bounds every command `aw` runs), a systemd user manager (`systemd-run --user`, `systemctl --user`; each session runs in its own scope), and `claude` and/or `codex`. The default prompt needs the `orchestration` skill installed globally in `~/.claude/skills` (`scripts/setup.sh` links that dir into both agent config dirs). For sandboxed repos, install nono:
 
 ```bash
 curl -fsSL https://nono.sh/install.sh | sh

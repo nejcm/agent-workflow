@@ -231,14 +231,15 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   }
   put(io, promptFile, render(readFileSync(r.prompt, "utf8"), vars));
   put(io, script, launcher(r, wt, promptFile, scopeUnit(cfg, r.key, t.id), awDir), 0o755);
+  // Claimed last, so a failed start leaves the ticket ready; `<ID>.claim` goes first, so a claim lost to an error or a crash is retried while the window lives.
+  const pending = join(dir, `${t.id}.claim`);
+  put(io, pending, new Date().toISOString());
   await write(io, ["tmux", "new-window", "-d", "-t", `=${cfg.tmuxSession}:`, "-n", winName(r.key, t.id), script]);
-  // Claimed last so a failed start leaves the ticket ready for the next poll; the open window stops a double start.
-  // claim throws only when the label or state change failed, so the ticket is still ready then.
-  try {
-    await tr.claim(t);
-  } catch (e) {
-    await write(io, ["tmux", "kill-window", "-t", `=${cfg.tmuxSession}:=${winName(r.key, t.id)}`]).catch((k) => io.log(`${t.id}: claim failed and kill-window failed (${k.message}); kill window ${winName(r.key, t.id)} by hand`));
-    await stopScope(cfg, io, r.key, t.id).catch((k) => io.log(`${t.id}: claim failed and stopping its scope failed (${k.message}); run systemctl --user kill --signal=KILL ${scopeUnit(cfg, r.key, t.id)}`));
-    throw e;
-  }
+  await claim(io, tr, pending, t).catch((e) => io.log(`${t.id}: claim failed, session left running and the claim retried next poll: ${e.message}`));
+}
+
+/** Claims a started session's ticket; `<ID>.claim` marks it unclaimed until the claim succeeds. */
+export async function claim(io: Io, tr: Tracker, file: string, t: Ticket) {
+  await tr.claim(t);
+  remove(io, file);
 }

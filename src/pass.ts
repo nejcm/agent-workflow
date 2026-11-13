@@ -4,7 +4,7 @@ import { allowedRepo, repoDir, validRepo } from "./config";
 import { deliverFeedback, feedbackFields } from "./feedback";
 import { fileFindings } from "./findings";
 import { canonical, findPr, sameRepo } from "./github";
-import { nonoRun, SLOW_SECS, start, stopScope, sweepScopes, windows, winName } from "./launcher";
+import { claim, nonoRun, SLOW_SECS, start, stopScope, sweepScopes, windows, winName } from "./launcher";
 import { autoMerge } from "./merge";
 import { syncPhases } from "./phases";
 import { agentPane, deliverAnswer, liveStates, syncQuestion } from "./question";
@@ -210,6 +210,8 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
   const wins = await windows(cfg, io);
   await step(io, "sweep scopes", () => sweepScopes(cfg, io));
 
+  const lists = new Map<string, Promise<Ticket[]>>();
+  const listReady = (x: { s: Source; tr: Tracker }) => lists.get(x.s.name) ?? lists.set(x.s.name, x.tr.listReady()).get(x.s.name)!;
   for (const r of Object.values(cfg.repos)) {
     const dir = repoDir(cfg, r.key);
     for (const id of worktreeIds(dir)) {
@@ -221,6 +223,12 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
       }
       await step(x.io, `cleanup ${r.key}/${id}`, async () => {
         const end = await x.tr.closed(id, r.key);
+        const pending = join(dir, `${id}.claim`);
+        if (!end && wins.has(winName(r.key, id)) && existsSync(pending)) {
+          // Only a ticket still ready is claimed, so a newer move by a human wins.
+          const t = (await listReady(x)).find((k) => k.id === id && allowedRepo(cfg, k.repo) === r.key);
+          if (t) await claim(x.io, x.tr, pending, { ...t, repo: r.key });
+        }
         if (!end) return;
         const w = wins.get(winName(r.key, id));
         if (end === "canceled" && !w && existsSync(join(dir, `${id}.ended`))) return;
@@ -243,7 +251,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
         // rm never follows symlinks.
         await write(x.io, ["rm", "-rf", "--one-file-system", "--", wt], undefined, SLOW_SECS);
         // After the clone, so a delete that fails keeps the transcripts too.
-        for (const ext of [".claude", ".codex", ".tmpdir", ".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".stall", ".findings", ".source"]) remove(x.io, join(dir, id + ext));
+        for (const ext of [".claude", ".codex", ".tmpdir", ".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".stall", ".findings", ".claim", ".source"]) remove(x.io, join(dir, id + ext));
       });
     }
   }
@@ -256,7 +264,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
   const total = () => [...running.values()].reduce((a, b) => a + b, 0);
   if (total() < cfg.maxConcurrent) {
     const ready: { s: Source; io: Io; tr: Tracker; t: Ticket }[] = [];
-    for (const x of srcs.values()) await step(x.io, "list ready", async () => void ready.push(...(await x.tr.listReady()).map((t) => ({ ...x, t }))));
+    for (const x of srcs.values()) await step(x.io, "list ready", async () => void ready.push(...(await listReady(x)).map((t) => ({ ...x, t }))));
     // Stable sort: equal priorities keep source order, then tracker order.
     ready.sort((a, b) => byPriority(a.t, b.t));
     for (const { s, io: sio, tr, t } of ready) {

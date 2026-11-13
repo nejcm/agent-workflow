@@ -60,7 +60,7 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
     },
     async claim(t) {
       await edit(t, l.inProgressLabel);
-      // Best-effort: once the ticket is in progress, a throw here would strand it with its session killed.
+      // Best-effort: once the ticket is in progress the claim has succeeded; a throw would only report it as failed.
       await comment(t, `picked up on ${host}`).catch((e) => io.log(`${t.id}: picked-up comment failed: ${e.message}`));
     },
     async toReview(t, prUrl) {

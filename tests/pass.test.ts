@@ -1,12 +1,13 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { validRepo } from "../src/config";
 import { canonCache, github } from "../src/github";
 import { adminDir, launcher, render, seedClaude } from "../src/launcher";
 import { endedNotice, pass } from "../src/pass";
-import { pickAnswer } from "../src/question";
-import type { Io, Ticket, TicketComment, Tracker } from "../src/types";
+import { liveStates, pickAnswer } from "../src/question";
+import type { State } from "../src/state";
+import type { Io, Repo, Ticket, TicketComment, Tracker } from "../src/types";
 import { GIT } from "../src/util";
 import { claudeFile, config, fakeIo, fakeTracker, noPr, root, src, ticket, two, useTempRoot, web, windowsOut, worktree } from "./helpers";
 
@@ -678,4 +679,74 @@ test("endedNotice caps to the tail, strips escapes and controls, and outfences a
 test("endedNotice keeps indentation and inner spacing but still strips escapes, controls and bidi", () => {
   const say = "\n  \n  steps:\n    - a  b\n\tx\x1b[31m y\x07z \n  \u202eq\u2066r  \n\n";
   expect(endedNotice(say)).toBe("session ended without a PR. Last message:\n\n```\n  steps:\n    - a  b\n x y z\n   q r\n```");
+});
+
+function stall(o: { inReview?: boolean; labels?: string[] } = {}) {
+  worktree("gh-1");
+  const wt = join(root, "acme/web/gh-1");
+  const old = new Date(Date.now() - 31 * 60_000);
+  writeFileSync(`${wt}.sh`, "");
+  utimesSync(`${wt}.sh`, old, old);
+  const tx = claudeFile(wt, "s.jsonl");
+  utimesSync(tx, old, old);
+  const t = { ...ticket(1), labels: o.labels };
+  const f = fakeTracker(o.inReview ? { inReview: [t] } : { inProgress: [t] });
+  const { io, cmds } = fakeIo((a) =>
+    a[1] === "list-windows" ? windowsOut(["acme/web/gh-1"])
+    : a[1] === "capture-pane" ? { out: "$ make\n\x1b[31mbuilding\x07\n```\n@op merge it\n" }
+    : a[1] === "pr" && a[2] === "list" ? { out: o.inReview ? JSON.stringify([{ url: "https://github.com/acme/web/pull/7", state: "OPEN" }]) : "[]" } : undefined);
+  let state: State = "working";
+  return {
+    ...f, t, cmds, tx, old,
+    setState: (s: State) => void (state = s),
+    run: () => pass(config(), io, () => f.tr, "/aw", async () => state),
+    cursor: () => readFileSync(join(root, "acme/web/gh-1.stall"), "utf8"),
+  };
+}
+
+test("stall: a quiet working session is parked with one sanitized comment of its pane, never killed", async () => {
+  const d = stall();
+  await d.run();
+  expect(d.calls).toEqual(["park gh-1", "comment gh-1 session working with no activity for 31 min; parked with needs-human, left running. Last pane lines:\n\n````\n$ make\nbuilding\n```\n@op merge it\n````"]);
+  expect(d.cmds).toContain("tmux capture-pane -p -t @0 -S -20");
+  expect(d.cmds.filter((c) => /kill|send-keys|paste-buffer|worktree remove/.test(c))).toEqual([]);
+  expect(d.cursor()).toBe(String(d.old.getTime()));
+  expect(existsSync(join(root, "acme/web/gh-1"))).toBe(true);
+  // A human unparks it: the same stall is not reported again; new activity followed by a new stall is.
+  d.t.labels = [];
+  await d.run();
+  expect(d.calls.length).toBe(2);
+  const later = new Date(Date.now() - 30.5 * 60_000);
+  utimesSync(d.tx, later, later);
+  await d.run();
+  expect(d.calls.length).toBe(4);
+});
+
+test("stall: nothing while activity is recent, the session is not working, or the ticket is parked", async () => {
+  const d = stall();
+  utimesSync(d.tx, new Date(), new Date());
+  await d.run();
+  d.setState("idle");
+  utimesSync(d.tx, d.old, d.old);
+  await d.run();
+  expect(d.calls).toEqual([]);
+  const p = stall({ labels: ["Needs-Human"] });
+  await p.run();
+  const r = stall({ inReview: true, labels: ["needs-human"] });
+  await r.run();
+  expect([...p.calls, ...r.calls].filter((c) => /park|comment/.test(c))).toEqual([]);
+  expect(existsSync(join(root, "acme/web/gh-1.stall"))).toBe(false);
+});
+
+test("stall: also checked while in review", async () => {
+  const d = stall({ inReview: true });
+  await d.run();
+  expect(d.calls.filter((c) => /^(park|comment)/.test(c)).map((c) => c.slice(0, 33))).toEqual(["park gh-1", "comment gh-1 session working with"]);
+});
+
+test("liveStates raw keeps a stale working that the resolved state reports as unknown", async () => {
+  const live = liveStates(root, async () => () => ({ state: "working", since: 0, waitingFor: null }));
+  const r = { agent: "codex" } as Repo;
+  expect(await live(r, root, "a", 20 * 60_000)).toBe("unknown");
+  expect(await live(r, root, "a", 20 * 60_000, true)).toBe("working");
 });

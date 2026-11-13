@@ -32,6 +32,8 @@ export function parseConfig(raw: any, base: string): Config {
   check(NAME.test(tmuxSession), "tmuxSession: [a-z0-9-]");
   const maxConcurrent = raw.maxConcurrent ?? 2;
   check(posInt(maxConcurrent), "maxConcurrent: positive integer");
+  const stallMinutes = raw.stallMinutes ?? 30;
+  check(posInt(stallMinutes), "stallMinutes: positive integer");
   const reposRoot = expand(raw.reposRoot ?? "~/agent-repos", base);
   check(raw.lanes === undefined, "lanes: replaced by sources + repos + defaults (see README)");
   const defaults = raw.defaults ?? {};
@@ -108,7 +110,7 @@ export function parseConfig(raw: any, base: string): Config {
   const names = sources.map((s) => s.name);
   check(new Set(names).size === names.length, "source names must be unique");
   if (errs.length) throw new Error(`invalid config:\n  ${errs.join("\n  ")}`);
-  return { host: raw.host, defaultHost, pollIntervalMs, workspaceRoot: expand(raw.workspaceRoot ?? "~/agent-ws", base), reposRoot, tmuxSession, maxConcurrent, repos, sources };
+  return { host: raw.host, defaultHost, pollIntervalMs, workspaceRoot: expand(raw.workspaceRoot ?? "~/agent-ws", base), reposRoot, tmuxSession, maxConcurrent, stallMinutes, repos, sources };
 }
 
 export const repoDir = (cfg: Config, key: string) => join(cfg.workspaceRoot, key);

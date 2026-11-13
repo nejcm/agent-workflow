@@ -8,9 +8,9 @@ import { linear } from "./linear";
 import { autoMerge } from "./merge";
 import { syncPhases } from "./phases";
 import { deliverAnswer, liveStates, syncQuestion } from "./question";
-import { lastSay } from "./tail";
+import { lastSay, transcript } from "./tail";
 import type { Config, Io, Repo, Source, Ticket, Tracker } from "./types";
-import { AW_DIR, diskRepos, GIT, hasLabel, mtime, put, remove, SAFE_ID, strip, subdirs, write } from "./util";
+import { AW_DIR, diskRepos, GIT, hasLabel, mtime, put, read, remove, SAFE_ID, strip, subdirs, write } from "./util";
 
 const sourceOf = (dir: string, id: string) => {
   const f = join(dir, `${id}.source`);
@@ -101,13 +101,33 @@ function lastMessage(wt: string, agent: Repo["agent"]) {
 
 const MAX_SAY = 1500;
 
-/** The ended-without-PR comment; the session's last message is capped, sanitized and fenced so it cannot close the fence. */
-export function endedNotice(say: string | undefined) {
-  const cps = [...(say ?? "").split("\n").map((l) => strip(l).trimEnd()).join("\n").replace(/^\s*\n/, "").trimEnd()];
-  if (!cps.length) return "session ended without a PR";
-  const text = (cps.length > MAX_SAY ? "…" : "") + cps.slice(-MAX_SAY).join("");
-  const fence = "`".repeat(Math.max(3, ...(text.match(/`+/g) ?? []).map((r) => r.length + 1)));
-  return `session ended without a PR. Last message:\n\n${fence}\n${text}\n${fence}`;
+/** `head`, then untrusted `text` as `label`: capped, sanitized and fenced so it cannot close the fence; just `head` when empty. */
+export function quoted(head: string, label: string, text: string | undefined) {
+  const cps = [...(text ?? "").split("\n").map((l) => strip(l).trimEnd()).join("\n").replace(/^\s*\n/, "").trimEnd()];
+  if (!cps.length) return head;
+  const body = (cps.length > MAX_SAY ? "…" : "") + cps.slice(-MAX_SAY).join("");
+  const fence = "`".repeat(Math.max(3, ...(body.match(/`+/g) ?? []).map((r) => r.length + 1)));
+  return `${head}. ${label}:\n\n${fence}\n${body}\n${fence}`;
+}
+
+export const endedNotice = (say: string | undefined) => quoted("session ended without a PR", "Last message", say);
+
+// Transcript writes, not tmux activity: the agent's spinner redraws the pane while it is busy, even when stuck.
+// `<ID>.stall` holds the activity stamp already reported, so one stall gets one comment; marked before posting.
+async function checkStall(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Tracker, io: Io, dir: string, win: string, state: ReturnType<typeof liveStates>) {
+  const now = Date.now();
+  const wt = join(dir, t.id);
+  const started = mtime(`${wt}.sh`) ?? mtime(wt) ?? now;
+  const quiet = (since: number) => now - since >= cfg.stallMinutes * 60_000;
+  if (!quiet(started) || (await state(r, dir, t.id, now, true)) !== "working") return;
+  const tx = transcript(wt, r.agent, io.home, started);
+  const at = Math.max(started, (tx ? mtime(tx) : undefined) ?? 0);
+  const file = join(dir, `${t.id}.stall`);
+  if (!quiet(at) || (existsSync(file) && readFileSync(file, "utf8").trim() === String(at)) || !/^@\d+$/.test(win)) return;
+  const pane = await read(io, ["tmux", "capture-pane", "-p", "-t", win, "-S", "-20"]).catch(() => "");
+  await tr.park(t);
+  put(io, file, String(at));
+  await tr.comment(t, quoted(`session working with no activity for ${Math.floor((now - at) / 60_000)} min; parked with ${s.needsHumanLabel}, left running`, "Last pane lines", pane));
 }
 
 async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins: Map<string, string>, state: ReturnType<typeof liveStates>) {
@@ -124,6 +144,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
         const ended = join(dir, `${t.id}.ended`);
         const win = wins.get(winName(key, t.id));
         if (win) {
+          if (!hasLabel(t.labels, s.needsHumanLabel)) await step(io, `stall ${t.id}`, () => checkStall(cfg, s, cfg.repos[key]!, w, tr, io, dir, win, state));
           await step(io, `question ${t.id}`, () => syncQuestion(w, tr, io, dir, join(dir, t.id)));
           return step(io, `answer ${t.id}`, () => deliverAnswer(w, tr, io, dir, cfg.repos[key]!.feedbackAuthors, win, () => state(cfg.repos[key]!, dir, t.id)));
         }
@@ -148,6 +169,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
       if (r.autoMerge !== "off") await step(io, `merge ${t.id}`, () => autoMerge(cfg, r, w, tr, io, parked));
       // autoMerge looks the PR up anyway; otherwise every poll while the session lives (feedback needs the current PR), else once.
       else if (win || !existsSync(join(dir, `${t.id}.pr`))) await step(io, `pr ${t.id}`, () => findPr(key, t.id, io, dir));
+      if (win && !parked) await step(io, `stall ${t.id}`, () => checkStall(cfg, s, r, w, tr, io, dir, win, state));
       if (win && !parked) await step(io, `feedback ${t.id}`, () => deliverFeedback(r, w, tr, io, dir, win, () => state(r, dir, t.id)));
     }
   });
@@ -196,7 +218,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
         // A double force never reads the agent-writable `locked` file, so a planted lock cannot block a done ticket.
         await write(x.io, [...GIT, "-C", r.path, "worktree", "remove", ...(r.sandbox === "nono" ? ["--force", "--force"] : []), wt]);
         // After the worktree, so a remove that fails (dirty without nono) keeps the transcripts too.
-        for (const ext of [".claude", ".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".source"]) remove(x.io, join(dir, id + ext));
+        for (const ext of [".claude", ".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".stall", ".source"]) remove(x.io, join(dir, id + ext));
       });
     }
   }

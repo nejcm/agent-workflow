@@ -232,9 +232,9 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
         }
         const wt = join(dir, id);
         if (!lstatSync(join(wt, ".git"), { throwIfNoEntry: false })?.isDirectory()) throw new Error(`${wt}/.git is not a directory; left in place`);
-        // The session controls its .git (config, filters, commondir), so git checks it inside the sandbox, read-only; aw then deletes without git.
+        // The session controls its .git (config, filters, commondir), so git checks it sandboxed: read-only, no network, no credentials; aw then deletes without git.
         // A planted filter can block git; the runner's deadline kills its whole process group.
-        const box = r.sandbox === "nono" ? nonoRun(r, awDir, [["--read", wt], ["--read", join(r.path, ".git", "objects")]]) : [];
+        const box = r.sandbox === "nono" ? nonoRun("aw-check", awDir, [["--read", wt], ["--read", join(r.path, ".git", "objects")]]) : [];
         // A fresh clone has no tags (--revision, tagOpt=--no-tags), so any tag, stash or note is the session's own.
         const checks = [["status", "--porcelain", "--ignore-submodules=none"], ["log", "--format=%h", "--branches", "--not", "--remotes"], ["for-each-ref", "--format=%(refname)", "refs/tags", "refs/stash", "refs/notes"]];
         for (const c of checks) if ((await write(x.io, [...box, ...GIT, "-C", wt, ...c])).trim()) throw new Error(`${wt} has uncommitted, untracked or unpushed work; left in place`);

@@ -478,7 +478,7 @@ test("dry-run logs side effects and executes none", async () => {
   await pass(c, io, () => tr, "/aw");
   expect(cmds.every((x) => /has-session|list-windows|rev-parse|remote get-url|gh pr list|gh repo view/.test(x))).toBe(true);
   expect(logs.some((l) => l.includes("dry: tmux new-session -d -s aw"))).toBe(true);
-  expect(logs.some((l) => l.startsWith("[web] dry: nono run ") && l.endsWith(`-C ${root}/acme/web/gh-5 status --porcelain --ignore-submodules=none`))).toBe(true);
+  expect(logs.some((l) => l.startsWith("[web] dry: nono run --no-rollback-prompt --profile /aw/nono/aw-check.json ") && l.endsWith(`-C ${root}/acme/web/gh-5 status --porcelain --ignore-submodules=none`))).toBe(true);
   expect(logs.some((l) => l.startsWith("[web] dry: nono run ") && l.endsWith(`-C ${root}/acme/web/gh-5 log --format=%h --branches --not --remotes`))).toBe(true);
   expect(logs.some((l) => l.startsWith("[web] dry: nono run ") && l.endsWith(`-C ${root}/acme/web/gh-5 for-each-ref --format=%(refname) refs/tags refs/stash refs/notes`))).toBe(true);
   expect(logs).toContain(`[web] dry: rm -rf --one-file-system -- ${root}/acme/web/gh-5`);

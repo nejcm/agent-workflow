@@ -1,0 +1,40 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nolabs-ai/nono/main/crates/nono-cli/data/nono-profile.schema.json",
+  "meta": {
+    "name": "aw-check",
+    "version": "0.1.0",
+    "description": "aw: git's cleanup checks of a session clone, with no network, no credentials and no writes"
+  },
+  "extends": "default",
+  "groups": {
+    "include": [
+      "git_config"
+    ],
+    "exclude": [
+      "system_write_linux"
+    ]
+  },
+  "linux": {
+    "af_unix_mediation": "pathname"
+  },
+  "workdir": {
+    "access": "none"
+  },
+  "filesystem": {
+    "write": [
+      "/dev/null"
+    ]
+  },
+  "environment": {
+    "allow_vars": [
+      "PATH",
+      "HOME",
+      "LANG",
+      "LC_*",
+      "TZ"
+    ]
+  },
+  "network": {
+    "block": true
+  }
+}

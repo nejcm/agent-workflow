@@ -11,8 +11,8 @@ export const render = (tpl: string, vars: Record<string, string>) => tpl.replace
 export const SLOW_SECS = 900;
 const q = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 
-export const nonoRun = (l: Repo, awDir: string, grants: [string, string][], quote = (s: string) => s) =>
-  ["nono", "run", "--no-rollback-prompt", "--profile", quote(join(awDir, "nono", `aw-${l.agent}.json`)), ...grants.flatMap(([flag, path]) => [flag, quote(path)]), "--"];
+export const nonoRun = (profile: string, awDir: string, grants: [string, string][], quote = (s: string) => s) =>
+  ["nono", "run", "--no-rollback-prompt", "--profile", quote(join(awDir, "nono", `${profile}.json`)), ...grants.flatMap(([flag, path]) => [flag, quote(path)]), "--"];
 
 /** The session's systemd user scope; ':' is in no repo key or ticket id, so names never collide. */
 export const scopeUnit = (key: string, id: string) => `aw-${key.replace("/", ":")}:${id}.scope`;
@@ -34,7 +34,7 @@ export function launcher(l: Repo, wt: string, promptFile: string, awDir = AW_DIR
   const own = [...(l.agent === "claude" ? [claudeHome(wt)] : []), codexHome(wt)].map((p): [string, string] => ["--allow", p]);
   const tmp = tmpHome(wt);
   const grants: [string, string][] = [["--allow", wt], ["--allow-unix-socket-subtree-bind", wt], ["--allow", tmp], ["--allow-unix-socket-subtree-bind", tmp], ...own, ["--read", join(git, "objects")], ["--allow-file", PANE_TTY]];
-  const wrap = nono ? nonoRun(l, awDir, grants, (s) => (s === PANE_TTY ? s : q(s))) : [];
+  const wrap = nono ? nonoRun(`aw-${l.agent}`, awDir, grants, (s) => (s === PANE_TTY ? s : q(s))) : [];
   const [env, cmd] = AGENTS[l.agent].launch(q(wt), prompt, nono);
   // gh exits if it cannot read its config dir; <ID>.gh is never created, so gh runs on defaults plus nono's GH_TOKEN.
   // A private XDG cache: the host's ~/.cache (Claude's claude-cli-nodejs included) stays out of the sandbox.

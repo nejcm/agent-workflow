@@ -11,8 +11,8 @@ export interface Finding {
 export const MAX_FINDINGS = 5;
 const MAX_FINDINGS_BYTES = 64 * 1024;
 
-// Zero-width space after `@` so filing never pings a user or team.
-const unmention = (s: string) => s.replace(/(?<!\w)@(?=\w)/g, "@​");
+// Zero-width space after `@`, and inside linear.app (Linear turns profile URLs into mentions), so filing never pings anyone.
+const unmention = (s: string) => s.replace(/(?<!\w)@(?=\w)/g, "@​").replace(/linear(?=\.app)/gi, "$&​");
 
 /** Validates the agent-written findings file and sanitizes each entry; it is untrusted, so a wrong shape throws. */
 export function parseFindings(raw: string): Finding[] {
@@ -27,39 +27,49 @@ export function parseFindings(raw: string): Finding[] {
   });
 }
 
-function readFiled(file: string): string[] {
+// url null: the create failed or its result was lost; posted: the linking comment listed it.
+interface Filed {
+  h: string;
+  title: string;
+  url: string | null;
+  posted: boolean;
+}
+
+function readFiled(file: string): Filed[] {
   if (!existsSync(file)) return [];
   const a = JSON.parse(readFileSync(file, "utf8"));
-  if (!Array.isArray(a) || !a.every((h) => typeof h === "string")) throw new Error(`${file}: invalid`);
-  return a;
+  const ok = (r: any) => typeof r === "string" || (r && typeof r.h === "string" && typeof r.title === "string" && (r.url === null || typeof r.url === "string") && typeof r.posted === "boolean");
+  if (!Array.isArray(a) || a.length > MAX_FINDINGS || !a.every(ok)) throw new Error(`${file}: invalid`);
+  // Older sidecars hold bare hashes, already linked.
+  return a.map((r) => (typeof r === "string" ? { h: r, title: "", url: "", posted: true } : r));
 }
 
 const hashOf = (f: Finding) => createHash("sha256").update(`${f.title}\n${f.body}`).digest("hex");
 
-// Each hash is recorded before its ticket is created: a crash loses a finding rather than filing it twice.
+// Each entry is recorded before its create and never removed: a crash or lost response loses a finding rather than filing it twice.
 export async function fileFindings(t: Ticket, tr: Tracker, io: Io, dir: string) {
-  const raw = readAw(join(dir, t.id), "findings.json", MAX_FINDINGS_BYTES);
-  if (raw === undefined) return;
   const file = join(dir, `${t.id}.findings`);
   const filed = readFiled(file);
-  const links: string[] = [];
   try {
-    for (const f of parseFindings(raw)) {
+    const raw = readAw(join(dir, t.id), "findings.json", MAX_FINDINGS_BYTES);
+    for (const f of raw === undefined ? [] : parseFindings(raw)) {
       const h = hashOf(f);
-      if (filed.includes(h)) continue;
+      if (filed.some((r) => r.h === h)) continue;
       if (filed.length >= MAX_FINDINGS) return io.log(`findings ${t.id}: ${MAX_FINDINGS} already filed, rest ignored`);
-      filed.push(h);
+      const r: Filed = { h, title: f.title, url: null, posted: false };
+      filed.push(r);
       put(io, file, JSON.stringify(filed));
       const body = `${f.body}\n\n---\nFiled by aw from the agent session on ${t.id} (${t.url}): agent-written, not reviewed by a human.`.trimStart();
-      try {
-        links.push(`- ${await tr.createTicket(t, f.title, body)} ${f.title}`);
-      } catch (e) {
-        filed.pop();
-        put(io, file, JSON.stringify(filed));
-        throw e;
-      }
+      r.url = await tr.createTicket(t, f.title, body);
+      put(io, file, JSON.stringify(filed));
     }
   } finally {
-    if (links.length) await tr.comment(t, `out-of-scope findings from this session, filed as new tickets (not picked up automatically):\n${links.join("\n")}`);
+    const pending = filed.filter((r) => !r.posted);
+    if (pending.length) {
+      const lines = pending.map((r) => (r.url ? `- ${r.url} ${r.title}` : `- not filed (create failed): ${r.title}`));
+      await tr.comment(t, `out-of-scope findings from this session, filed as new tickets (not picked up automatically):\n${lines.join("\n")}`);
+      for (const r of pending) r.posted = true;
+      put(io, file, JSON.stringify(filed));
+    }
   }
 }

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileFindings, parseFindings } from "../src/findings";
 import { github } from "../src/github";
@@ -47,17 +47,53 @@ test("findings: at most 5 per ticket for the whole session", async () => {
   expect(logs.some((l) => l.includes("findings gh-1: 5 already filed"))).toBe(true);
 });
 
-test("findings: a failed create is retried next time, not marked filed", async () => {
+const HEAD = "comment gh-1 out-of-scope findings from this session, filed as new tickets (not picked up automatically):\n";
+const sidecar = () => JSON.parse(readFileSync(join(dir(), "gh-1.findings"), "utf8"));
+
+test("findings: a create that fails after the issue was made is never retried and is listed as not filed", async () => {
   const { tr, calls } = fakeTracker({});
   const create = tr.createTicket;
-  tr.createTicket = async () => Promise.reject(new Error("down"));
+  tr.createTicket = async (...a) => (await create(...a), Promise.reject(new Error("response lost")));
   const { io } = fakeIo();
   writeFindings("gh-1", [f(1)]);
-  await expect(fileFindings(ticket(1), tr, io, dir())).rejects.toThrow("down");
-  expect(JSON.parse(readFileSync(join(dir(), "gh-1.findings"), "utf8"))).toEqual([]);
+  await expect(fileFindings(ticket(1), tr, io, dir())).rejects.toThrow("response lost");
   tr.createTicket = create;
   await fileFindings(ticket(1), tr, io, dir());
   expect(calls.filter((c) => c.startsWith("file"))).toHaveLength(1);
+  expect(calls.filter((c) => c.startsWith("comment"))).toEqual([`${HEAD}- not filed (create failed): Bug 1`]);
+  expect(sidecar()).toEqual([{ h: expect.any(String), title: "Bug 1", url: null, posted: true }]);
+});
+
+test("findings: a failed linking comment is retried until it posts, even after a crash or with the file gone", async () => {
+  const { tr, calls } = fakeTracker({});
+  const comment = tr.comment;
+  tr.comment = async () => Promise.reject(new Error("down"));
+  const { io } = fakeIo();
+  writeFindings("gh-1", [f(1)]);
+  await expect(fileFindings(ticket(1), tr, io, dir())).rejects.toThrow("down");
+  expect(sidecar()).toEqual([{ h: expect.any(String), title: "Bug 1", url: "https://x/new-1", posted: false }]);
+  tr.comment = comment;
+  await fileFindings(ticket(1), tr, io, dir());
+  await fileFindings(ticket(1), tr, io, dir());
+  expect(calls.filter((c) => c.startsWith("comment"))).toEqual([`${HEAD}- https://x/new-1 Bug 1`]);
+
+  // A crash between create and comment leaves the same unposted record; findings.json may be gone by the next poll.
+  writeFileSync(join(dir(), "gh-1.findings"), JSON.stringify([{ h: "x", title: "Bug 2", url: "https://x/9", posted: false }]));
+  rmSync(join(dir(), "gh-1/.aw/findings.json"));
+  await fileFindings(ticket(1), tr, io, dir());
+  expect(calls.filter((c) => c.startsWith("comment")).at(-1)).toBe(`${HEAD}- https://x/9 Bug 2`);
+  expect(calls.filter((c) => c.startsWith("file"))).toHaveLength(1);
+});
+
+test("findings: a legacy sidecar of bare hashes counts as filed and linked", async () => {
+  const { tr, calls } = fakeTracker({});
+  const { io } = fakeIo();
+  writeFindings("gh-1", [f(1)]);
+  await fileFindings(ticket(1), tr, io, dir());
+  writeFileSync(join(dir(), "gh-1.findings"), JSON.stringify(sidecar().map((r: { h: string }) => r.h)));
+  calls.length = 0;
+  await fileFindings(ticket(1), tr, io, dir());
+  expect(calls).toEqual([]);
 });
 
 test("findings: malformed or oversized input files nothing; text is capped, stripped and mentions neutralized", async () => {
@@ -68,6 +104,8 @@ test("findings: malformed or oversized input files nothing; text is capped, stri
   expect(x!.title.startsWith("@​alice and @​org/team t")).toBe(true);
   expect(x!.body.startsWith("hi @​bob, mail a@b.com\n line two\n")).toBe(true);
   expect(x!.body).toHaveLength(4000);
+  const [l] = parseFindings(JSON.stringify([{ title: "see https://Linear.app/acme/profiles/bob", body: "[x](https://linear.app/acme/profiles/bob) linear.app/acme/profiles/eve" }]));
+  expect(l).toEqual({ title: "see https://Linear\u200b.app/acme/profiles/bob", body: "[x](https://linear\u200b.app/acme/profiles/bob) linear\u200b.app/acme/profiles/eve" });
 
   const { tr, calls } = fakeTracker({});
   const { io } = fakeIo();

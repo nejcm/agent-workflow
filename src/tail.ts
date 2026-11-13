@@ -226,9 +226,11 @@ export async function tail(cfg: Config, target: string, n: number, follow: boole
     return r.events;
   };
   for (const e of next().slice(-n)) print(e);
-  // A gone or unreadable newest keeps the current one rather than replaying it from the start later.
+  // Only a transcript newer than the current one's last write: a gone current one must not send it back to an older one.
+  let at = mtime(path) ?? 0;
   while (follow && (await wait())) {
-    path = transcript(wt, cfg.repos[key]?.agent, home) ?? path;
+    path = transcript(wt, cfg.repos[key]?.agent, home, at) ?? path;
+    at = mtime(path) ?? at;
     for (const e of next()) print(e);
   }
 }

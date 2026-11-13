@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { resolve } from "node:path";
-import { parseArgs } from "../aw";
+import { parseArgs, spawnRun } from "../aw";
 
 test("parseArgs accepts known commands and flags", () => {
   expect(parseArgs(["status", "--json"])).toMatchObject({ cmd: "status", interval: 2, n: 20, path: resolve("aw.json") });
@@ -36,3 +36,40 @@ test("parseArgs rejects unknown flags, stray args and out-of-range numbers", () 
   ])
     expect(parseArgs(argv)).toBeUndefined();
 });
+
+test("spawnRun kills the whole process group at the deadline and keeps output", async () => {
+  const mark = `${10_000 + (process.pid % 10_000)}.25`;
+  const t0 = performance.now();
+  const r = await spawnRun(["sh", "-c", `sleep ${mark} & echo partial; sleep ${mark}`], undefined, 1);
+  expect(performance.now() - t0).toBeLessThan(4000);
+  expect(r).toMatchObject({ code: 124, out: "partial\n", err: `sh -c sleep ${mark} & echo partial; sleep ${mark} timed out after 1s` });
+  expect(Bun.spawnSync(["pgrep", "-f", `sleep ${mark}`]).exitCode).toBe(1);
+});
+
+test("spawnRun leaves normal commands unchanged", async () => {
+  expect(await spawnRun(["sh", "-c", "echo out; echo err >&2; exit 3"])).toEqual({ code: 3, out: "out\n", err: "err\n" });
+});
+
+test("spawnRun kills a TERM-ignoring grandchild that holds the pipes", async () => {
+  const mark = `${10_000 + (process.pid % 10_000)}.75`;
+  const t0 = performance.now();
+  const r = await spawnRun(["sh", "-c", `(trap '' TERM; sleep ${mark}) & echo partial; sleep ${mark}`], undefined, 1);
+  expect(performance.now() - t0).toBeLessThan(4000);
+  expect(r).toMatchObject({ code: 124, out: "partial\n" });
+  expect(Bun.spawnSync(["pgrep", "-f", `sleep ${mark}`]).exitCode).toBe(1);
+});
+
+test("spawnRun does not wait on a background child that a finished command left holding the pipes", async () => {
+  const mark = `${10_000 + (process.pid % 10_000)}.5`;
+  const t0 = performance.now();
+  expect(await spawnRun(["sh", "-c", `sleep ${mark} & echo partial; exit 0`])).toEqual({ code: 0, out: "partial\n", err: "" });
+  expect(performance.now() - t0).toBeLessThan(2000);
+  expect(Bun.spawnSync(["pgrep", "-f", `sleep ${mark}`]).exitCode).toBe(1);
+});
+
+test("spawnRun gives up on output held open outside its group", async () => {
+  const mark = `${10_000 + (process.pid % 10_000)}.6`;
+  const r = await spawnRun(["sh", "-c", `setsid sleep ${mark} & sleep 0.3; echo partial; exit 0`]);
+  Bun.spawnSync(["pkill", "-f", `sleep ${mark}`]);
+  expect(r).toMatchObject({ code: 1, err: `sh -c setsid sleep ${mark} & sleep 0.3; echo partial; exit 0 exited 0 but left its output open` });
+}, 10_000);

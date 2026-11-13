@@ -81,7 +81,7 @@ test("feedback: failing CI and conflicts once per head SHA, with the log tail; n
   expect(d.file()).toContain(`<failed-check name="test" url="${fail.detailsUrl}"/>`);
   expect(d.file()).toContain("line 20\n");
   expect(d.file()).not.toContain("line 19\n");
-  expect(d.cmds).toContain('sh -c timeout 60 gh run view "$1" --repo "$2" --log-failed | tail -n 80 sh 42 acme/web');
+  expect(d.cmds).toContain('sh -c gh run view "$1" --repo "$2" --log-failed | tail -n 80 sh 42 acme/web');
   expect(d.cmds.some((c) => c.startsWith("gh api"))).toBe(false);
   expect(d.cmds).toContain("gh pr view 7 --repo acme/web --json state,baseRefName,headRefOid,mergeStateStatus,statusCheckRollup");
   await d.run();

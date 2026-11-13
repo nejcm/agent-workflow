@@ -7,6 +7,8 @@ import { AW_DIR, GIT, inAw, put, remove, write } from "./util";
 
 export const render = (tpl: string, vars: Record<string, string>) => tpl.replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? m);
 
+// Clone, fetch and checkout scale with repo size; everything else gets the runner's 60s default.
+const SLOW_SECS = 900;
 const q = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 
 export const nonoRun = (l: Repo, awDir: string, grants: [string, string][], quote = (s: string) => s) =>
@@ -58,7 +60,7 @@ async function ensureClone(cfg: Config, io: Io, r: Repo) {
     return;
   }
   const tmp = `${r.path}.tmp-${process.pid}-${Date.now()}`;
-  await write(io, ["gh", "repo", "clone", r.key, tmp]);
+  await write(io, ["gh", "repo", "clone", r.key, tmp], undefined, SLOW_SECS);
   io.log(`${io.dry ? "dry: " : ""}mv ${tmp} ${r.path}`);
   if (!io.dry) renameSync(tmp, r.path);
 }
@@ -96,11 +98,11 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   if (r.agent === "claude") seedClaude(io, claudeHome(wt), existsSync(r.path) ? realpathSync(r.path) : r.path);
   put(io, join(dir, `${t.id}.source`), s.name);
   remove(io, join(dir, `${t.id}.ended`));
-  await write(io, [...GIT, "-C", r.path, "fetch", "origin", r.baseBranch]);
+  await write(io, [...GIT, "-C", r.path, "fetch", "origin", r.baseBranch], undefined, SLOW_SECS);
   if (existsSync(wt)) io.log(`reuse ${wt}`);
   else {
     const hasBranch = (await io.run([...GIT, "-C", r.path, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`])).code === 0;
-    await write(io, [...GIT, "-C", r.path, "worktree", "add", wt, ...(hasBranch ? [branch] : ["-b", branch, `origin/${r.baseBranch}`])]);
+    await write(io, [...GIT, "-C", r.path, "worktree", "add", wt, ...(hasBranch ? [branch] : ["-b", branch, `origin/${r.baseBranch}`])], undefined, SLOW_SECS);
   }
   const vars = { id: t.id, title: t.title, body: t.body, url: t.url, branch, base: r.baseBranch, testCmd: r.testCmd, repo: r.key };
   io.log(`${io.dry ? "dry: " : ""}write ${join(wt, ".aw", ".gitignore")}`);

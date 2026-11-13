@@ -75,8 +75,7 @@ export function fakeIo(respond: (argv: string[]) => { code?: number; out?: strin
     home: root,
     fetch: (() => Promise.reject(new Error("no network"))) as any,
     log: (m) => logs.push(m),
-    run: async (timed) => {
-      const full = timed[0] === "timeout" ? timed.slice(4) : timed;
+    run: async (full) => {
       if (full[0] === "git" && full.slice(0, GIT.length).join("\0") !== GIT.join("\0")) throw new Error(`git without the GIT prefix: ${full.join(" ")}`);
       const argv = full[0] === "git" ? ["git", ...full.slice(GIT.length)] : full;
       cmds.push(argv.join(" "));

@@ -19,10 +19,35 @@ async function status(cfg: Config, io: Io) {
   ].join("\n");
 }
 
-const spawnRun: Run = async (argv, cwd) => {
-  const p = Bun.spawn(argv, { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-  const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
-  return { code, out, err };
+// timeout leads its own process group and still fires if aw is killed. Anything left in that group once it exits only
+// holds our pipes (e.g. a grandchild ignoring TERM), so kill it; the drain bound covers members that left the group.
+export const spawnRun: Run = async (argv, cwd, secs = 60) => {
+  const start = performance.now();
+  const cmd = argv.slice(0, 3).join(" ");
+  const p = Bun.spawn(["timeout", "-k", "5", String(secs), ...argv], { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const readers = [p.stdout.getReader(), p.stderr.getReader()];
+  const text = async (r: ReadableStreamDefaultReader<Uint8Array>) => {
+    const d = new TextDecoder();
+    let s = "";
+    for (let c = await r.read(); !c.done; c = await r.read()) s += d.decode(c.value, { stream: true });
+    return s + d.decode();
+  };
+  const output = Promise.all(readers.map(text));
+  const code = await p.exited;
+  const timedOut = (code === 124 || code === 137) && performance.now() - start >= secs * 1000;
+  try {
+    process.kill(-p.pid, "SIGKILL");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ESRCH") throw e;
+  }
+  let timer: number | undefined;
+  const drained = await Promise.race([output, new Promise<undefined>((r) => (timer = setTimeout(r, 5000)))]).finally(() => clearTimeout(timer));
+  if (!drained) {
+    for (const r of readers) r.cancel().catch(() => {});
+    return { code: code || 1, out: "", err: `${cmd} exited ${code} but left its output open` };
+  }
+  const [out, err] = drained;
+  return { code, out, err: timedOut ? `${cmd} timed out after ${secs}s ${err.trim()}`.trim() : err };
 };
 
 const USAGE = `usage: bun aw.ts <command> [--config aw.json]

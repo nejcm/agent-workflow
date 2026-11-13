@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { allowedRepo, repoDir, validRepo } from "./config";
 import { deliverFeedback } from "./feedback";
@@ -157,8 +157,9 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
         // The in-progress listing can lag a close that cleanup already acted on.
         if (hasLabel(t.labels, s.needsHumanLabel)) return;
         if (existsSync(ended)) {
-          if (warned.has(ended) || (await tr.closed(t.id, key))) return;
-          warned.add(ended);
+          const seen = `${ended}@${statSync(ended).mtimeMs}`;
+          if (warned.has(seen) || (await tr.closed(t.id, key))) return;
+          warned.add(seen);
           return io.log(`${key}/${t.id}: session ended, ticket still in progress; ${s.tracker === "linear" ? `move it to ${s.todo}` : `remove the ${s.inProgressLabel} label`} to start it again`);
         }
         if (await tr.closed(t.id, key)) return;

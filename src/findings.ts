@@ -90,17 +90,19 @@ export async function fileFindings(t: Ticket, tr: Tracker, io: Io, dir: string) 
   }
 }
 
+const LINKS = "out-of-scope findings from this session, filed as new tickets (not picked up automatically):";
+
 // The marker line lets a retry see a comment that posted though its response or the sidecar write was lost.
 async function postLinks(t: Ticket, tr: Tracker, io: Io, file: string, filed: Filed[]) {
   const seen = new Set(
-    (await tr.comments(t, 0)).filter((c) => /^\s*aw:/i.test(c.body)).flatMap((c) => [...c.body.matchAll(/^aw-findings((?: [0-9a-f]{12})+)[ \t]*$/gm)].flatMap((m) => m[1]!.trim().split(" "))),
+    (await tr.comments(t, 0)).filter((c) => c.body.trimStart().startsWith(`aw: ${LINKS}`)).flatMap((c) => [...c.body.matchAll(/^aw-findings((?: [0-9a-f]{12})+)[ \t]*$/gm)].flatMap((m) => m[1]!.trim().split(" "))),
   );
   for (const r of filed) if (seen.has(r.h.slice(0, 12))) r.posted = true;
   const pending = filed.filter((r) => !r.posted);
   if (pending.length) {
     const lines = pending.map((r) => `- ${r.url ? `${r.url} ` : "not filed (create failed): "}${unmention(clean(r.title, 120))}`);
     const marker = `aw-findings ${pending.map((r) => r.h.slice(0, 12)).join(" ")}`;
-    await tr.comment(t, `out-of-scope findings from this session, filed as new tickets (not picked up automatically):\n${lines.join("\n")}\n\n${marker}`);
+    await tr.comment(t, `${LINKS}\n${lines.join("\n")}\n\n${marker}`);
     for (const r of pending) r.posted = true;
   }
   put(io, file, JSON.stringify(filed));

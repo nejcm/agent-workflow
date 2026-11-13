@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSy
 import { join } from "node:path";
 import { validRepo } from "../src/config";
 import { canonCache, github } from "../src/github";
-import { CODEX_AUTH, codexLogin, codexRefresh, launcher, render, seedClaude, seedCodex } from "../src/launcher";
+import { authStamp, CODEX_AUTH, codexLogin, codexRefresh, launcher, render, seedClaude, seedCodex } from "../src/launcher";
 import { endedNotice, pass } from "../src/pass";
 import { liveStates, pickAnswer } from "../src/question";
 import type { State } from "../src/state";
@@ -110,10 +110,7 @@ test("codexLogin copies a fresh template login with the refresh token emptied an
   expect(readFileSync(join(root, CODEX_AUTH), "utf8")).toContain("secret-rt");
 });
 
-const stamp = () => {
-  const s = statSync(join(root, CODEX_AUTH));
-  return `${s.ino} ${Math.floor(s.mtimeMs / 1000)}`;
-};
+const stamp = () => authStamp(join(root, CODEX_AUTH));
 
 test("codexLogin refreshes a login expiring within a day on the host first, and fails when that does not help", async () => {
   login(Date.now() + 3600_000);

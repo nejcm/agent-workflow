@@ -344,7 +344,7 @@ Prove the sandbox boundaries on a throwaway repo first.
 - [ ] Inside a sandboxed session, `cat ~/.ssh/id_*`, `ls ~/Work/<other-repo>`, `ls ~/.config` fail.
 - [ ] Writing `~/.claude/CLAUDE.md`, `~/.claude/settings.json` or anything in `~/.claude-aw` fails; your CLAUDE.md, AGENTS.md and skills load.
 - [ ] `env | grep -iE 'token|key'` shows only phantom values; `LINEAR_API_KEY` is absent.
-- [ ] `git push origin agent/<ID>` and `gh pr create` work, also with an SSH `origin`.
+- [ ] `git push -u origin agent/<ID>` and `gh pr create` work, also with an SSH `origin`.
 - [ ] Sandboxed Codex reaches its backend (`chatgpt.com`, `auth.openai.com`).
 - [ ] Codex session is in the app history.
 - [ ] Inside a sandboxed session, `tmux -S /tmp/tmux-$(id -u)/default list-sessions` fails with `Permission denied`.

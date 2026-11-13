@@ -27,7 +27,8 @@ test("launcher: claude under nono, token read on the host, never written; the ba
   expect(s).toContain(`unset LINEAR_API_KEY\nexport TMPDIR='/ws/web/gh-1.tmpdir' TMP='/ws/web/gh-1.tmpdir' TEMP='/ws/web/gh-1.tmpdir'\n`);
   expect(s).toContain("--no-rollback-prompt");
   expect(s).toContain(`exec systemd-run --user --scope --quiet --collect --unit '${unit("gh-1")}' -- nono run --no-rollback-prompt --profile '/aw/nono/aw-claude.json' --allow '/ws/web/gh-1' --allow-unix-socket-subtree-bind '/ws/web/gh-1' --allow '/ws/web/gh-1.tmpdir' --allow-unix-socket-subtree-bind '/ws/web/gh-1.tmpdir' --allow '/ws/web/gh-1.claude' --allow '/ws/web/gh-1.codex' --read '${root}/src-web/.git/objects' -- claude --permission-mode`);
-  expect(s).toContain(`--permission-mode bypassPermissions "$(cat '/ws/web/gh-1.prompt.md')"`);
+  expect(s).toContain(`--permission-mode bypassPermissions --settings '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":`);
+  expect(s).toContain(`"asyncRewake":true,"timeout":2147483}]}]}}' "$(cat '/ws/web/gh-1.prompt.md')"`);
 });
 
 test("launcher: codex without sandbox keeps the daemon", () => {
@@ -48,7 +49,7 @@ export TMPDIR='/ws/it'\''s.tmpdir' TMP='/ws/it'\''s.tmpdir' TEMP='/ws/it'\''s.tm
 export CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CODEX_HOME='/ws/it'\''s'.codex CLAUDE_CODE_TMPDIR='/ws/it'\''s'.tmpdir
 `;
   const nono = (a: string, own = "") => String.raw`nono run --no-rollback-prompt --profile '/aw/nono/aw-${a}.json' --allow '/ws/it'\''s' --allow-unix-socket-subtree-bind '/ws/it'\''s' --allow '/ws/it'\''s.tmpdir' --allow-unix-socket-subtree-bind '/ws/it'\''s.tmpdir' ${own}--read '/src/web/.git/objects' -- `;
-  const claude = String.raw`claude --permission-mode bypassPermissions "$(cat '/ws/p.md')"
+  const claude = String.raw`claude --permission-mode bypassPermissions --settings '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"head -c 1048576 >/dev/null; cd \"$CLAUDE_PROJECT_DIR\" && echo $$ > .aw/inbox.pid || exit 0; while [ \"$(cat .aw/inbox.pid 2>/dev/null)\" = $$ ]; do mv .aw/inbox .aw/inbox.$$ 2>/dev/null && { head -c 4096 .aw/inbox.$$ >&2; rm -f .aw/inbox.$$; exit 2; }; sleep 2; done","asyncRewake":true,"timeout":2147483}]}]}}' "$(cat '/ws/p.md')"
 `;
   const codex = (d: string) => String.raw`codex ${d}--dangerously-bypass-hook-trust --sandbox danger-full-access --ask-for-approval never -C '/ws/it'\''s' "$(cat '/ws/p.md')"
 `;

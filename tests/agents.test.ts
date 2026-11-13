@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { AGENTS, claudeDir, claudeSessions, codexHome, codexState, parseAgents } from "../src/agents";
+import { AGENTS, claudeDir, claudeSessions, codexHome, codexState, INBOX_HOOK, INBOX_WAITER, parseAgents } from "../src/agents";
 import { root, session, useTempRoot } from "./helpers";
 
 useTempRoot();
@@ -100,3 +100,31 @@ test("claudeSessions reads live <pid>.json records only, never through a symlink
   expect(claudeSessions(join(root, "d.claude"))).toEqual([]);
 });
 
+
+const hook = (dir: string) => Bun.spawn(["sh", "-c", INBOX_HOOK], { stdin: new Blob(["{}"]), stdout: "ignore", stderr: "pipe", env: { ...process.env, CLAUDE_PROJECT_DIR: dir } });
+
+test("inbox hook: exits 2 with the inbox line and consumes it; exits 0 outside an aw clone or once a newer waiter starts", async () => {
+  const wt = join(root, "wt");
+  mkdirSync(join(wt, ".aw"), { recursive: true });
+  writeFileSync(join(wt, ".aw/inbox"), "read .aw/answer.md\n");
+  const fire = hook(wt);
+  expect(await fire.exited).toBe(2);
+  expect(await new Response(fire.stderr).text()).toBe("read .aw/answer.md\n");
+  expect(existsSync(join(wt, ".aw/inbox"))).toBe(false);
+  const none = hook(join(root, "none"));
+  expect(await none.exited).toBe(0);
+  await new Response(none.stderr).text();
+  const old = hook(wt);
+  while (readFileSync(join(wt, ".aw/inbox.pid"), "utf8").trim() !== String(old.pid)) await Bun.sleep(20);
+  writeFileSync(join(wt, ".aw/inbox.pid"), "1\n");
+  expect(await old.exited).toBe(0);
+  expect(await new Response(old.stderr).text()).toBe("");
+});
+
+test("inbox waiter pattern matches the hook's shell, not Claude's own argv that carries the hook text", () => {
+  const re = new RegExp(INBOX_WAITER);
+  expect(re.test(`/bin/sh -c ${INBOX_HOOK}`)).toBe(true);
+  const [, argv] = AGENTS.claude.launch("/w", "p", true);
+  expect(re.test(`/usr/bin/claude ${argv.slice(1).join(" ")}`)).toBe(false);
+  expect(re.test(`/home/u/.local/bin/nono run --profile x -- claude ${argv.slice(1).join(" ")}`)).toBe(false);
+});

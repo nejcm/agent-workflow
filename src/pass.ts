@@ -4,7 +4,7 @@ import { allowedRepo, repoDir, validRepo } from "./config";
 import { deliverFeedback, feedbackFields } from "./feedback";
 import { fileFindings } from "./findings";
 import { canonical, findPr, sameRepo } from "./github";
-import { claim, nonoRun, SLOW_SECS, start, stopScope, sweepScopes, windows, winName } from "./launcher";
+import { claim, nonoRun, scopeUnit, SLOW_SECS, start, stopScope, sweepScopes, windows, winName } from "./launcher";
 import { autoMerge } from "./merge";
 import { syncPhases } from "./phases";
 import { agentPane, deliverAnswer, liveStates, syncQuestion } from "./question";
@@ -151,7 +151,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
         if (win) {
           if (!hasLabel(t.labels, s.needsHumanLabel)) await step(io, `stall ${t.id}`, () => checkStall(cfg, s, cfg.repos[key]!, w, tr, io, dir, win, state));
           await step(io, `question ${t.id}`, () => syncQuestion(w, tr, io, dir, join(dir, t.id)));
-          return step(io, `answer ${t.id}`, () => deliverAnswer(w, tr, io, dir, cfg.repos[key]!.feedbackAuthors, win, () => state(cfg.repos[key]!, dir, t.id)));
+          return step(io, `answer ${t.id}`, () => deliverAnswer(cfg.repos[key]!, w, tr, io, dir, win, scopeUnit(cfg, key, t.id), () => state(cfg.repos[key]!, dir, t.id)));
         }
         // The in-progress listing can lag a close that cleanup already acted on.
         if (hasLabel(t.labels, s.needsHumanLabel)) return;
@@ -185,7 +185,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
       if (r.autoMerge !== "off") await step(io, `merge ${t.id}`, () => autoMerge(cfg, r, w, tr, io, parked, share));
       // autoMerge looks the PR up anyway; otherwise every poll too, so a replaced PR reaches `<ID>.pr` (and feedback).
       else await step(io, `pr ${t.id}`, () => findPr(key, t.id, io, dir));
-      if (!parked) await step(io, `feedback ${t.id}`, () => deliverFeedback(r, w, tr, io, dir, win, () => state(r, dir, t.id), warned, share?.pr));
+      if (!parked) await step(io, `feedback ${t.id}`, () => deliverFeedback(r, w, tr, io, dir, win, scopeUnit(cfg, key, t.id), () => state(r, dir, t.id), warned, share?.pr));
     }
   });
 }

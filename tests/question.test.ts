@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { INBOX_WAITER } from "../src/agents";
 import { pass } from "../src/pass";
 import { agentPane, answerFrame, liveStates, pickAnswer, POINTER } from "../src/question";
 import type { State } from "../src/state";
@@ -121,8 +122,9 @@ test("question: CRLF and CR line endings are posted as LF", async () => {
 const answerAt = (postedAt: number, body = "Use Postgres", author = "Op") => ({ id: "c9", body, createdAt: new Date(postedAt + 1000).toISOString(), author });
 const answered = () => join(root, "acme/web/gh-1/.aw/answer.md");
 const question = () => join(root, "acme/web/gh-1/.aw/question.md");
+const inbox = () => join(root, "acme/web/gh-1/.aw/inbox");
 
-function deliver(opts: { authors?: string[]; open?: string[]; dry?: boolean; respond?: (a: string[]) => { code?: number; out?: string } | undefined } = {}) {
+function deliver(opts: { agent?: string; authors?: string[]; open?: string[]; dry?: boolean; respond?: (a: string[]) => { code?: number; out?: string } | undefined } = {}) {
   worktree("gh-1");
   const f = fakeTracker({ inProgress: [ticket(1)] });
   const reads: number[] = [];
@@ -131,7 +133,7 @@ function deliver(opts: { authors?: string[]; open?: string[]; dry?: boolean; res
   // A human's split, listed first and started from a shell, is never the target.
   const panes = (a: string[]) => (a[1] === "list-panes" ? { out: `%7 0 bash\n%5 0 ${join(root, "acme/web/gh-1")}.sh\n` } : undefined);
   const { io, cmds, logs } = fakeIo((a) => opts.respond?.(a) ?? (a[1] === "list-windows" ? windowsOut(opts.open ?? ["acme/web/gh-1"]) : panes(a) ?? noPr(a)), opts.dry);
-  const cfg = config({ repos: [{ name: "acme/web", path: join(root, "src-web"), feedbackAuthors: opts.authors ?? ["op"] }] });
+  const cfg = config({ repos: [{ name: "acme/web", path: join(root, "src-web"), agent: opts.agent ?? "codex", feedbackAuthors: opts.authors ?? ["op"] }] });
   let state: State = "idle";
   const states: string[] = [];
   const order: string[] = [];
@@ -177,6 +179,38 @@ test("answer: nothing without an answer, nothing until idle, then delivered once
   await d.run();
   expect(d.calls).toHaveLength(2);
   expect(d.sidecar().answerId).toBeUndefined();
+});
+
+const waiter = (live: boolean) => (a: string[]) => (a[0] === "systemctl" && a[2] === "show" ? { out: "/app.slice/s.scope\n" } : a[0] === "pgrep" ? { code: live ? 0 : 1 } : undefined);
+
+test("answer: Claude with a live inbox waiter in its scope gets the pointer in .aw/inbox, never keys, without looking up a pane", async () => {
+  const d = deliver({ agent: "claude", respond: waiter(true) });
+  ask("Which DB?");
+  await d.run();
+  d.answer(answerAt(d.sidecar().postedAt));
+  d.setState("working");
+  await d.run();
+  expect(existsSync(inbox())).toBe(false);
+  d.setState("idle");
+  await d.run();
+  expect(d.sidecar().answerId).toBe("c9");
+  expect(readFileSync(inbox(), "utf8")).toBe(`${POINTER}\n`);
+  expect(d.cmds.filter((c) => c.includes("pane_in_mode"))).toEqual([]);
+  expect(d.keys()).toEqual([]);
+  expect(existsSync(question())).toBe(false);
+  expect(d.cmds).toContainEqual(expect.stringMatching(/^systemctl --user show -P ControlGroup aw-[0-9a-f]{8}:acme:web:gh-1\.scope$/));
+  expect(d.cmds).toContain(`pgrep -f --cgroup /app.slice/s.scope ${INBOX_WAITER}`);
+});
+
+test("answer: Claude without a waiter (launched before the hook, or its last turn ended without Stop) gets the idle-gated paste", async () => {
+  const d = deliver({ agent: "claude", respond: waiter(false) });
+  ask("Which DB?");
+  await d.run();
+  d.answer(answerAt(d.sidecar().postedAt));
+  await d.run();
+  expect(d.sidecar().answerId).toBe("c9");
+  expect(existsSync(inbox())).toBe(false);
+  expect(d.keys()).toEqual([`tmux set-buffer -b aw-gh-1 -- ${POINTER}`, "tmux paste-buffer -p -d -b aw-gh-1 -t %5", "tmux send-keys -t %5 Enter"]);
 });
 
 test("answer: answerId is recorded before answer.md, keys after it", async () => {

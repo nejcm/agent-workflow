@@ -7,7 +7,7 @@ import { nonoRun, start, windows, winName } from "./launcher";
 import { linear } from "./linear";
 import { autoMerge } from "./merge";
 import { syncPhases } from "./phases";
-import { agentPane, deliverAnswer, liveStates, syncQuestion } from "./question";
+import { deliverAnswer, liveStates, syncQuestion } from "./question";
 import { lastSay, transcript } from "./tail";
 import type { Config, Io, Repo, Source, Ticket, Tracker } from "./types";
 import { AW_DIR, diskRepos, GIT, hasLabel, mtime, put, read, remove, SAFE_ID, strip, subdirs, write } from "./util";
@@ -124,9 +124,9 @@ async function checkStall(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Tracke
   const at = Math.max(started, (tx ? mtime(tx) : undefined) ?? 0);
   const file = join(dir, `${t.id}.stall`);
   if (!quiet(at) || (existsSync(file) && readFileSync(file, "utf8").trim() === String(at)) || !/^@\d+$/.test(win)) return;
-  // The launcher's own pane only: a human's split may hold secrets.
-  const pane = await agentPane(io, win);
-  const lines = pane ? await read(io, ["tmux", "capture-pane", "-p", "-t", pane, "-S", "-20"]).catch(() => "") : "";
+  // Sole pane only: with a split, pane order can't tell the agent from a human's shell, which may hold secrets.
+  const panes = (await read(io, ["tmux", "list-panes", "-t", win, "-F", "#{pane_id}"]).catch(() => "")).split("\n").filter(Boolean);
+  const lines = panes.length === 1 && /^%\d+$/.test(panes[0]) ? await read(io, ["tmux", "capture-pane", "-p", "-t", panes[0], "-S", "-20"]).catch(() => "") : "";
   await tr.park(t);
   t.labels = [...(t.labels ?? []), s.needsHumanLabel];
   await tr.comment(t, quoted(`session working with no activity for ${Math.floor((now - at) / 60_000)} min; parked with ${s.needsHumanLabel}, left running`, "Last pane lines", lines));

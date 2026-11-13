@@ -1,7 +1,7 @@
 import { closeSync, constants as C, existsSync, fstatSync, openSync, readlinkSync, readSync, realpathSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { type Agent, AGENTS, claudeHome } from "./agents";
+import { type Agent, AGENTS } from "./agents";
 import { repoDir, validRepo } from "./config";
 import type { Config, Repo } from "./types";
 import { clean, diskRepos, mtime, SAFE_ID } from "./util";
@@ -116,16 +116,18 @@ function lineEvents(o: any): string[] {
   return out;
 }
 
-const sayText = (o: any) => (o?.type === "assistant" ? textOf(o.message?.content) : "");
+const sayText = (o: any) =>
+  o?.type === "assistant" ? textOf(o.message?.content) : o?.type === "response_item" && o.payload?.type === "message" && o.payload.role === "assistant" ? textOf(o.payload.content) : "";
 
-/** Raw, untrusted text of the last non-empty assistant message in `wt`'s newest Claude transcript (since `since` ms). */
-export function lastSay(wt: string, since = 0) {
-  const p = transcript(wt, "claude", "", since);
+/** Raw, untrusted text of the last non-empty assistant message in `wt`'s newest transcript (since `since` ms). */
+export function lastSay(wt: string, agent: Repo["agent"], since = 0) {
+  const p = transcript(wt, agent, "", since);
   if (!p) return undefined;
-  const projects = join(realpathSync(claudeHome(wt)), "projects") + "/";
+  const [home, sub] = AGENTS[agent].store(wt);
+  const own = join(realpathSync(home), sub) + "/";
   // One open: where the fd really points and what it records, so a dir swapped in after the lookup is refused.
   return withFile(p, (fd, st) => {
-    if (!readlinkSync(`/proc/self/fd/${fd}`).startsWith(projects) || fdCwd(fd, AGENTS.claude.cwd) !== wt) return undefined;
+    if (!readlinkSync(`/proc/self/fd/${fd}`).startsWith(own) || fdCwd(fd, AGENTS[agent].cwd) !== wt) return undefined;
     const from = Math.max(0, st.size - CHUNK - 1);
     const buf = Buffer.alloc(st.size - from);
     const b = buf.subarray(0, readSync(fd, buf, 0, buf.length, from));
@@ -156,7 +158,7 @@ function fdCwd(fd: number, cwdOf: Agent["cwd"]) {
 
 const headCwd = (file: string, cwdOf: Agent["cwd"]) => withFile(file, (fd) => fdCwd(fd, cwdOf));
 
-// Claude's dir mangling collides (a-b vs a.b) and Codex shares one dir, so both are matched on the recorded cwd.
+// Claude's dir mangling collides (a-b vs a.b) and Codex keeps every cwd in one dir, so both are matched on the recorded cwd.
 const ownedBy = (a: Agent, wt: string, home: string, since: number) =>
   a
     .transcripts(wt, home)

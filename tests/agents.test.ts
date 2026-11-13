@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { AGENTS, claudeDir, claudeSessions, codexState, parseAgents } from "../src/agents";
+import { AGENTS, claudeDir, claudeSessions, codexHome, codexState, parseAgents } from "../src/agents";
 import { root, session, useTempRoot } from "./helpers";
 
 useTempRoot();
@@ -22,7 +22,7 @@ test("claude transcript dir is in the ticket's own config dir and mirrors the cw
 
 test("transcripts lists regular .jsonl files only, never walking a symlinked dir", () => {
   const cd = claudeDir(wt("PER-1"));
-  const sd = join(root, ".codex-aw/sessions/2026/11");
+  const sd = join(codexHome(wt("PER-1")), "sessions/2026/11");
   for (const d of [cd, sd]) mkdirSync(d, { recursive: true });
   for (const f of [join(cd, "a.jsonl"), join(cd, "b.txt"), join(sd, "r.jsonl")]) writeFileSync(f, "");
   symlinkSync(join(cd, "a.jsonl"), join(cd, "link.jsonl"));

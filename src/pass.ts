@@ -91,10 +91,9 @@ async function startReady(cfg: Config, s: Source, tr: Tracker, io: Io, t: Ticket
   });
 }
 
-// Codex transcripts share ~/.codex-aw, writable by every session, so any of them could claim this worktree's cwd.
 function lastMessage(wt: string, agent: Repo["agent"]) {
   try {
-    return agent === "claude" ? lastSay(wt, mtime(`${wt}.sh`) ?? mtime(wt) ?? 0) : undefined;
+    return lastSay(wt, agent, mtime(`${wt}.sh`) ?? mtime(wt) ?? 0);
   } catch {
     return undefined;
   }
@@ -227,7 +226,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
         // A double force never reads the agent-writable `locked` file, so a planted lock cannot block a done ticket.
         await write(x.io, [...GIT, "-C", r.path, "worktree", "remove", ...(r.sandbox === "nono" ? ["--force", "--force"] : []), wt]);
         // After the worktree, so a remove that fails (dirty without nono) keeps the transcripts too.
-        for (const ext of [".claude", ".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".stall", ".findings", ".source"]) remove(x.io, join(dir, id + ext));
+        for (const ext of [".claude", ".codex", ".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".stall", ".findings", ".source"]) remove(x.io, join(dir, id + ext));
       });
     }
   }

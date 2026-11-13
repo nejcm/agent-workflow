@@ -3,7 +3,7 @@
   "meta": {
     "name": "aw-codex",
     "version": "0.1.0",
-    "description": "aw: Codex in one worktree, agent-owned CODEX_HOME, read-only user instructions and skills"
+    "description": "aw: Codex in one worktree with its own CODEX_HOME, read-only user instructions and skills"
   },
   "extends": "default",
   "groups": {
@@ -18,9 +18,6 @@
     "access": "none"
   },
   "filesystem": {
-    "allow": [
-      "$HOME/.codex-aw"
-    ],
     "read": [
       "$HOME/.claude/skills",
       "$HOME/.agents/skills",

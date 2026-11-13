@@ -127,7 +127,7 @@ test("in-progress: PR moves to review; missing window comments once", async () =
   expect(existsSync(join(root, "acme/web/gh-2.pr"))).toBe(false);
 });
 
-test("done: kills window, removes worktree and files; keeps files when remove fails", async () => {
+test("done: kills window, removes worktree, files and config dir; keeps them all when the worktree remove fails", async () => {
   const c = config();
   for (const id of ["gh-1", "gh-2", "gh-3"]) {
     mkdirSync(join(root, "acme/web", id), { recursive: true });
@@ -152,6 +152,7 @@ test("done: kills window, removes worktree and files; keeps files when remove fa
   expect(existsSync(join(root, "acme/web/gh-1.claude"))).toBe(false);
   expect(existsSync(join(root, "src-web"))).toBe(true);
   expect(existsSync(join(root, "acme/web/gh-3.claude"))).toBe(true);
+  expect(existsSync(join(root, "acme/web/gh-2.claude"))).toBe(true);
   expect(existsSync(join(root, "acme/web/gh-2.sh"))).toBe(true);
   expect(existsSync(join(root, "acme/web/gh-3.sh"))).toBe(true);
   expect(logs.some((l) => l.includes("[web] cleanup acme/web/gh-2 failed"))).toBe(true);

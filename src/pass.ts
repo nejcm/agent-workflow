@@ -1,6 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { claudeHome } from "./agents";
 import { allowedRepo, repoDir, validRepo } from "./config";
 import { deliverFeedback } from "./feedback";
 import { byPriority, canonical, findPr, github, sameRepo } from "./github";
@@ -176,10 +175,9 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
           const dirty = await write(x.io, [...deadline, ...nonoRun(r, awDir, [["--read", wt], ["--read", join(r.path, ".git")]]), ...GIT, "-C", wt, "status", "--porcelain", "--ignore-submodules=none"]);
           if (dirty.trim()) throw new Error(`${wt} has uncommitted or untracked files; left in place`);
         }
-        // Before the worktree, so a failure (the session still exiting) leaves the ticket to retry next poll.
-        remove(x.io, claudeHome(wt));
         await write(x.io, [...deadline, ...GIT, "-C", r.path, "worktree", "remove", ...(r.sandbox === "nono" ? ["--force"] : []), wt]);
-        for (const ext of [".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".source"]) remove(x.io, join(dir, id + ext));
+        // After the worktree, so a remove that fails (dirty without nono) keeps the transcripts too.
+        for (const ext of [".claude", ".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".source"]) remove(x.io, join(dir, id + ext));
       });
     }
   }

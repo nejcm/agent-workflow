@@ -1,8 +1,8 @@
-import { lstatSync, readdirSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Live, State } from "./state";
 import type { Repo } from "./types";
-import { clean, readAw } from "./util";
+import { clean, inDir, readAw, readIn } from "./util";
 
 export type Lookup = (wt: string, since: number, now: number) => Live | undefined;
 
@@ -19,7 +19,7 @@ export interface Agent {
 
 const CLAUDE = new Map<unknown, State>([["busy", "working"], ["waiting", "waiting"], ["idle", "idle"]]);
 const HOOK_STATES = new Set<unknown>(["working", "waiting", "idle", "ended"]);
-const MAX_OUT = 1 << 20;
+const MAX_SESSION = 64 * 1024;
 const MAX_FILE = 4096;
 
 /** A `claude setup-token` token, relative to home; read by the launch script on the host, outside the sandbox. */
@@ -43,18 +43,10 @@ function jsonl(dir: string, recursive = false): string[] {
   }
 }
 
-/** `claude agents --json` output as live state by exact cwd; undefined if the output is unusable. */
-export function parseAgents(out: string | undefined): Map<string, Live> | undefined {
-  if (out === undefined || out.length > MAX_OUT) return undefined;
-  let list: unknown;
-  try {
-    list = JSON.parse(out);
-  } catch {
-    return undefined;
-  }
-  if (!Array.isArray(list)) return undefined;
+/** Claude's session records as live state by exact cwd, newest session wins. */
+export function parseAgents(list: unknown[]): Map<string, Live> {
   const m = new Map<string, Live & { at: number }>();
-  for (const a of list.slice(0, 1000)) {
+  for (const a of list as any[]) {
     if (!a || typeof a !== "object" || typeof a.cwd !== "string" || a.cwd.length > 4096) continue;
     const at = typeof a.startedAt === "number" && Number.isFinite(a.startedAt) ? a.startedAt : 0;
     if ((m.get(a.cwd)?.at ?? -1) > at) continue;
@@ -65,38 +57,29 @@ export function parseAgents(out: string | undefined): Map<string, Live> | undefi
   return new Map([...m].map(([cwd, { at, ...l }]) => [cwd, l]));
 }
 
-/** Raw `claude agents --json` stdout for config dir `dir`; undefined on spawn failure, non-zero exit, oversize output or timeout. */
-export async function claudeAgents(dir: string, ms = 3000, argv = ["claude", "agents", "--json"]): Promise<string | undefined> {
-  let p: Bun.Subprocess<"ignore", "pipe", "ignore">;
+const startTime = (pid: number) => {
+  const s = readFileSync(`/proc/${pid}/stat`, "utf8");
+  return s.slice(s.lastIndexOf(")") + 2).split(" ")[19];
+};
+
+/** `<dir>/sessions/<pid>.json` records whose process is still running, the files `claude agents` reads; never runs the agent-writable config. */
+export function claudeSessions(dir: string): unknown[] {
+  const sessions = join(dir, "sessions");
+  let names: string[];
   try {
-    p = Bun.spawn(argv, { env: { ...process.env, CLAUDE_CONFIG_DIR: dir }, stdin: "ignore", stdout: "pipe", stderr: "ignore", detached: true });
+    names = inDir(sessions, (d) => readdirSync(d));
   } catch {
-    return undefined;
+    return [];
   }
-  // Own process group, so a child ignoring SIGTERM or a grandchild holding stdout dies with it.
-  const kill = () => {
+  return names.filter((f) => /^[1-9]\d{0,9}\.json$/.test(f)).slice(0, 100).flatMap((f) => {
     try {
-      process.kill(-p.pid, "SIGKILL");
-    } catch {}
-  };
-  const read = (async () => {
-    const chunks: Uint8Array[] = [];
-    let n = 0;
-    for await (const c of p.stdout) {
-      if ((n += c.length) > MAX_OUT) return undefined;
-      chunks.push(c);
+      const s = JSON.parse(readIn(sessions, f, MAX_SESSION) ?? "null");
+      // The recorded start time tells a live session from a recycled pid.
+      return s?.pid === Number.parseInt(f) && typeof s.procStart === "string" && s.procStart === startTime(s.pid) ? [s] : [];
+    } catch {
+      return [];
     }
-    return (await p.exited) === 0 ? Buffer.concat(chunks).toString("utf8") : undefined;
-  })().catch(() => undefined);
-  let expire = () => {};
-  const deadline = new Promise<undefined>((r) => (expire = () => r(undefined)));
-  const timer = setTimeout(expire, ms);
-  try {
-    return await Promise.race([read, deadline]);
-  } finally {
-    clearTimeout(timer);
-    kill();
-  }
+  });
 }
 
 /** `<wt>/.aw/codex-state.json` as written by aw's Codex hooks, if well-formed and recorded since `since` (ms). */
@@ -119,7 +102,7 @@ export const AGENTS: Record<Repo["agent"], Agent> = {
     transcripts: (wt) => jsonl(claudeDir(wt)),
     cwd: (o) => o?.cwd,
     live: async (_home, wts) => {
-      const ms = await Promise.all(wts.map(async (wt) => parseAgents(await claudeAgents(claudeHome(wt)))));
+      const ms = wts.map((wt) => parseAgents(claudeSessions(claudeHome(wt))));
       return (wt) => ms[wts.indexOf(wt)]?.get(wt);
     },
   },

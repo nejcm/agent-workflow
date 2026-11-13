@@ -1,6 +1,6 @@
 import type { Row } from "../src/status";
 import { afterEach, beforeEach } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { CLAUDE_TOKEN, claudeDir } from "../src/agents";
@@ -11,6 +11,14 @@ import { AW_DIR, GIT } from "../src/util";
 
 export let root: string;
 // Called per test file: bun shares this module across files, so top-level hooks would only bind to the first.
+/** A Claude session record for this test process, as Claude writes it under `<dir>/sessions`. */
+export function session(dir: string, o: object) {
+  const stat = readFileSync("/proc/self/stat", "utf8");
+  const procStart = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+  mkdirSync(join(dir, "sessions"), { recursive: true });
+  writeFileSync(join(dir, "sessions", `${process.pid}.json`), JSON.stringify({ pid: process.pid, procStart, kind: "interactive", startedAt: 1, ...o }));
+}
+
 export function useTempRoot() {
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "aw-test-"));

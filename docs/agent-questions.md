@@ -47,7 +47,7 @@ Done when: existing tests pass with the renamed `readAw` and the new comment tex
 
 ### 4. Delivering answers
 
-- Live state for `pass`: reuse the feed from `src/agents.ts` (`claude agents --json` once per pass, Codex `.aw/codex-state.json`), queried only when some sidecar has no `answerId`.
+- Live state for `pass`: reuse the feed from `src/agents.ts` (Claude's session records once per pass, Codex `.aw/codex-state.json`), queried only when some sidecar has no `answerId`.
 - `deliverAnswer`: sidecar without `answerId` → `tr.comments` → `pickAnswer` → state `idle`, window `@N` exists, its first pane not in copy mode → record `answerId` + `answeredAt` → `writeAw(answer.md)` → `tmux set-buffer` + `paste-buffer -p -t <%pane>` (pointer line) + `send-keys Enter` → `removeAw(question.md)` if its hash still matches.
 - Tests: no answer → nothing; answer while `working`/`waiting`/`unknown` → retried next pass; window gone → nothing; happy path order (sidecar, file, keys, remove); a delivered answer is never re-sent; a new question after delivery starts a new round.
 - Manual check, once per agent: done. Both submit with the bracketed paste; Codex turned an `Enter` right after `send-keys -l` into a newline.

@@ -228,7 +228,7 @@ Everything shown is stripped of control, escape, bidi and invisible characters (
 
 `state` (`working`, `waiting`, `idle`, `question`, `ended`, `unknown`; JSON also has `waitingFor` and `stateSince`, ms epoch or `null`). An `ended` or `orphan` session is `ended` in JSON; the table and dashboard show an `orphan` session (no tmux window, no `<ID>.ended`) as `orphan`. Otherwise:
 
-- Claude: `CLAUDE_CONFIG_DIR=<ID>.claude claude agents --json`, run once per refresh for each Claude ticket with a tmux window (3 s timeout); `busy` is `working`, `waiting` carries `waitingFor`. The session must report the worktree path as its exact `cwd`. That command is a research preview: if it fails, times out or changes shape, Claude rows show `unknown`.
+- Claude: the session records `claude agents` reads, `<ID>.claude/sessions/<pid>.json`, once per refresh for each Claude ticket with a tmux window. `aw` reads them itself, never running `claude` against a dir the session can write: no symlinks, regular files under 64 KiB, and only records whose pid is still running with the recorded start time. `busy` is `working`, `waiting` carries `waitingFor`. The session must report the worktree path as its exact `cwd`. The format is undocumented (checked on 2.1.323): if it changes, Claude rows show `unknown`.
 - Codex: hooks installed by `scripts/setup.sh` (via `scripts/codex-hooks.sh`, a marked block in `~/.codex-aw/config.toml`; the rest of the file is left alone, and the script refuses damaged markers or a result that is not valid TOML) write `{state, ts}` to `<worktree>/.aw/codex-state.json` on `SessionStart`/`Stop` (idle), `UserPromptSubmit`/`PostToolUse` (working), `PermissionRequest` (waiting) and `SessionEnd` (ended), only when `.aw` is a real directory. The sandbox only lets an agent write its own worktree, so it can at most misreport its own state. The hook runs with the agent's own privileges, so a race on `.aw` or the temp file reaches nothing the agent could not write anyway. It assumes the session starts at the worktree root, as the launcher does. Codex skips hooks until they are trusted: run `CODEX_HOME=~/.codex-aw codex` once, open `/hooks` and trust them (again whenever the block changes). `aw` reads the file like `phases.json` (no symlinks, regular file under 4 KiB) and only if it is newer than the launcher; a `working` older than 10 minutes with no transcript write since is `unknown`.
 
 ### On a VM
@@ -283,7 +283,7 @@ CLI: `bun aw.ts <run|once|status|watch|tail> [--dry-run] [--json] [--interval s]
 - `src/phases.ts`: `.aw/phases.json` validation and sub-ticket sync.
 - `src/feedback.ts`: PR reviews, comments, failed checks and conflicts fed back into an idle In Review session.
 - `src/merge.ts`: `.aw/merge.json`, critical paths, the merge decision and auto-merge.
-- `src/agents.ts`: the Claude and Codex adapters: launch env and command, config dirs and transcript files, live state (`claude agents --json`, bounded run and parse; the Codex hook state file).
+- `src/agents.ts`: the Claude and Codex adapters: launch env and command, config dirs and transcript files, live state (Claude's session records, read as untrusted files; the Codex hook state file).
 - `src/launcher.ts`: clone, worktree, prompt and launcher script, tmux window.
 - `src/pass.ts`: one poll: cleanup, start ready tickets by priority, reconcile.
 - `src/status.ts`: per-worktree status rows, the live-state snapshot and the table.

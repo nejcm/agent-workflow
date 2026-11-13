@@ -37,15 +37,17 @@ export function put(io: Io, path: string, data: string, mode = 0o644) {
   renameSync(`${path}.tmp`, path);
 }
 
-// <wt>/.aw is agent-writable: pin it by fd (no symlink) so a swap can't redirect aw outside the worktree. Linux only.
-export function inAw<T>(wt: string, fn: (dir: string) => T): T {
-  const d = openSync(join(wt, ".aw"), C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
+// An agent-writable dir: pin it by fd (no symlink) so a swap can't redirect aw elsewhere. Linux only.
+export function inDir<T>(dir: string, fn: (dir: string) => T): T {
+  const d = openSync(dir, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
   try {
     return fn(`/proc/self/fd/${d}`);
   } finally {
     closeSync(d);
   }
 }
+
+export const inAw = <T>(wt: string, fn: (dir: string) => T) => inDir(join(wt, ".aw"), fn);
 
 export const mtime = (p: string) => {
   try {
@@ -58,7 +60,7 @@ export const mtime = (p: string) => {
 export function remove(io: Io, path: string) {
   if (!existsSync(path)) return;
   io.log(`${io.dry ? "dry: " : ""}rm ${path}`);
-  if (!io.dry) rmSync(path, { recursive: true });
+  if (!io.dry) rmSync(path, { recursive: true, maxRetries: 3 });
 }
 
 // Ours if labelled host:<host>, or (defaultHost) if no host: label at all. Case-insensitive like GitHub's label filter.
@@ -67,9 +69,11 @@ export const ours = (t: Ticket, host: string, defaultHost: boolean) => {
   return hosts.includes(`host:${host.toLowerCase()}`) || (defaultHost && !hosts.length);
 };
 
-export function readAw(wt: string, file: string, max: number): string | undefined {
+export const readAw = (wt: string, file: string, max: number) => readIn(join(wt, ".aw"), file, max);
+
+export function readIn(dir: string, file: string, max: number): string | undefined {
   try {
-    return inAw(wt, (d) => {
+    return inDir(dir, (d) => {
       const fd = openSync(`${d}/${file}`, C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK);
       try {
         const buf = Buffer.alloc(max + 1);

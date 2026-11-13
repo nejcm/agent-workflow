@@ -89,9 +89,11 @@ export function seedClaude(io: Io, dir: string, root: string) {
 /** The ChatGPT login sessions copy, relative to home; only the host holds and uses its refresh token. */
 export const CODEX_AUTH = ".codex-aw/auth.json";
 const REFRESH_MARGIN = 24 * 3600_000;
-// Codex has no refresh command; app-server's `account/read` with `refreshToken` forces one. Stdin closes only after the reply, so it never exits mid-refresh.
+// Codex has no refresh command; app-server's `account/read` with `refreshToken` forces one. Stdin closes only after the reply.
+// flock on the template dir: two aw processes refreshing the same rotating token at once would invalidate the login.
 const REFRESH = [
   'export CODEX_HOME="$1"',
+  'exec {L}<"$CODEX_HOME" && flock -w 30 "$L" || exit 1',
   "coproc APP { exec codex app-server 2>/dev/null; }",
   `printf '%s\\n' '{"method":"initialize","id":0,"params":{"clientInfo":{"name":"aw","version":"1"}}}' '{"method":"initialized"}' '{"method":"account/read","id":1,"params":{"refreshToken":true}}' >&"\${APP[1]}"`,
   `while IFS= read -r l <&"\${APP[0]}"; do [[ $l == '{"id":1,'* ]] && { exec {APP[1]}>&-; wait; exit 0; }; done`,
@@ -102,7 +104,7 @@ export const codexRefresh = (home: string) => ["bash", "-c", REFRESH, "aw-codex-
 const expiresAt = (o: any) => {
   try {
     const exp = JSON.parse(Buffer.from(String(o.tokens.access_token).split(".")[1]!, "base64url").toString()).exp;
-    return typeof exp === "number" ? exp * 1000 : 0;
+    return Number.isFinite(exp) ? exp * 1000 : 0;
   } catch {
     return 0;
   }

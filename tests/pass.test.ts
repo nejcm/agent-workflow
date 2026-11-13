@@ -113,6 +113,10 @@ test("codexLogin refuses a missing, malformed or non-ChatGPT template login", as
   await expect(codexLogin(fakeIo().io)).rejects.toThrow("CODEX_HOME=~/.codex-aw codex login");
   writeFileSync(join(root, CODEX_AUTH), JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "k" }));
   await expect(codexLogin(fakeIo().io)).rejects.toThrow("is not a ChatGPT login");
+  for (const payload of ['{"exp":1e309}', '{"exp":"9999999999"}', "{}"]) {
+    writeFileSync(join(root, CODEX_AUTH), JSON.stringify({ tokens: { access_token: `h.${Buffer.from(payload).toString("base64url")}.s`, refresh_token: "r" } }));
+    await expect(codexLogin(fakeIo().io)).rejects.toThrow("could not refresh the Codex login");
+  }
 });
 
 test("the refresh script asks app-server to refresh and closes stdin only after the reply", () => {
@@ -126,6 +130,18 @@ test("the refresh script asks app-server to refresh and closes stdin only after 
   expect(readFileSync(join(root, ".codex-aw/called"), "utf8").trim()).toBe(join(root, ".codex-aw"));
   writeFileSync(join(bin, "codex"), "#!/usr/bin/env bash\nexit 0\n", { mode: 0o755 });
   expect(run({}).exitCode).toBe(1);
+});
+
+test("concurrent refresh scripts run app-server one at a time", async () => {
+  const bin = join(root, "bin");
+  mkdirSync(bin);
+  const home = join(root, ".codex-aw");
+  writeFileSync(join(bin, "codex"), `#!/usr/bin/env bash\nwhile IFS= read -r l; do case $l in *account/read*) mkdir "$CODEX_HOME/busy" || touch "$CODEX_HOME/overlap"; sleep 0.5; rmdir "$CODEX_HOME/busy"; echo '{"id":1,"result":{}}';; esac; done\n`, { mode: 0o755 });
+  mkdirSync(home);
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+  const codes = await Promise.all([1, 2].map(() => Bun.spawn(["timeout", "10", ...codexRefresh(root)], { env, stderr: "ignore" }).exited));
+  expect(codes).toEqual([0, 0]);
+  expect(existsSync(join(home, "overlap"))).toBe(false);
 });
 
 test("a codex start without a usable template login fails before cloning", async () => {

@@ -75,9 +75,9 @@ export function linear(l: Source, host: string, io: Io, defaultHost = false): Tr
     listReady: async () => (await listMine(l.todo, [l.readyLabel])).filter((t) => !hasLabel(t.labels, l.needsHumanLabel)),
     listInProgress: () => listMine(l.inProgress, [l.readyLabel]),
     listInReview: () => listMine(l.inReview, [l.readyLabel]),
-    async isDone(id) {
-      const d = await gql(`query($id: String!) { issue(id: $id) { state { name } } }`, { id });
-      return l.done.includes(d.issue?.state?.name);
+    async closed(id) {
+      const st = (await gql(`query($id: String!) { issue(id: $id) { state { name type } } }`, { id })).issue?.state;
+      return st?.type === "canceled" || st?.type === "duplicate" ? "canceled" : l.done.includes(st?.name) ? "done" : undefined;
     },
     async claim(t) {
       await move(t.ref, l.inProgress);

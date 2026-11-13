@@ -62,10 +62,11 @@ export function github(l: Source, host: string, io: Io, defaultHost: boolean, re
     listReady: async () => (await listMine([l.readyLabel], skip.map((x) => `-label:${JSON.stringify(x)}`).join(" "))).filter((t) => !skip.some((x) => hasLabel(t.labels, x))),
     listInProgress: () => listMine([l.readyLabel, l.inProgressLabel]),
     listInReview: () => listMine([l.readyLabel, l.inReviewLabel]),
-    async isDone(id, repo) {
+    async closed(id, repo) {
       const n = /^gh-(\d+)$/.exec(id)?.[1];
       if (!n) throw new Error(`not a github ticket id: ${id}`);
-      return JSON.parse(await read(io, ["gh", "issue", "view", n, "--repo", repo, "--json", "state"])).state === "CLOSED";
+      const i = JSON.parse(await read(io, ["gh", "issue", "view", n, "--repo", repo, "--json", "state,stateReason"]));
+      if (i.state === "CLOSED") return ["NOT_PLANNED", "DUPLICATE"].includes(i.stateReason) ? "canceled" : "done";
     },
     async claim(t) {
       await edit(t, l.inProgressLabel);

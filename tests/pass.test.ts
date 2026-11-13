@@ -336,6 +336,37 @@ test("done: kills window, removes the session clone, files and config dir; keeps
   expect(logs.some((l) => l.includes("[web] cleanup acme/web/gh-2 failed"))).toBe(true);
 });
 
+test("canceled: kills the window once, keeps the clone and files, posts nothing; Done later cleans up", async () => {
+  const c = config();
+  for (const id of ["gh-1", "gh-2"]) {
+    mkdirSync(join(root, "acme/web", `${id}.claude`), { recursive: true });
+    worktree(id);
+    writeFileSync(join(root, "acme/web", `${id}.sh`), "");
+  }
+  const s = { inProgress: [ticket(1)], canceled: ["gh-1", "gh-2"], done: [] as string[] };
+  const { tr, calls } = fakeTracker(s);
+  let wins = ["acme/web/gh-1"];
+  const { io, cmds, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(wins) : noPr(a)));
+  await pass(c, io, () => tr, "/aw");
+  expect(cmds.filter((x) => x.includes("kill-window"))).toEqual(["tmux kill-window -t @0"]);
+  expect(cmds.some((x) => x.startsWith("rm "))).toBe(false);
+  for (const f of ["gh-1", "gh-1.claude", "gh-1.sh", "gh-1.source", "gh-1.ended", "gh-2", "gh-2.source"]) expect(existsSync(join(root, "acme/web", f))).toBe(true);
+  // gh-2's session had already exited: still marked ended, so a reopen never reads as "ended without a PR".
+  expect(existsSync(join(root, "acme/web/gh-2.ended"))).toBe(true);
+  expect(logs.filter((l) => l.includes("stopped")).sort()).toEqual(["[web] stopped acme/web/gh-1: ticket canceled; clone and files kept", "[web] stopped acme/web/gh-2: ticket canceled; clone and files kept"]);
+  expect(calls).toEqual([]);
+  wins = [];
+  await pass(c, io, () => tr, "/aw");
+  expect(cmds.filter((x) => x.includes("kill-window"))).toHaveLength(1);
+  expect(logs.filter((l) => l.includes("stopped"))).toHaveLength(2);
+  expect(calls).toEqual([]);
+  s.canceled = [];
+  s.done = ["gh-1"];
+  await pass(c, io, () => tr, "/aw");
+  expect(existsSync(join(root, "acme/web/gh-1.claude"))).toBe(false);
+  expect(existsSync(join(root, "acme/web/gh-2"))).toBe(true);
+});
+
 test("a failed start leaves the ticket unclaimed and retries next poll; a failed claim kills the window", async () => {
   const c = config();
   const { tr, calls } = fakeTracker({ ready: [ticket(1)] });

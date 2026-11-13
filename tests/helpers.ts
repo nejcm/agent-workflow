@@ -42,14 +42,17 @@ export const config = (over: object = {}): Config => parseConfig(raw(over), AW_D
 export const web = (c: Config) => c.repos["acme/web"]!;
 export const ticket = (n: number, repo = "acme/web"): Ticket => ({ id: `gh-${n}`, ref: String(n), title: `Fix thing ${n}`, body: "body; rm -rf ~ $(whoami)", url: `https://x/${n}`, repo });
 
-export function fakeTracker(s: { ready?: Ticket[]; inProgress?: Ticket[]; inReview?: Ticket[]; done?: string[] }) {
+export function fakeTracker(s: { ready?: Ticket[]; inProgress?: Ticket[]; inReview?: Ticket[]; done?: string[]; canceled?: string[] }) {
   const calls: string[] = [];
   const subs: { ref: string; title: string }[] = [];
   const tr: Tracker = {
     listReady: async () => s.ready ?? [],
     listInProgress: async () => s.inProgress ?? [],
     listInReview: async () => s.inReview ?? [],
-    isDone: async (id, repo) => (s.done ?? []).some((d) => d === id || d === `${repo}#${id}`),
+    closed: async (id, repo) => {
+      const has = (l?: string[]) => (l ?? []).some((d) => d === id || d === `${repo}#${id}`);
+      return has(s.canceled) ? "canceled" : has(s.done) ? "done" : undefined;
+    },
     claim: async (t) => void calls.push(`claim ${t.id}`),
     toReview: async (t, pr) => void calls.push(`review ${t.id} ${pr}`),
     done: async (t) => void calls.push(`done ${t.id}`),

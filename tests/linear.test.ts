@@ -217,3 +217,27 @@ test("linear adapter: park adds an ungrouped team or workspace label, fails clea
     expect(await tr.parked(t)).toBe(true);
   });
 });
+
+test("linear adapter: a canceled-type state is canceled whatever its name, a done name is done", async () => {
+  const l = config({ sources: [src({ tracker: "linear", team: "ENG", done: ["Done", "Canceled"] })] }).sources[0]!;
+  const { io } = fakeIo();
+  let state: object | null = null;
+  const queries: string[] = [];
+  io.fetch = (async (_url: string, init: any) => (queries.push(JSON.parse(init.body).query), Response.json({ data: { issue: { state } } }))) as any;
+  const tr = linear(l, "box", io);
+  const cases: [object | null, string | undefined][] = [
+    [{ name: "Canceled", type: "canceled" }, "canceled"],
+    [{ name: "Won't do", type: "canceled" }, "canceled"],
+    [{ name: "Duplicate", type: "duplicate" }, "canceled"],
+    [{ name: "Done", type: "completed" }, "done"],
+    [{ name: "In Progress", type: "started" }, undefined],
+    [null, undefined],
+  ];
+  await withLinearKey(async () => {
+    for (const [st, want] of cases) {
+      state = st;
+      expect(await tr.closed("ENG-1", "acme/web")).toBe(want as any);
+    }
+  });
+  expect(queries[0]).toContain("state { name type }");
+});

@@ -97,7 +97,7 @@ export function parseConfig(raw: any, base: string): Config {
       todo: r.todo ?? "Todo",
       inProgress: r.inProgress ?? "In Progress",
       inReview: r.inReview ?? "In Review",
-      done: r.done ?? ["Done", "Canceled", "Duplicate"],
+      done: r.done ?? ["Done"],
     };
     check(NAME.test(s.name ?? ""), `${at}.name: required, [a-z0-9-]`);
     check(["github", "linear"].includes(s.tracker), `${at}.tracker: "github" | "linear"`);

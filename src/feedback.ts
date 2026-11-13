@@ -39,8 +39,8 @@ const esc = (s: string) => (s.length > MAX_ITEM_CHARS ? `${s.slice(0, MAX_ITEM_C
 
 async function failedLog(io: Io, repo: string, run: string) {
   try {
-    // tail streams, so a huge log is never buffered; timeout bounds a stalled download.
-    const out = (await read(io, ["sh", "-c", `timeout 60 gh run view "$1" --repo "$2" --log-failed | tail -n ${LOG_LINES}`, "sh", run, repo])).trimEnd();
+    // tail streams, so a huge log is never buffered.
+    const out = (await read(io, ["sh", "-c", `gh run view "$1" --repo "$2" --log-failed | tail -n ${LOG_LINES}`, "sh", run, repo])).trimEnd();
     return out || "(log unavailable)";
   } catch (e) {
     return `(log unavailable: ${(e as Error).message})`;

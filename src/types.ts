@@ -81,7 +81,7 @@ export interface Tracker {
   setPhase(parent: Ticket, ref: string, status: "in-progress" | "done"): Promise<void>;
 }
 
-export type Run = (argv: string[], cwd?: string) => Promise<{ code: number; out: string; err: string }>;
+export type Run = (argv: string[], cwd?: string, secs?: number) => Promise<{ code: number; out: string; err: string }>;
 
 export interface Io {
   run: Run;

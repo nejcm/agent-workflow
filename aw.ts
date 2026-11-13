@@ -19,10 +19,30 @@ async function status(cfg: Config, io: Io) {
   ].join("\n");
 }
 
-const spawnRun: Run = async (argv, cwd) => {
-  const p = Bun.spawn(argv, { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-  const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
-  return { code, out, err };
+// timeout signals its whole group and still fires if aw is killed. The drain bound covers what outlives it holding the pipes;
+// shortcut: a grandchild ignoring TERM keeps running (signalling after the reap could hit a reused group id).
+export const spawnRun: Run = async (argv, cwd, secs = 60) => {
+  const start = performance.now();
+  const cmd = argv.slice(0, 3).join(" ");
+  const p = Bun.spawn(["timeout", "-k", "5", String(secs), ...argv], { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const readers = [p.stdout.getReader(), p.stderr.getReader()];
+  const text = async (r: ReadableStreamDefaultReader<Uint8Array>) => {
+    const d = new TextDecoder();
+    let s = "";
+    for (let c = await r.read(); !c.done; c = await r.read()) s += d.decode(c.value, { stream: true });
+    return s + d.decode();
+  };
+  const output = Promise.all(readers.map(text));
+  const code = await p.exited;
+  const timedOut = (code === 124 || code === 137) && performance.now() - start >= secs * 1000;
+  let timer: number | undefined;
+  const drained = await Promise.race([output, new Promise<undefined>((r) => (timer = setTimeout(r, 5000)))]).finally(() => clearTimeout(timer));
+  if (!drained) {
+    for (const r of readers) r.cancel().catch(() => {});
+    return { code: code || 1, out: "", err: timedOut ? `${cmd} timed out after ${secs}s` : `${cmd} exited ${code} but left its output open` };
+  }
+  const [out, err] = drained;
+  return { code, out, err: timedOut ? `${cmd} timed out after ${secs}s ${err.trim()}`.trim() : err };
 };
 
 const USAGE = `usage: bun aw.ts <command> [--config aw.json]

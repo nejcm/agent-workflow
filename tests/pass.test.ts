@@ -215,8 +215,8 @@ test("dry-run logs side effects and executes none", async () => {
   await pass(c, io, () => tr, "/aw");
   expect(cmds.every((x) => /has-session|list-windows|rev-parse|gh pr list|gh repo view/.test(x))).toBe(true);
   expect(logs.some((l) => l.includes("dry: tmux new-session -d -s aw"))).toBe(true);
-  expect(logs.some((l) => l.startsWith("[web] dry: timeout -k 5 60 nono run ") && l.endsWith(`-C ${root}/acme/web/gh-5 status --porcelain --ignore-submodules=none`))).toBe(true);
-  expect(logs.some((l) => l.includes(`dry: timeout -k 5 60 ${GIT.join(" ")} -C ${root}/src-web worktree remove --force ${root}/acme/web/gh-5`))).toBe(true);
+  expect(logs.some((l) => l.startsWith("[web] dry: nono run ") && l.endsWith(`-C ${root}/acme/web/gh-5 status --porcelain --ignore-submodules=none`))).toBe(true);
+  expect(logs.some((l) => l.includes(`dry: ${GIT.join(" ")} -C ${root}/src-web worktree remove --force ${root}/acme/web/gh-5`))).toBe(true);
   expect(logs.some((l) => l.includes("dry: tmux new-window"))).toBe(true);
   expect(existsSync(join(root, "acme/web/gh-1.prompt.md"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.source"))).toBe(false);

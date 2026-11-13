@@ -22,15 +22,15 @@ export const clean = (s: string, max = 200) =>
     .trim()
     .slice(0, max);
 
-export async function read(io: Io, argv: string[], cwd?: string) {
-  const r = await io.run(argv, cwd);
+export async function read(io: Io, argv: string[], cwd?: string, secs?: number) {
+  const r = await io.run(argv, cwd, secs);
   if (r.code !== 0) throw new Error(`${argv.slice(0, 3).join(" ")}: ${r.err.trim() || `exit ${r.code}`}`);
   return r.out;
 }
 
-export async function write(io: Io, argv: string[], cwd?: string) {
+export async function write(io: Io, argv: string[], cwd?: string, secs?: number) {
   io.log(`${io.dry ? "dry: " : ""}${argv.join(" ")}`);
-  return io.dry ? "" : read(io, argv, cwd);
+  return io.dry ? "" : read(io, argv, cwd, secs);
 }
 
 export function put(io: Io, path: string, data: string, mode = 0o644) {

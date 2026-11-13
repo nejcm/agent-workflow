@@ -1004,3 +1004,7 @@ test("sandbox profiles deny host Unix sockets", () => {
     expect([a, p.linux?.af_unix_mediation, Object.keys(p.filesystem).filter((k) => k.startsWith("unix_socket"))]).toEqual([a, "pathname", []]);
   }
 });
+
+test("sandbox profiles pass GH_CONFIG_DIR through, or gh reads the unreadable real config", () => {
+  for (const a of ["claude", "codex"]) expect(JSON.stringify(JSON.parse(readFileSync(join(import.meta.dir, "..", "nono", `aw-${a}.json`), "utf8")))).toContain('"GH_CONFIG_DIR"');
+});

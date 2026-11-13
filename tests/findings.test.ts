@@ -49,6 +49,7 @@ test("findings: at most 5 per ticket for the whole session", async () => {
   expect(logs.some((l) => l.includes("findings gh-1: 5 already filed"))).toBe(true);
 });
 
+const GONE = "[linear[.]app link removed]";
 const HEAD = "comment gh-1 out-of-scope findings from this session, filed as new tickets (not picked up automatically):\n";
 const sidecar = () => JSON.parse(readFileSync(join(dir(), "gh-1.findings"), "utf8"));
 
@@ -125,9 +126,9 @@ test("findings: a tampered sidecar files and posts nothing, and published titles
 
   rmSync(join(dir(), "gh-1.findings"));
   rmSync(join(dir(), "gh-1/.aw/findings.json"));
-  writeFileSync(join(dir(), "gh-1.findings"), JSON.stringify([{ ...rec, title: "hi @bob https://linear.app/a/profiles/b \x1b[2J" }]));
+  writeFileSync(join(dir(), "gh-1.findings"), JSON.stringify([{ ...rec, title: "hi @bob https://linear.app/a/profiles/b \x1b[2J a%0Ab%1Bc" }]));
   await fileFindings(ticket(1), tr, io, dir());
-  expect(calls).toEqual([`${HEAD}- not filed (create failed): hi @\u200bbob https://linear[.]app/a/profiles/b\n\naw-findings ${"a".repeat(12)}`]);
+  expect(calls).toEqual([`${HEAD}- not filed (create failed): hi @\u200bbob ${GONE} a%0Ab%1Bc\n\naw-findings ${"a".repeat(12)}`]);
 });
 
 test("findings: a legacy sidecar of bare hashes counts as filed and linked", async () => {
@@ -150,14 +151,16 @@ test("findings: malformed or oversized input files nothing; text is capped, stri
   expect(x!.body.startsWith("hi @​bob, mail a@b.com\n line two\n")).toBe(true);
   expect(x!.body).toHaveLength(4000);
   const [l] = parseFindings(JSON.stringify([{ title: "see https://Linear.app/acme/profiles/bob", body: "[x](https://linear.app/acme/profiles/bob) linear.app/acme/profiles/eve\nkeep https://github.com/a/b?q=%20 as is" }]));
-  expect(l).toEqual({ title: "see https://Linear[.]app/acme/profiles/bob", body: "[x](https://linear[.]app/acme/profiles/bob) linear[.]app/acme/profiles/eve\nkeep https://github.com/a/b?q=%20 as is" });
-  for (const host of ["%6cinear.app", "linear%2eapp", "linear%252eapp", "linear\u200d.app", "linear\u3002app", "linear\uff0eapp", "\uff4cinear.app", "LINEAR.APP", "x.linear.app"]) {
-    const [e] = parseFindings(JSON.stringify([{ title: `t https://${host}/a/profiles/b`, body: `https://${host}/a/profiles/b` }]));
-    for (const s of [e!.title, e!.body]) {
-      expect(s).toMatch(/linear\[\.\]app\/a\/profiles\/b$/i);
-      expect(() => new URL(s.split(" ").at(-1)!)).toThrow();
-    }
+  expect(l).toEqual({ title: `see ${GONE}`, body: `${GONE} ${GONE}\nkeep https://github.com/a/b?q=%20 as is` });
+  const hosts = ["%6cinear.app", "linear%2eapp", "linear%252eapp", "%EF%BD%8Cinear.app", "linear%E3%80%82app", "li%E2%80%8Bnear.app", "linear\u200d.app", "linear\u3002app", "linear\uff0eapp", "\uff4cinear.app", "LINEAR.APP", "x.linear.app"];
+  for (const host of hosts) {
+    const [e] = parseFindings(JSON.stringify([{ title: `t https://${host}/a/profiles/b`, body: `see:https://${host}/a/profiles/b%0A%1B[2J` }]));
+    expect(e).toEqual({ title: `t ${GONE}`, body: GONE });
   }
+  const host = (u: string) => URL.parse(u)?.hostname ?? "";
+  for (const w of GONE.split(" ")) expect([host(w), host(`https://${w}`)].some((h) => h.endsWith("linear.app"))).toBe(false);
+  const [c] = parseFindings(JSON.stringify([{ title: "a%0Ab%1B[2Jc", body: "x %0A%1B[31m y\n%E2%80%8B" }]));
+  expect(c).toEqual({ title: "a%0Ab%1B[2Jc", body: "x %0A%1B[31m y\n%E2%80%8B" });
 
   const { tr, calls } = fakeTracker({});
   const { io } = fakeIo();

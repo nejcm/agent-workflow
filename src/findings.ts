@@ -12,15 +12,18 @@ const MAX_FINDINGS_BYTES = 64 * 1024;
 
 const MAX_FILED_BYTES = 16 * 1024;
 
-// What a URL parser sees: %XX decoded (repeatedly), NFKC, default-ignorables dropped, ideographic dots as `.`.
-const asHost = (w: string) => {
-  for (let p = ""; p !== w; ) [p, w] = [w, w.replace(/%([0-9a-f]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))];
+// Percent-escape runs decoded as UTF-8 until stable, NFKC, default-ignorables dropped, ideographic dots as `.`.
+const normalized = (w: string) => {
+  for (let p = ""; p !== w; ) [p, w] = [w, w.replace(/(?:%[0-9a-f]{2})+/gi, (m) => { try { return decodeURIComponent(m); } catch { return m; } })];
   return w.normalize("NFKC").replace(/\p{DI}/gu, "").replace(/[\u3002\uff0e\uff61]/g, ".");
 };
-// Linear turns its profile URLs into mentions: any word that resolves to linear.app gets `[.]` for its dots, which no parser
-// or linkifier accepts in a host. Zero-width space after `@`. So filing pings no one.
-const unmention = (s: string) =>
-  s.replace(/\S+/g, (w) => (/linear\.app/i.test(asHost(w)) ? asHost(w).replace(/\./g, "[.]") : w)).replace(/(?<!\w)@(?=\w)/g, "@\u200b");
+const host = (u: string) => { try { return new URL(u).hostname; } catch { return ""; } };
+const linearLink = (w: string) =>
+  /linear\.app/i.test(normalized(w)) ||
+  [w, ...[...w.matchAll(/http/gi)].map((m) => w.slice(m.index))].some((c) => [host(c), host(`https://${c}`)].some((h) => h.endsWith("linear.app")));
+// Linear turns its profile URLs into mentions, so a word that resolves to linear.app is replaced whole (never decoded,
+// which could reintroduce controls); a zero-width space follows `@`. So filing pings no one.
+const unmention = (s: string) => s.replace(/\S+/g, (w) => (linearLink(w) ? "[linear[.]app link removed]" : w)).replace(/(?<!\w)@(?=\w)/g, "@\u200b");
 
 /** Validates the agent-written findings file and sanitizes each entry; it is untrusted, so a wrong shape throws. */
 export function parseFindings(raw: string): Finding[] {
@@ -29,8 +32,8 @@ export function parseFindings(raw: string): Finding[] {
   return a.flatMap((f, i) => {
     const ok = f && typeof f === "object" && Object.keys(f).every((k) => k === "title" || k === "body") && typeof f.title === "string" && typeof (f.body ?? "") === "string";
     if (!ok) throw new Error(`findings[${i}]: invalid`);
-    const title = unmention(clean(f.title, Infinity)).slice(0, 120);
-    const body = unmention((f.body ?? "").split("\n").map((l: string) => strip(l).trimEnd()).join("\n").trim()).slice(0, 4000);
+    const title = unmention(clean(f.title, 120)).slice(0, 120);
+    const body = unmention((f.body ?? "").split("\n").map((l: string) => strip(l).trimEnd()).join("\n").trim().slice(0, 4000)).slice(0, 4000);
     return title ? [{ title, body }] : [];
   });
 }

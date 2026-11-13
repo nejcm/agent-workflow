@@ -100,11 +100,17 @@ export function linear(l: Source, host: string, io: Io, defaultHost = false): Tr
     parked: async (t) =>
       hasLabel(labelNames((await gql(`query($id: String!) { issue(id: $id) { labels { nodes { name parent { name } } } } }`, { id: t.ref })).issue?.labels), l.needsHumanLabel),
     comment,
-    // `last` returns oldest first (`first` is newest first). shortcut: the 100 oldest after `since`, paginate if 100 non-answers pile up.
+    // Callers treat the list as complete, so past 20 pages it throws rather than return part of it.
     async comments(t, since) {
-      const q = `query($id: String!, $since: DateTimeOrDuration!) { issue(id: $id) { comments(filter: { createdAt: { gt: $since } }, last: 100) { nodes { id body createdAt user { email } } } } }`;
-      const d = await gql(q, { id: t.ref, since: new Date(since).toISOString() });
-      return (d.issue?.comments?.nodes ?? []).map((c: any) => ({ id: String(c.id), body: c.body ?? "", createdAt: c.createdAt ?? "", author: c.user?.email ?? undefined }));
+      const q = `query($id: String!, $since: DateTimeOrDuration!, $after: String) { issue(id: $id) { comments(filter: { createdAt: { gt: $since } }, first: 100, after: $after) { nodes { id body createdAt user { email } } pageInfo { hasNextPage endCursor } } } }`;
+      const nodes: any[] = [];
+      for (let page = 0, after: string | null = null; page < 20; page++) {
+        const c: any = (await gql(q, { id: t.ref, since: new Date(since).toISOString(), after })).issue?.comments;
+        nodes.push(...(c?.nodes ?? []));
+        if (!c?.pageInfo?.hasNextPage) return nodes.map((c: any) => ({ id: String(c.id), body: c.body ?? "", createdAt: c.createdAt ?? "", author: c.user?.email ?? undefined }));
+        after = c.pageInfo.endCursor;
+      }
+      throw new Error(`linear comments: more than 2000 on ${t.id}`);
     },
     createPhase: async (parent, title, description) => (await create({ parentId: parent.ref, title, description })).id,
     createTicket: async (_from, title, description) => (await create({ title, description })).url,

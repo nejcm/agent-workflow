@@ -1,8 +1,13 @@
-import { chmodSync, closeSync, constants as C, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants as C, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { Io, Ticket } from "./types";
+import type { Config, Io, Ticket } from "./types";
 
 export const AW_DIR = dirname(import.meta.dir);
+
+export const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
+
+export const subdirs = (d: string) => (existsSync(d) ? readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) : []);
+export const diskRepos = (cfg: Config) => subdirs(cfg.workspaceRoot).filter((o) => !o.startsWith(".")).flatMap((o) => subdirs(join(cfg.workspaceRoot, o)).map((n) => `${o}/${n}`));
 
 // Second layer for aw's own git calls: hook files, fsmonitor, auto-gc and risky transports only, not every config that runs code.
 export const GIT = ["git", ...["core.hooksPath=/dev/null", "core.fsmonitor=false", "core.alternateRefsCommand=", "maintenance.auto=false", "protocol.ext.allow=never", "protocol.file.allow=never", "protocol.git.allow=never"].flatMap((c) => ["-c", c])];

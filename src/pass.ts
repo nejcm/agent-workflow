@@ -110,7 +110,8 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
           await step(io, `question ${t.id}`, () => syncQuestion(w, tr, io, dir, join(dir, t.id)));
           return step(io, `answer ${t.id}`, () => deliverAnswer(w, tr, io, dir, cfg.repos[key]!.feedbackAuthors, win, () => state(cfg.repos[key]!, dir, t.id)));
         }
-        if (existsSync(ended)) return;
+        // The in-progress listing can lag a close that cleanup already acted on.
+        if (existsSync(ended) || (await tr.isDone(t.id, key))) return;
         await tr.comment(w, "session ended without a PR");
         put(io, ended, new Date().toISOString());
       });

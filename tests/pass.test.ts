@@ -325,8 +325,10 @@ test("after a restart cleanup and findPr use the repo and source recorded next t
   }
   const gh = fakeTracker({ done: ["acme/api#gh-5"], inProgress: [ticket(5, "acme/api")] });
   const lin = fakeTracker({ inProgress: [{ ...ticket(7), id: "ENG-7", repo: "acme/web" }] });
+  let names = ["acme/web/gh-5", "acme/api/gh-5", "acme/api/ENG-7"];
   const { io, cmds, logs } = fakeIo((a) => {
-    if (a[1] === "list-windows") return windowsOut(["acme/web/gh-5", "acme/api/gh-5", "acme/api/ENG-7"]);
+    if (a[1] === "list-windows") return windowsOut(names);
+    if (a[1] === "kill-window") names = names.filter((_, i) => `@${i}` !== a.at(-1));
     if (a[4] === "remove") rmSync(a.at(-1)!, { recursive: true });
     return noPr(a);
   });
@@ -338,7 +340,10 @@ test("after a restart cleanup and findPr use the repo and source recorded next t
   expect(cmds).toContain("gh pr list --repo acme/api --head agent/ENG-7 --state all --json url,state");
   expect(cmds.some((x) => x.includes("--repo acme/web --head agent/ENG-7"))).toBe(false);
   expect(lin.calls).toEqual([]);
-  expect(gh.calls).toEqual(["comment gh-5 session ended without a PR"]);
+  // Closed but still listed in progress, after the worktree is gone too.
+  await pass(c, io, (s) => (s.name === "gh" ? gh.tr : lin.tr), "/aw");
+  expect(gh.calls).toEqual([]);
+  expect(existsSync(join(root, "acme/api/gh-5.ended"))).toBe(false);
 });
 
 test("redirected or unresolvable repos are skipped before listing, cloning or starting", async () => {

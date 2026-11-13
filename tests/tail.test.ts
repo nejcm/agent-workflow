@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { claudeDir } from "../src/agents";
-import { argSummary, events, newest, tail, transcript, worktreesFor } from "../src/tail";
+import { claudeDir, claudeHome } from "../src/agents";
+import { argSummary, events, lastSay, newest, tail, transcript, worktreesFor } from "../src/tail";
 import { clean } from "../src/util";
 import { claudeFile, config, root, useTempRoot, worktree } from "./helpers";
 
@@ -194,4 +194,26 @@ test("hostile JSON shapes never crash formatting", () => {
   const deep = `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"x","input":{"a":${"[".repeat(20000)}${"]".repeat(20000)}}}]}}`;
   expect(() => events(deep)).not.toThrow();
   expect(events(JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command: [{ toString: null }] } }] } }))).toHaveLength(1);
+});
+
+test("lastSay: the last non-empty claude assistant text, an unterminated final record included; undefined when missing", () => {
+  const wt = join(root, "acme/web/PER-2");
+  expect(lastSay(wt)).toBeUndefined();
+  claudeFile(wt, "a.jsonl", say("first"), say("why I stopped"), claudeTool, claudeOk, claudePrompt, "{bad");
+  expect(lastSay(wt)).toBe("why I stopped");
+  appendFileSync(join(claudeDir(wt), "a.jsonl"), say("unterminated"));
+  expect(lastSay(wt)).toBe("unterminated");
+  claudeFile(wt, "b.jsonl", claudeTool);
+  expect(lastSay(wt)).toBeUndefined();
+});
+
+test("lastSay refuses a transcript that resolves outside the ticket's own config dir", () => {
+  const wt = join(root, "acme/web/PER-3");
+  const other = join(root, "acme/web/PER-4.claude");
+  claudeFile(wt, "a.jsonl", say("not mine"));
+  mkdirSync(other, { recursive: true });
+  renameSync(join(claudeHome(wt), "projects"), join(other, "projects"));
+  symlinkSync(join(other, "projects"), join(claudeHome(wt), "projects"));
+  expect(transcript(wt, "claude", root)).toBeDefined();
+  expect(lastSay(wt)).toBeUndefined();
 });

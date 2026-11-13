@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { allowedRepo, repoDir, validRepo } from "./config";
 import { deliverFeedback } from "./feedback";
@@ -8,17 +8,14 @@ import { linear } from "./linear";
 import { autoMerge } from "./merge";
 import { syncPhases } from "./phases";
 import { deliverAnswer, liveStates, syncQuestion } from "./question";
-import type { Config, Io, Source, Ticket, Tracker } from "./types";
-import { AW_DIR, GIT, put, remove, write } from "./util";
-
-export const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
+import { lastSay } from "./tail";
+import type { Config, Io, Repo, Source, Ticket, Tracker } from "./types";
+import { AW_DIR, clean, diskRepos, GIT, mtime, put, remove, SAFE_ID, subdirs, write } from "./util";
 
 const sourceOf = (dir: string, id: string) => {
   const f = join(dir, `${id}.source`);
   return existsSync(f) ? readFileSync(f, "utf8").trim() : undefined;
 };
-const subdirs = (d: string) => (existsSync(d) ? readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) : []);
-export const diskRepos = (cfg: Config) => subdirs(cfg.workspaceRoot).filter((o) => !o.startsWith(".")).flatMap((o) => subdirs(join(cfg.workspaceRoot, o)).map((n) => `${o}/${n}`));
 const hasTrace = (cfg: Config, key: string, id: string) => existsSync(join(repoDir(cfg, key), id)) || existsSync(join(repoDir(cfg, key), `${id}.source`));
 // Linear only: ids are unique per workspace (one LINEAR_API_KEY), so the marker is shared by all Linear sources.
 const rejectFile = (cfg: Config, id: string) => join(cfg.workspaceRoot, ".rejected", id);
@@ -93,6 +90,26 @@ async function startReady(cfg: Config, s: Source, tr: Tracker, io: Io, t: Ticket
   });
 }
 
+// Codex transcripts share ~/.codex-aw, writable by every session, so any of them could claim this worktree's cwd.
+function lastMessage(wt: string, agent: Repo["agent"]) {
+  try {
+    return agent === "claude" ? lastSay(wt, mtime(`${wt}.sh`) ?? mtime(wt) ?? 0) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const MAX_SAY = 1500;
+
+/** The ended-without-PR comment; the session's last message is capped, sanitized and fenced so it cannot close the fence. */
+export function endedNotice(say: string | undefined) {
+  const cps = [...(say ?? "").split("\n").map((l) => clean(l, Infinity)).join("\n").trim()];
+  if (!cps.length) return "session ended without a PR";
+  const text = (cps.length > MAX_SAY ? "…" : "") + cps.slice(-MAX_SAY).join("");
+  const fence = "`".repeat(Math.max(3, ...(text.match(/`+/g) ?? []).map((r) => r.length + 1)));
+  return `session ended without a PR. Last message:\n\n${fence}\n${text}\n${fence}`;
+}
+
 async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins: Map<string, string>, state: ReturnType<typeof liveStates>) {
   await step(io, "list in-progress", async () => {
     for (const t of await tr.listInProgress())
@@ -112,7 +129,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
         }
         // The in-progress listing can lag a close that cleanup already acted on.
         if (existsSync(ended) || (await tr.isDone(t.id, key))) return;
-        await tr.comment(w, "session ended without a PR");
+        await tr.comment(w, endedNotice(lastMessage(join(dir, t.id), cfg.repos[key]!.agent)));
         put(io, ended, new Date().toISOString());
       });
   });

@@ -1,11 +1,10 @@
-import { closeSync, constants as C, existsSync, fstatSync, openSync, readSync, type Stats } from "node:fs";
+import { closeSync, constants as C, existsSync, fstatSync, openSync, readlinkSync, readSync, realpathSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { type Agent, AGENTS } from "./agents";
+import { type Agent, AGENTS, claudeHome } from "./agents";
 import { repoDir, validRepo } from "./config";
-import { diskRepos, SAFE_ID } from "./pass";
 import type { Config, Repo } from "./types";
-import { clean, mtime } from "./util";
+import { clean, diskRepos, mtime, SAFE_ID } from "./util";
 
 const CHUNK = 256 * 1024;
 
@@ -117,21 +116,45 @@ function lineEvents(o: any): string[] {
   return out;
 }
 
+const sayText = (o: any) => (o?.type === "assistant" ? textOf(o.message?.content) : "");
+
+/** Raw, untrusted text of the last non-empty assistant message in `wt`'s newest Claude transcript (since `since` ms). */
+export function lastSay(wt: string, since = 0) {
+  const p = transcript(wt, "claude", "", since);
+  if (!p) return undefined;
+  const projects = join(realpathSync(claudeHome(wt)), "projects") + "/";
+  // One open: where the fd really points and what it records, so a dir swapped in after the lookup is refused.
+  return withFile(p, (fd, st) => {
+    if (!readlinkSync(`/proc/self/fd/${fd}`).startsWith(projects) || fdCwd(fd, AGENTS.claude.cwd) !== wt) return undefined;
+    const from = Math.max(0, st.size - CHUNK - 1);
+    const buf = Buffer.alloc(st.size - from);
+    const b = buf.subarray(0, readSync(fd, buf, 0, buf.length, from));
+    const nl = from > 0 ? b.indexOf(10) : -1;
+    if (from > 0 && nl < 0) return undefined;
+    const ls = b.toString("utf8", nl + 1).split("\n");
+    for (let i = ls.length - 1; i >= 0; i--)
+      try {
+        const t = sayText(JSON.parse(ls[i]!)).trim();
+        if (t) return t;
+      } catch {}
+  });
+}
+
 export function newest(paths: string[]) {
   return paths.map((p) => ({ p, m: mtime(p) ?? -1 })).filter((x) => x.m >= 0).sort((a, b) => b.m - a.m)[0]?.p;
 }
 
-/** The first cwd recorded in a transcript's head. */
-function headCwd(file: string, cwdOf: Agent["cwd"]) {
-  return withFile(file, (fd) => {
-    const buf = Buffer.alloc(CHUNK);
-    for (const l of buf.toString("utf8", 0, readSync(fd, buf, 0, CHUNK, 0)).split("\n"))
-      try {
-        const c = cwdOf(JSON.parse(l));
-        if (typeof c === "string") return c;
-      } catch {}
-  });
+/** The first cwd recorded in an open transcript's head. */
+function fdCwd(fd: number, cwdOf: Agent["cwd"]) {
+  const buf = Buffer.alloc(CHUNK);
+  for (const l of buf.toString("utf8", 0, readSync(fd, buf, 0, CHUNK, 0)).split("\n"))
+    try {
+      const c = cwdOf(JSON.parse(l));
+      if (typeof c === "string") return c;
+    } catch {}
 }
+
+const headCwd = (file: string, cwdOf: Agent["cwd"]) => withFile(file, (fd) => fdCwd(fd, cwdOf));
 
 // Claude's dir mangling collides (a-b vs a.b) and Codex shares one dir, so both are matched on the recorded cwd.
 const ownedBy = (a: Agent, wt: string, home: string, since: number) =>

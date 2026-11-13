@@ -203,6 +203,7 @@ test("follow never goes back to an older transcript when the newer one turns unr
   let fresh = "";
   const steps = [
     () => (fresh = claudeFile(wt, "b.jsonl", say("second"))),
+    () => (utimesSync(old, 2000, 2000), utimesSync(fresh, 2000, 2000)),
     () => chmodSync(fresh, 0),
     () => (chmodSync(fresh, 0o644), appendFileSync(fresh, `${say("third")}\n`)),
     () => rmSync(fresh),

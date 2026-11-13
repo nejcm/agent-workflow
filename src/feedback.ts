@@ -47,8 +47,11 @@ async function failedLog(io: Io, repo: string, run: string) {
   }
 }
 
+/** Fields deliverFeedback reads beyond autoMerge's view. */
+export const feedbackFields = (r: Repo) => `,mergeStateStatus${r.feedbackAuthors.length ? ",reviews,comments" : ""}`;
+
 // The cursor is recorded first: a crash or failure after it loses the paste, never repeats it. Text never goes through keys.
-export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, dir: string, win: string | undefined, state: () => Promise<State>, warned: Set<string>) {
+export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, dir: string, win: string | undefined, state: () => Promise<State>, warned: Set<string>, viewed?: any) {
   const prFile = join(dir, `${t.id}.pr`);
   const url = existsSync(prFile) ? readFileSync(prFile, "utf8") : "";
   const n = /\/pull\/(\d+)$/.exec(url)?.[1];
@@ -59,7 +62,7 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
   if (saved.capped && (await tr.parked(t))) return;
   const cur: FeedbackCursor = saved.capped ? { ...saved, rounds: 0, capped: undefined } : saved;
   const talk = r.feedbackAuthors.length > 0;
-  const pr = JSON.parse(await read(io, ["gh", "pr", "view", n, "--repo", r.key, "--json", `state,baseRefName,headRefOid,mergeStateStatus,statusCheckRollup${talk ? ",reviews,comments" : ""}`]));
+  const pr = viewed?.url === url && !saved.capped ? viewed : JSON.parse(await read(io, ["gh", "pr", "view", n, "--repo", r.key, "--json", `state,baseRefName,headRefOid,mergeStateStatus,statusCheckRollup${talk ? ",reviews,comments" : ""}`]));
   if (pr.state !== "OPEN") return;
   // shortcut: first 100 line comments only; paginate if a PR ever gets more.
   const lines = talk ? JSON.parse(await read(io, ["gh", "api", `repos/${r.key}/pulls/${n}/comments?per_page=100`])) : [];

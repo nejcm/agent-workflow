@@ -86,6 +86,7 @@ test("starts ready tickets up to maxConcurrent", async () => {
   const prompt = readFileSync(join(root, "acme/web/gh-1.prompt.md"), "utf8");
   expect(prompt).toContain("body; rm -rf ~ $(whoami)");
   expect(prompt).toContain("git push origin agent/gh-1");
+  expect(prompt).toContain("the options you see,\nand which one you recommend and why");
   const seeded = JSON.parse(readFileSync(join(root, "acme/web/gh-1.claude/.claude.json"), "utf8"));
   expect(seeded.projects).toEqual({ [realpathSync(wt)]: { hasTrustDialogAccepted: true } });
   expect(readFileSync(join(root, "acme/web/gh-1.sh"), "utf8")).toContain(`--read '${root}/src-web/.git/objects' --`);

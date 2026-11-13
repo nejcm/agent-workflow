@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { allowedRepo, repoDir, validRepo } from "./config";
-import { deliverFeedback } from "./feedback";
+import { deliverFeedback, feedbackFields } from "./feedback";
 import { fileFindings } from "./findings";
 import { byPriority, canonical, findPr, github, sameRepo } from "./github";
 import { nonoRun, SLOW_SECS, start, stopScope, sweepScopes, windows, winName } from "./launcher";
@@ -182,10 +182,11 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
       const parked = hasLabel(w.labels, s.needsHumanLabel);
       await step(io, `phases ${t.id}`, () => syncPhases(w, tr, io, dir, true));
       if (!parked) await step(io, `findings ${t.id}`, () => fileFindings(w, tr, io, dir));
-      if (r.autoMerge !== "off") await step(io, `merge ${t.id}`, () => autoMerge(cfg, r, w, tr, io, parked));
+      const share: { fields: string; pr?: any } | undefined = parked ? undefined : { fields: feedbackFields(r) };
+      if (r.autoMerge !== "off") await step(io, `merge ${t.id}`, () => autoMerge(cfg, r, w, tr, io, parked, share));
       // autoMerge looks the PR up anyway; otherwise every poll too, so a replaced PR reaches `<ID>.pr` (and feedback).
       else await step(io, `pr ${t.id}`, () => findPr(key, t.id, io, dir));
-      if (!parked) await step(io, `feedback ${t.id}`, () => deliverFeedback(r, w, tr, io, dir, win, () => state(r, dir, t.id), warned));
+      if (!parked) await step(io, `feedback ${t.id}`, () => deliverFeedback(r, w, tr, io, dir, win, () => state(r, dir, t.id), warned, share?.pr));
     }
   });
 }

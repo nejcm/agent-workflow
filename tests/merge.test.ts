@@ -190,6 +190,21 @@ test("merge decision: renames, newline paths and skipped-only checks are held ba
   expect(mergeDecision(prFacts({ statusCheckRollup: [skipped] }), undefined, smart).merge).toBe(true);
 });
 
+test("auto-merge pass: a head that moves before the merge re-check drops a held marker for the old head", async () => {
+  const pr = { ...prFacts(), number: 7, url: "https://github.com/acme/web/pull/7", headRefOid: "a".repeat(40) };
+  const views = [pr, { ...pr, headRefOid: "b".repeat(40) }];
+  const { tr, calls } = fakeTracker({ inReview: [ticket(1)] });
+  const { io, cmds } = fakeIo((a) =>
+    a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"OPEN"}]' }
+    : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(views.shift()) }
+    : a[1] === "repo" && a[2] === "view" ? { out: JSON.stringify({ nameWithOwner: "acme/web" }) } : undefined);
+  worktree("gh-1");
+  const marker = join(root, "acme/web/gh-1.merge");
+  writeFileSync(marker, "a".repeat(40));
+  await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "all" }] }), io, () => tr, "/aw");
+  expect([existsSync(marker), calls, cmds.some((x) => x.startsWith("gh pr merge"))]).toEqual([false, [], false]);
+});
+
 test("auto-merge pass: re-checks the PR right before merging, confirms it merged, guards the merged recovery", async () => {
   const pr = { ...prFacts(), number: 7, url: "https://github.com/acme/web/pull/7", headRefOid: "a".repeat(40) };
   const run = async (views: any[], state = "MERGED", owner = "acme/web") => {

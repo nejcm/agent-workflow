@@ -17,14 +17,11 @@ export const nonoRun = (profile: string, awDir: string, grants: [string, string]
 /** The session's systemd user scope; ':' is in no repo key or ticket id, so names never collide. */
 export const scopeUnit = (key: string, id: string) => `aw-${key.replace("/", ":")}:${id}.scope`;
 
-/** SIGKILLs the session's whole scope, setsid'd children included, which tmux kill-window leaves running; fails if systemd --user is unreachable. */
+/** SIGKILLs the session's scope, setsid'd children included (kill-window leaves them); throws if systemd --user is unreachable. */
 export const stopScope = (io: Io, key: string, id: string) =>
   write(io, ["systemctl", "--user", "kill", "--signal=KILL", scopeUnit(key, id)]).catch((e) => {
     if (!/ not loaded\.$/.test(e.message)) throw e;
   });
-
-// The pane's own pty, resolved when the script runs; the profiles grant no other /dev/pts entry.
-const PANE_TTY = `"$(tty)"`;
 
 // A session clone only reads the base's objects (alternates).
 export function launcher(l: Repo, wt: string, promptFile: string, awDir = AW_DIR) {
@@ -33,8 +30,8 @@ export function launcher(l: Repo, wt: string, promptFile: string, awDir = AW_DIR
   const git = join(l.path, ".git");
   const own = [...(l.agent === "claude" ? [claudeHome(wt)] : []), codexHome(wt)].map((p): [string, string] => ["--allow", p]);
   const tmp = tmpHome(wt);
-  const grants: [string, string][] = [["--allow", wt], ["--allow-unix-socket-subtree-bind", wt], ["--allow", tmp], ["--allow-unix-socket-subtree-bind", tmp], ...own, ["--read", join(git, "objects")], ["--allow-file", PANE_TTY]];
-  const wrap = nono ? nonoRun(`aw-${l.agent}`, awDir, grants, (s) => (s === PANE_TTY ? s : q(s))) : [];
+  const grants: [string, string][] = [["--allow", wt], ["--allow-unix-socket-subtree-bind", wt], ["--allow", tmp], ["--allow-unix-socket-subtree-bind", tmp], ...own, ["--read", join(git, "objects")]];
+  const wrap = nono ? nonoRun(`aw-${l.agent}`, awDir, grants, q) : [];
   const [env, cmd] = AGENTS[l.agent].launch(q(wt), prompt, nono);
   // gh exits if it cannot read its config dir; <ID>.gh is never created, so gh runs on defaults plus nono's GH_TOKEN.
   // A private XDG cache: the host's ~/.cache (Claude's claude-cli-nodejs included) stays out of the sandbox.
@@ -95,7 +92,7 @@ export const CODEX_AUTH = ".codex-aw/auth.json";
 const REFRESH_MARGIN = 24 * 3600_000;
 // What an access-token ChatGPT login needs; API keys, PATs, Bedrock keys and anything newer stay on the host.
 const LOGIN = ["auth_mode", "last_refresh"];
-const TOKENS = ["id_token", "access_token", "account_id", "login_owner_id", "oauth_provenance"];
+const TOKENS = ["id_token", "access_token", "account_id", "login_owner_id"];
 // app-server's `account/read` with `refreshToken` forces a refresh. flock: two concurrent refreshes of a rotating token invalidate the login.
 // A login changed while waiting ($2 is the stamp aw read) was already refreshed; app-server never holds the lock.
 const REFRESH = [
@@ -142,7 +139,7 @@ export async function codexLogin(io: Io, now = Date.now()) {
     await write(io, codexRefresh(io.home, seen)).catch(() => undefined);
     if (!io.dry && expiresAt((o = load())) - now < REFRESH_MARGIN) throw new Error(`could not refresh the Codex login in ${file}: ${fix}`);
   }
-  return JSON.stringify({ ...pick(o, LOGIN), tokens: { ...pick(o.tokens, TOKENS), refresh_token: "" } });
+  return JSON.stringify({ ...pick(o, LOGIN), tokens: { ...pick(o.tokens, TOKENS), ...(o.tokens.oauth_provenance && { oauth_provenance: pick(o.tokens.oauth_provenance, ["issuer", "client_id"]) }), refresh_token: "" } });
 }
 
 // Same as seedClaude; `login` is codexLogin's copy, the session's own credential.
@@ -221,8 +218,8 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   try {
     await tr.claim(t);
   } catch (e) {
-    await stopScope(io, r.key, t.id).catch((k) => io.log(`${t.id}: claim failed and stopping its scope failed (${k.message}); run systemctl --user kill --signal=KILL ${scopeUnit(r.key, t.id)}`));
     await write(io, ["tmux", "kill-window", "-t", `=${cfg.tmuxSession}:=${winName(r.key, t.id)}`]).catch((k) => io.log(`${t.id}: claim failed and kill-window failed (${k.message}); kill window ${winName(r.key, t.id)} by hand`));
+    await stopScope(io, r.key, t.id).catch((k) => io.log(`${t.id}: claim failed and stopping its scope failed (${k.message}); run systemctl --user kill --signal=KILL ${scopeUnit(r.key, t.id)}`));
     throw e;
   }
 }

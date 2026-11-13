@@ -23,7 +23,7 @@ test("launcher: claude under nono, token read on the host, never written; the ba
   expect(s).toContain(`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-aw/oauth-token")" || exit 1\nexport CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/web/gh-1'.claude CODEX_HOME='/ws/web/gh-1'.codex CLAUDE_CODE_TMPDIR='/ws/web/gh-1'.tmpdir\n`);
   expect(s).toContain(`unset LINEAR_API_KEY\nexport TMPDIR='/ws/web/gh-1.tmpdir' TMP='/ws/web/gh-1.tmpdir' TEMP='/ws/web/gh-1.tmpdir'\n`);
   expect(s).toContain("--no-rollback-prompt");
-  expect(s).toContain(`exec systemd-run --user --scope --quiet --collect --unit 'aw-acme:web:gh-1.scope' -- nono run --no-rollback-prompt --profile '/aw/nono/aw-claude.json' --allow '/ws/web/gh-1' --allow-unix-socket-subtree-bind '/ws/web/gh-1' --allow '/ws/web/gh-1.tmpdir' --allow-unix-socket-subtree-bind '/ws/web/gh-1.tmpdir' --allow '/ws/web/gh-1.claude' --allow '/ws/web/gh-1.codex' --read '${root}/src-web/.git/objects' --allow-file "$(tty)" -- claude --permission-mode`);
+  expect(s).toContain(`exec systemd-run --user --scope --quiet --collect --unit 'aw-acme:web:gh-1.scope' -- nono run --no-rollback-prompt --profile '/aw/nono/aw-claude.json' --allow '/ws/web/gh-1' --allow-unix-socket-subtree-bind '/ws/web/gh-1' --allow '/ws/web/gh-1.tmpdir' --allow-unix-socket-subtree-bind '/ws/web/gh-1.tmpdir' --allow '/ws/web/gh-1.claude' --allow '/ws/web/gh-1.codex' --read '${root}/src-web/.git/objects' -- claude --permission-mode`);
   expect(s).toContain(`--permission-mode bypassPermissions "$(cat '/ws/web/gh-1.prompt.md')"`);
 });
 
@@ -44,7 +44,7 @@ export TMPDIR='/ws/it'\''s.tmpdir' TMP='/ws/it'\''s.tmpdir' TEMP='/ws/it'\''s.tm
   const claudeEnv = String.raw`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-aw/oauth-token")" || exit 1
 export CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CODEX_HOME='/ws/it'\''s'.codex CLAUDE_CODE_TMPDIR='/ws/it'\''s'.tmpdir
 `;
-  const nono = (a: string, own = "") => String.raw`nono run --no-rollback-prompt --profile '/aw/nono/aw-${a}.json' --allow '/ws/it'\''s' --allow-unix-socket-subtree-bind '/ws/it'\''s' --allow '/ws/it'\''s.tmpdir' --allow-unix-socket-subtree-bind '/ws/it'\''s.tmpdir' ${own}--read '/src/web/.git/objects' --allow-file "$(tty)" -- `;
+  const nono = (a: string, own = "") => String.raw`nono run --no-rollback-prompt --profile '/aw/nono/aw-${a}.json' --allow '/ws/it'\''s' --allow-unix-socket-subtree-bind '/ws/it'\''s' --allow '/ws/it'\''s.tmpdir' --allow-unix-socket-subtree-bind '/ws/it'\''s.tmpdir' ${own}--read '/src/web/.git/objects' -- `;
   const claude = String.raw`claude --permission-mode bypassPermissions "$(cat '/ws/p.md')"
 `;
   const codex = (d: string) => String.raw`codex ${d}--dangerously-bypass-hook-trust --sandbox danger-full-access --ask-for-approval never -C '/ws/it'\''s' "$(cat '/ws/p.md')"
@@ -86,7 +86,7 @@ test("starts ready tickets up to maxConcurrent", async () => {
   expect(prompt).toContain("git push origin agent/gh-1");
   const seeded = JSON.parse(readFileSync(join(root, "acme/web/gh-1.claude/.claude.json"), "utf8"));
   expect(seeded.projects).toEqual({ [realpathSync(wt)]: { hasTrustDialogAccepted: true } });
-  expect(readFileSync(join(root, "acme/web/gh-1.sh"), "utf8")).toContain(`--read '${root}/src-web/.git/objects' --allow-file "$(tty)" --`);
+  expect(readFileSync(join(root, "acme/web/gh-1.sh"), "utf8")).toContain(`--read '${root}/src-web/.git/objects' --`);
   expect(existsSync(join(root, "acme/web/gh-1.codex"))).toBe(true);
   expect(readdirSync(`${wt}.tmpdir`)).toEqual(["cache"]);
   expect(readdirSync(`${wt}.tmpdir/cache`)).toEqual([]);
@@ -98,7 +98,7 @@ const cloneCmd = (base: string, wt: string) => `git -c protocol.file.allow=alway
 const jwt = (exp: number) => `h.${Buffer.from(JSON.stringify({ exp: Math.floor(exp / 1000) })).toString("base64url")}.s`;
 const login = (exp: number) => {
   mkdirSync(join(root, ".codex-aw"), { recursive: true });
-  const tokens = { id_token: "i", access_token: jwt(exp), refresh_token: "secret-rt", account_id: "a", login_owner_id: "u", oauth_provenance: { issuer: "https://auth", client_id: "c" }, extra: "secret-x" };
+  const tokens = { id_token: "i", access_token: jwt(exp), refresh_token: "secret-rt", account_id: "a", login_owner_id: "u", oauth_provenance: { issuer: "https://auth", client_id: "c", secret: "secret-p" }, extra: "secret-x" };
   writeFileSync(join(root, CODEX_AUTH), JSON.stringify({ auth_mode: "chatgpt", OPENAI_API_KEY: "secret-k", personal_access_token: "secret-pat", tokens, last_refresh: "x" }));
 };
 const DAY = 24 * 3600_000;
@@ -280,13 +280,14 @@ test("reuses an existing session dir; a branch a legacy worktree left in the bas
 test("in-progress: PR moves to review; missing window comments once", async () => {
   const c = config();
   const { tr, calls } = fakeTracker({ inProgress: [ticket(1), ticket(2), ticket(3)] });
-  const { io, logs } = fakeIo((a) => {
+  const { io, cmds, logs } = fakeIo((a) => {
     if (a[1] === "list-windows") return windowsOut(["acme/web/gh-3"]);
     if (a[1] === "pr") return { out: a.includes("agent/gh-1") ? '[{"url":"https://pr/1","state":"OPEN"}]' : "[]" };
   });
   await pass(c, io, () => tr, "/aw");
   await pass(c, io, () => tr, "/aw");
   expect(calls).toEqual(["review gh-1 https://pr/1", "comment gh-2 session ended without a PR", "review gh-1 https://pr/1"]);
+  expect(cmds.filter((x) => x.startsWith("systemctl"))).toEqual(["systemctl --user kill --signal=KILL aw-acme:web:gh-2.scope"]);
   expect(existsSync(join(root, "acme/web/gh-2.ended"))).toBe(true);
   expect(readFileSync(join(root, "acme/web/gh-1.pr"), "utf8")).toBe("https://pr/1");
   expect(logs.filter((l) => l.endsWith("write " + join(root, "acme/web/gh-1.pr")))).toHaveLength(1);
@@ -372,6 +373,7 @@ test("canceled: kills the window once, keeps the clone and files, posts nothing;
   wins = [];
   await pass(c, io, () => tr, "/aw");
   expect(cmds.filter((x) => x.includes("kill-window"))).toHaveLength(1);
+  expect(cmds.filter((x) => x.startsWith("systemctl"))).toHaveLength(2);
   expect(logs.filter((l) => l.includes("stopped"))).toHaveLength(2);
   expect(calls).toEqual([]);
   s.canceled = [];
@@ -1015,4 +1017,12 @@ test("sandbox profiles deny host Unix sockets", () => {
 
 test("sandbox profiles pass GH_CONFIG_DIR through, or gh reads the unreadable real config", () => {
   for (const a of ["claude", "codex"]) expect(JSON.stringify(JSON.parse(readFileSync(join(import.meta.dir, "..", "nono", `aw-${a}.json`), "utf8")))).toContain('"GH_CONFIG_DIR"');
+});
+
+test("no sandbox profile grants /dev/pts, so a session cannot open another terminal", () => {
+  for (const a of ["claude", "codex", "check"]) {
+    const p = JSON.parse(readFileSync(join(import.meta.dir, "..", "nono", `aw-${a}.json`), "utf8"));
+    expect(p.groups.exclude).toEqual(expect.arrayContaining(["system_read_linux_core", "system_write_linux"]));
+    expect(JSON.stringify(p.filesystem)).not.toContain("/dev/pts");
+  }
 });

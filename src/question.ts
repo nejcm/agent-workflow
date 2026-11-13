@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { AGENTS, type Lookup } from "./agents";
+import { AGENTS, INBOX_WAITER, type Lookup } from "./agents";
 import { resolve, type State } from "./state";
 import type { Io, Repo, Ticket, TicketComment, Tracker } from "./types";
 import { mtime, put, read, readAw, removeAw, write, writeAw } from "./util";
@@ -94,25 +94,43 @@ export async function paste(io: Io, id: string, pane: string, line: string) {
   await write(io, ["tmux", "send-keys", "-t", pane, "Enter"]);
 }
 
+/** A pane gets the line pasted; null (a live Claude waiter) gets it through `.aw/inbox`, read even at an idle prompt. */
+export async function nudge(io: Io, id: string, wt: string, pane: string | null, line: string) {
+  if (pane) return paste(io, id, pane, line);
+  io.log(`${io.dry ? "dry: " : ""}inbox ${id}: ${line}`);
+  if (!io.dry) writeAw(wt, "inbox", `${line}\n`);
+}
+
+/** null when a Claude inbox waiter runs in the session's scope; otherwise the launcher's pane, undefined if missing or in copy mode. */
+export async function deliveryPane(io: Io, r: Repo, win: string, script: string, unit: string) {
+  return r.agent === "claude" && (await waiterLive(io, unit)) ? null : agentPane(io, win, script);
+}
+
+// Seen from the host: a session launched without the hook, or whose last turn ended without Stop, has no waiter and gets the paste.
+async function waiterLive(io: Io, unit: string) {
+  const cg = (await io.run(["systemctl", "--user", "show", "-P", "ControlGroup", unit])).out.trim();
+  return cg.startsWith("/") && (await io.run(["pgrep", "-f", "--cgroup", cg, INBOX_WAITER])).code === 0;
+}
+
 export function answerFrame(c: TicketComment, id: string) {
   const body = c.body.length > MAX_ANSWER_CHARS ? `${c.body.slice(0, MAX_ANSWER_CHARS)}\n[truncated]` : c.body;
   return `<answer from="${c.author}" ticket="${id}">\n${body.replaceAll("</answer", "&lt;/answer")}\n</answer>\n`;
 }
 
 // answerId is recorded first: a crash or failure after it loses the paste, never repeats it. Text never goes through keys.
-export async function deliverAnswer(t: Ticket, tr: Tracker, io: Io, dir: string, authors: string[], win: string, state: () => Promise<State>) {
+export async function deliverAnswer(r: Repo, t: Ticket, tr: Tracker, io: Io, dir: string, win: string, unit: string, state: () => Promise<State>) {
   const file = join(dir, `${t.id}.question`);
   const q = readQuestionSidecar(file);
-  if (!q || q.answerId !== undefined || !authors.length || !/^@\d+$/.test(win)) return;
-  const a = pickAnswer(await tr.comments(t, q.postedAt), q.postedAt, authors);
+  if (!q || q.answerId !== undefined || !r.feedbackAuthors.length || !/^@\d+$/.test(win)) return;
+  const a = pickAnswer(await tr.comments(t, q.postedAt), q.postedAt, r.feedbackAuthors);
   if (!a || (await state()) !== "idle") return;
-  const pane = await agentPane(io, win, `${join(dir, t.id)}.sh`);
-  if (!pane) return;
+  const pane = await deliveryPane(io, r, win, `${join(dir, t.id)}.sh`, unit);
+  if (pane === undefined) return;
   put(io, file, JSON.stringify({ ...q, answerId: a.id, answeredAt: Date.parse(a.createdAt) } satisfies QuestionSidecar));
   const wt = join(dir, t.id);
   io.log(`${io.dry ? "dry: " : ""}answer ${t.id} from ${a.author} to ${wt}/.aw/answer.md`);
   if (!io.dry) writeAw(wt, "answer.md", answerFrame(a, t.id));
-  await paste(io, t.id, pane, POINTER);
+  await nudge(io, t.id, wt, pane, POINTER);
   // A question rewritten since it was posted is a new round; leave it for syncQuestion.
   const text = readQuestion(wt);
   if (!io.dry && text && hashOf(text) === q.hash) removeAw(wt, "question.md");

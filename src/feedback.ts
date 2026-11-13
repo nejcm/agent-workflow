@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkState } from "./merge";
-import { agentPane, byOperator, paste } from "./question";
+import { byOperator, deliveryPane, nudge } from "./question";
 import type { State } from "./state";
 import type { Io, Repo, Ticket, TicketComment, Tracker } from "./types";
 import { put, read, writeAw } from "./util";
@@ -51,7 +51,7 @@ async function failedLog(io: Io, repo: string, run: string) {
 export const feedbackFields = (r: Repo) => `,mergeStateStatus${r.feedbackAuthors.length ? ",reviews,comments" : ""}`;
 
 // The cursor is recorded first: a crash or failure after it loses the paste, never repeats it. Text never goes through keys.
-export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, dir: string, win: string | undefined, state: () => Promise<State>, warned: Set<string>, viewed?: any) {
+export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, dir: string, win: string | undefined, unit: string, state: () => Promise<State>, warned: Set<string>, viewed?: any) {
   const prFile = join(dir, `${t.id}.pr`);
   const url = existsSync(prFile) ? readFileSync(prFile, "utf8") : "";
   const n = /\/pull\/(\d+)$/.exec(url)?.[1];
@@ -88,8 +88,8 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
     return tr.comment(t, `PR feedback stopped after ${MAX_ROUNDS} rounds on ${url}: a human is needed`);
   }
   if ((await state()) !== "idle") return;
-  const pane = await agentPane(io, win, `${join(dir, t.id)}.sh`);
-  if (!pane) return;
+  const pane = await deliveryPane(io, r, win, `${join(dir, t.id)}.sh`, unit);
+  if (pane === undefined) return;
   const runs = [...new Set(failed.map((c) => /\/actions\/runs\/(\d+)/.exec(c.detailsUrl ?? c.targetUrl ?? "")?.[1]).filter((x): x is string => !!x))].slice(0, MAX_RUNS);
   const logs = await Promise.all(runs.map((id) => failedLog(io, r.key, id)));
   put(io, file, JSON.stringify({ seenAt: newest ?? cur.seenAt, ciShas: failed.length ? [...(cur.ciShas ?? []), pr.headRefOid].slice(-10) : cur.ciShas, dirtyShas: dirty ? [...(cur.dirtyShas ?? []), pr.headRefOid].slice(-10) : cur.dirtyShas, rounds: cur.rounds + 1 } satisfies FeedbackCursor));
@@ -104,5 +104,5 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
   const wt = join(dir, t.id);
   io.log(`${io.dry ? "dry: " : ""}feedback ${t.id} round ${cur.rounds + 1} to ${wt}/.aw/feedback.md`);
   if (!io.dry) writeAw(wt, "feedback.md", text);
-  await paste(io, t.id, pane, FEEDBACK_POINTER);
+  await nudge(io, t.id, wt, pane, FEEDBACK_POINTER);
 }

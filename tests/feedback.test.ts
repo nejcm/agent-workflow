@@ -13,7 +13,7 @@ const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
 const fail = { __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "FAILURE", detailsUrl: "https://github.com/acme/web/actions/runs/42/job/1" };
 const okCheck = { __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "SUCCESS" };
 
-function setup(o: { authors?: string[]; open?: string[] } = {}) {
+function setup(o: { agent?: string; waiter?: boolean; authors?: string[]; open?: string[] } = {}) {
   worktree("gh-1");
   mkdirSync(join(root, "acme/web/gh-1/.aw"), { recursive: true });
   const t = ticket(1);
@@ -27,8 +27,10 @@ function setup(o: { authors?: string[]; open?: string[] } = {}) {
     : a[1] === "pr" && a[2] === "list" ? { out: JSON.stringify([{ url: URL, state: "OPEN" }]) }
     : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(pr) }
     : a[1] === "api" ? { out: JSON.stringify(lines) }
-    : a[0] === "sh" ? { out: log.split("\n").slice(-80).join("\n") } : undefined);
-  const cfg = config({ repos: [{ name: "acme/web", path: join(root, "src-web"), feedbackAuthors: o.authors ?? ["op"] }] });
+    : a[0] === "sh" ? { out: log.split("\n").slice(-80).join("\n") }
+    : a[0] === "systemctl" && a[2] === "show" ? { out: "/app.slice/s.scope\n" }
+    : a[0] === "pgrep" ? { code: o.waiter ? 0 : 1 } : undefined);
+  const cfg = config({ repos: [{ name: "acme/web", path: join(root, "src-web"), agent: o.agent ?? "codex", feedbackAuthors: o.authors ?? ["op"] }] });
   let state: State = "idle";
   return {
     ...f, t, pr, cmds, logs,
@@ -69,6 +71,24 @@ test("feedback: allowlisted comments only, debounced, then delivered once and th
   expect(d.file()).toContain('<comment from="op">\n(changes requested)\n</comment>');
   expect(d.cursor().rounds).toBe(2);
   expect(d.calls).toEqual([]);
+});
+
+test("feedback: Claude without an inbox waiter gets the paste", async () => {
+  const d = setup({ agent: "claude", authors: [] });
+  d.pr.statusCheckRollup = [fail];
+  await d.run();
+  expect(d.keys()).toEqual([`tmux set-buffer -b aw-gh-1 -- ${FEEDBACK_POINTER}`, "tmux paste-buffer -p -d -b aw-gh-1 -t %5", "tmux send-keys -t %5 Enter"]);
+  expect(existsSync(join(root, "acme/web/gh-1/.aw/inbox"))).toBe(false);
+});
+
+test("feedback: Claude with a live inbox waiter gets the pointer in .aw/inbox, never keys", async () => {
+  const d = setup({ agent: "claude", waiter: true, authors: [] });
+  d.pr.statusCheckRollup = [fail];
+  await d.run();
+  expect(d.cursor().rounds).toBe(1);
+  expect(readFileSync(join(root, "acme/web/gh-1/.aw/inbox"), "utf8")).toBe(`${FEEDBACK_POINTER}\n`);
+  expect(d.keys()).toEqual([]);
+  expect(d.cmds.filter((c) => c.includes("pane_in_mode"))).toEqual([]);
 });
 
 test("feedback: failing CI and conflicts once per head SHA, with the log tail; no comments read without authors", async () => {

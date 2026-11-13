@@ -11,9 +11,9 @@ An agent that is blocked asks on the ticket instead of only in its tmux session.
 - Every `aw` comment starts with `aw:`; a comment starting with `aw:` is never an answer (aw posts with the operator's credentials).
 - Answer = first comment with `createdAt > postedAt` (the next round's `postedAt` is at least the last delivered answer's `createdAt`, as `answeredAt`), author in `feedbackAuthors`, body not starting with `aw:`. Later comments and edits are ignored.
 - `feedbackAuthors: string[]` per repo, matched case-insensitively against the GitHub login or the Linear user email. Empty (default) = questions are posted, answers never delivered. Shared with PR feedback.
-- Delivery only when the live state is `idle` (`waiting` can be a permission prompt; `unknown` retries next poll), and only while the tmux window exists. Keys go by `%id` to the pane whose `#{pane_start_command}` is the ticket's launcher script, skipped while it is in copy mode. No resume.
-- The answer goes to `.aw/answer.md` (truncated to 8000 chars + `[truncated]`), wrapped as `<answer from="<author>" ticket="<ID>">…</answer>`. The session gets one pasted line, sent to the `%id` of the pane in window `@N` whose start command is the ticket's launcher script (a window started this pass has no `@N` yet and waits): `Your question was answered by the operator: read .aw/answer.md`. Answer text never goes through keystrokes.
-- Order: `answerId` into the sidecar → write `.aw/answer.md` → paste → remove `.aw/question.md` if its hash still matches. A crash loses a paste, never repeats one.
+- Delivery only when the live state is `idle` (`waiting` can be a permission prompt; `unknown` retries next poll), and only while the tmux window exists. A Claude session with a live inbox waiter in its scope gets the pointer line through `.aw/inbox`, read by its `asyncRewake` `Stop` hook (README "Questions"); no pane, no keys. Otherwise (Codex, or Claude without a waiter): keys go by `%id` to the pane whose `#{pane_start_command}` is the ticket's launcher script, skipped while it is in copy mode. No resume.
+- The answer goes to `.aw/answer.md` (truncated to 8000 chars + `[truncated]`), wrapped as `<answer from="<author>" ticket="<ID>">…</answer>`. The session gets one line, via `.aw/inbox` (Claude) or pasted to the `%id` of the pane in window `@N` whose start command is the ticket's launcher script (Codex; a window started this pass has no `@N` yet and waits): `Your question was answered by the operator: read .aw/answer.md`. Answer text never goes through keystrokes.
+- Order: `answerId` into the sidecar → write `.aw/answer.md` → inbox or paste → remove `.aw/question.md` if its hash still matches. A crash loses a paste, never repeats one.
 - `aw status` / `aw watch` show `question` while a posted question is unanswered, the session is `idle` and there is no PR (`working`, `waiting` and `unknown` stay visible).
 - Storage stays sidecar files (no SQLite).
 
@@ -49,9 +49,9 @@ Done when: existing tests pass with the renamed `readAw` and the new comment tex
 ### 4. Delivering answers
 
 - Live state for `pass`: reuse the feed from `src/agents.ts` (Claude's session records once per pass, Codex `.aw/codex-state.json`), queried only when some sidecar has no `answerId`.
-- `deliverAnswer`: sidecar without `answerId` → `tr.comments` → `pickAnswer` → state `idle`, window `@N` exists, its launcher pane not in copy mode → record `answerId` + `answeredAt` → `writeAw(answer.md)` → `tmux set-buffer` + `paste-buffer -p -t <%pane>` (pointer line) + `send-keys Enter` → `removeAw(question.md)` if its hash still matches.
+- `deliverAnswer`: sidecar without `answerId` → `tr.comments` → `pickAnswer` → state `idle`, window `@N` exists, a live Claude waiter or (paste) its launcher pane not in copy mode → record `answerId` + `answeredAt` → `writeAw(answer.md)` → `nudge`: `writeAw(inbox)` (live Claude waiter) or `tmux set-buffer` + `paste-buffer -p -t <%pane>` (pointer line) + `send-keys Enter` → `removeAw(question.md)` if its hash still matches.
 - Tests: no answer → nothing; answer while `working`/`waiting`/`unknown` → retried next pass; window gone → nothing; happy path order (sidecar, file, keys, remove); a delivered answer is never re-sent; a new question after delivery starts a new round.
-- Manual check, once per agent: done. Both submit with the bracketed paste; Codex turned an `Enter` right after `send-keys -l` into a newline.
+- Manual check, once per agent (paste transport, before the Claude inbox): done. Both submit with the bracketed paste; Codex turned an `Enter` right after `send-keys -l` into a newline.
 
 ### 5. Prompt, status, docs
 

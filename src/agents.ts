@@ -111,9 +111,15 @@ export function codexState(wt: string, since: number, now: number): Live | undef
   return ok ? { state: o.state, since: o.ts, waitingFor: o.state === "waiting" ? "permission" : null } : undefined;
 }
 
+// nudge()'s reader: asyncRewake wakes even an idle prompt on exit 2, and the newest waiter retires older ones. Timeout just under 2^31 ms.
+export const INBOX_HOOK = 'head -c 1048576 >/dev/null; cd "$CLAUDE_PROJECT_DIR" && echo $$ > .aw/inbox.pid || exit 0; while [ "$(cat .aw/inbox.pid 2>/dev/null)" = $$ ]; do mv .aw/inbox .aw/inbox.$$ 2>/dev/null && { head -c 4096 .aw/inbox.$$ >&2; rm -f .aw/inbox.$$; exit 2; }; sleep 2; done';
+/** pgrep -f pattern for a running waiter; anchored, as Claude's own argv carries the hook text too. */
+export const INBOX_WAITER = "^[^ ]*sh -c head -c 1048576 .*inbox\\.pid";
+const INBOX_SETTINGS = JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: INBOX_HOOK, asyncRewake: true, timeout: 2147483 }] }] } });
+
 export const AGENTS: Record<Repo["agent"], Agent> = {
   claude: {
-    launch: (wt, prompt) => [`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/${CLAUDE_TOKEN}")" || exit 1\nexport CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR=${claudeHome(wt)} CODEX_HOME=${codexHome(wt)} CLAUDE_CODE_TMPDIR=${tmpHome(wt)}`, ["claude", "--permission-mode", "bypassPermissions", prompt]],
+    launch: (wt, prompt) => [`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/${CLAUDE_TOKEN}")" || exit 1\nexport CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR=${claudeHome(wt)} CODEX_HOME=${codexHome(wt)} CLAUDE_CODE_TMPDIR=${tmpHome(wt)}`, ["claude", "--permission-mode", "bypassPermissions", "--settings", `'${INBOX_SETTINGS}'`, prompt]],
     store: (wt) => [claudeHome(wt), "projects"],
     transcripts: (wt) => jsonl(claudeDir(wt)),
     cwd: (o) => o?.cwd,

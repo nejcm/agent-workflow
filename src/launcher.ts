@@ -222,7 +222,7 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   if (existsSync(wt)) io.log(`reuse ${wt}`);
   else await cloneSession(io, r, wt, branch);
   if (r.agent === "claude") seedClaude(io, claudeHome(wt), existsSync(wt) ? realpathSync(wt) : wt);
-  const vars = { id: t.id, title: t.title, body: t.body, url: t.url, branch, base: r.baseBranch, testCmd: r.testCmd, repo: r.key };
+  const vars = { id: t.id, title: t.title, body: t.body, url: t.url, branch, base: r.baseBranch, testCmd: r.testCmd, repo: r.key, planStep: r.planStep };
   io.log(`${io.dry ? "dry: " : ""}write ${join(wt, ".aw", ".gitignore")}`);
   if (!io.dry) {
     mkdirSync(join(wt, ".aw"), { recursive: true });

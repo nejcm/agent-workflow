@@ -299,4 +299,8 @@ test("in review: a PR merged or closed during the merge recheck gets no feedback
   expect(await run(["OPEN", "CLOSED", "CLOSED"])).toEqual({ calls: [], pasted: false });
   // Closed while the "not auto-merged" comment was awaited.
   expect(await run(["OPEN", "CLOSED"], { isDraft: true })).toEqual({ calls: ["comment gh-1 not auto-merged: PR is a draft"], pasted: false });
+  // Closed while a capped cursor's parked check was awaited.
+  writeFileSync(join(root, "acme/web/gh-1.feedback"), JSON.stringify({ seenAt: 0, rounds: 3, capped: true }));
+  const pending = { __typename: "CheckRun", name: "test", status: "IN_PROGRESS", conclusion: null };
+  expect((await run(["OPEN", "CLOSED"], { statusCheckRollup: [pending] as any })).pasted).toBe(false);
 });

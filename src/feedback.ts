@@ -62,7 +62,7 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
   if (saved.capped && (await tr.parked(t))) return;
   const cur: FeedbackCursor = saved.capped ? { ...saved, rounds: 0, capped: undefined } : saved;
   const talk = r.feedbackAuthors.length > 0;
-  const pr = viewed?.url === url ? viewed : JSON.parse(await read(io, ["gh", "pr", "view", n, "--repo", r.key, "--json", `state,baseRefName,headRefOid,mergeStateStatus,statusCheckRollup${talk ? ",reviews,comments" : ""}`]));
+  const pr = viewed?.url === url && !saved.capped ? viewed : JSON.parse(await read(io, ["gh", "pr", "view", n, "--repo", r.key, "--json", `state,baseRefName,headRefOid,mergeStateStatus,statusCheckRollup${talk ? ",reviews,comments" : ""}`]));
   if (pr.state !== "OPEN") return;
   // shortcut: first 100 line comments only; paginate if a PR ever gets more.
   const lines = talk ? JSON.parse(await read(io, ["gh", "api", `repos/${r.key}/pulls/${n}/comments?per_page=100`])) : [];

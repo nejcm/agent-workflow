@@ -23,7 +23,9 @@ export function launcher(l: Repo, wt: string, promptFile: string, awDir = AW_DIR
   const own = [...(l.agent === "claude" ? [claudeHome(wt)] : []), codexHome(wt)].map((p): [string, string] => ["--allow", p]);
   const wrap = nono ? nonoRun(l, awDir, [["--allow", wt], ["--allow-unix-socket-subtree-bind", wt], ...own, ["--read", admin ? git : join(git, "objects")], ...rw], q) : [];
   const [env, cmd] = AGENTS[l.agent].launch(q(wt), prompt, nono);
-  return `#!/usr/bin/env bash\ncd ${q(wt)} || exit 1\nunset LINEAR_API_KEY\n${env}\nexec ${[...wrap, ...cmd].join(" ")}\n`;
+  // gh exits if it cannot read its config dir; <ID>.gh is never created, so gh runs on defaults plus nono's GH_TOKEN.
+  const gh = nono ? `export GH_CONFIG_DIR=${q(wt)}.gh\n` : "";
+  return `#!/usr/bin/env bash\ncd ${q(wt)} || exit 1\nunset LINEAR_API_KEY\n${gh}${env}\nexec ${[...wrap, ...cmd].join(" ")}\n`;
 }
 
 /** `worktree` for a session started before per-session clones (its `.git` is a file), `clone` for its own `.git` dir. */

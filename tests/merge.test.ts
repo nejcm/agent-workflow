@@ -251,3 +251,43 @@ test("in review: .pr comes from autoMerge's lookup, else its own lookup each pol
   expect(await run("intelligent")).toEqual({ lookups: 1, writes: 1 });
   expect(readFileSync(f, "utf8")).toBe(url);
 });
+
+test("in review: gh calls per ticket per poll; feedback reuses auto-merge's view", async () => {
+  const url = "https://github.com/acme/web/pull/7";
+  const respond = (a: string[]) =>
+    a[1] === "pr" && a[2] === "list" ? { out: JSON.stringify([{ url, state: "OPEN" }]) }
+    : a[1] === "pr" ? { out: JSON.stringify({ ...prFacts({ isDraft: true }), number: 7, url, headRefOid: "a", reviews: [], comments: [] }) }
+    : a[1] === "api" ? { out: "[]" } : undefined;
+  const run = async (autoMerge: string, feedbackAuthors: string[], win: boolean) => {
+    const x = fakeIo((a) => (a[1] === "list-windows" ? { out: win ? "@0 acme/web/gh-1" : "" } : respond(a)));
+    await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge, feedbackAuthors }] }), x.io, () => fakeTracker({ inReview: [ticket(1)] }).tr, "/aw", async () => "idle");
+    return x.cmds.filter((c) => c.startsWith("gh "));
+  };
+  const list = "gh pr list --repo acme/web --head agent/gh-1 --state all --json url,state";
+  const merge = "gh pr view 7 --repo acme/web --json number,url,state,isDraft,isCrossRepository,baseRefName,mergeable,additions,deletions,changedFiles,files,statusCheckRollup,labels,headRefOid,reviewDecision,mergeStateStatus";
+  worktree("gh-1");
+  for (const win of [true, false]) {
+    expect(await run("off", [], win)).toEqual([list, "gh pr view 7 --repo acme/web --json state,baseRefName,headRefOid,mergeStateStatus,statusCheckRollup"]);
+    expect(await run("off", ["op"], win)).toHaveLength(3);
+    expect(await run("intelligent", [], win)).toEqual([list, merge]);
+    expect(await run("intelligent", ["op"], win)).toEqual([list, `${merge},reviews,comments`, "gh api repos/acme/web/pulls/7/comments?per_page=100"]);
+  }
+});
+
+test("in review: a PR merged this poll gets no feedback from the shared view", async () => {
+  const url = "https://github.com/acme/web/pull/7";
+  const comments = [{ id: "c1", author: { login: "op" }, body: "nit", createdAt: new Date(Date.now() - 600_000).toISOString() }];
+  const { io, cmds } = fakeIo((a) =>
+    a[1] === "list-windows" ? { out: "@0 acme/web/gh-1" }
+    : a[1] === "list-panes" ? { out: `%5 0 ${join(root, "acme/web/gh-1")}.sh\n` }
+    : a[1] === "pr" && a[2] === "list" ? { out: JSON.stringify([{ url, state: "OPEN" }]) }
+    : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(a.at(-1) === "state" ? { state: "MERGED" } : { ...prFacts(), number: 7, url, headRefOid: "a", reviews: [], comments }) }
+    : a[1] === "repo" ? { out: JSON.stringify({ nameWithOwner: "acme/web" }) }
+    : a[1] === "api" ? { out: "[]" } : undefined);
+  worktree("gh-1");
+  mkdirSync(join(root, "acme/web/gh-1/.aw"), { recursive: true });
+  const { tr, calls } = fakeTracker({ inReview: [ticket(1)] });
+  await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "all", feedbackAuthors: ["op"] }] }), io, () => tr, "/aw", async () => "idle");
+  expect(calls).toContain("done gh-1");
+  expect(cmds.some((c) => c.startsWith("tmux set-buffer"))).toBe(false);
+});

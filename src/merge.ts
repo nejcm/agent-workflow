@@ -96,7 +96,8 @@ export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Re
 const PR_FIELDS = "number,url,state,isDraft,isCrossRepository,baseRefName,mergeable,additions,deletions,changedFiles,files,statusCheckRollup,labels,headRefOid,reviewDecision";
 
 // aw merges, pinned to the head it judged (the agent's token could too; see README). "Not merged" is commented once per head SHA.
-export async function autoMerge(cfg: Config, r: Repo, t: Ticket, tr: Tracker, io: Io, parked = false) {
+// With `share`, the first view also fetches `share.fields` and lands in `share.pr`, so feedback need not view the PR again.
+export async function autoMerge(cfg: Config, r: Repo, t: Ticket, tr: Tracker, io: Io, parked = false, share?: { fields: string; pr?: any }) {
   const dir = repoDir(cfg, r.key);
   const url = await findPr(r.key, t.id, io, dir);
   const n = url && /\/pull\/(\d+)$/.exec(url)?.[1];
@@ -106,7 +107,8 @@ export async function autoMerge(cfg: Config, r: Repo, t: Ticket, tr: Tracker, io
     const name = await canonical(io, r.key, true);
     return !!name && sameRepo(name, r.key);
   };
-  const pr = await view();
+  const pr = await view(PR_FIELDS + (share?.fields ?? ""));
+  if (share) share.pr = pr;
   const f = join(dir, `${t.id}.merge`);
   const held = existsSync(f) && readFileSync(f, "utf8") === pr.headRefOid;
   if (!held) remove(io, f);
@@ -133,6 +135,8 @@ export async function autoMerge(cfg: Config, r: Repo, t: Ticket, tr: Tracker, io
     await write(io, ["gh", "pr", "merge", n, "--repo", r.key, "--squash", "--delete-branch", "--match-head-commit", pr.headRefOid]);
     const state = io.dry ? "MERGED" : (await view("state")).state;
     if (state !== "MERGED") return io.log(`merge ${t.id}: ${pr.url} is ${state} after gh pr merge, rechecking next poll`);
+    // Feedback reads this shared view: a merged PR gets none.
+    pr.state = state;
     await tr.comment(t, `auto-merged ${pr.url}: ${d.reason}`);
     return tr.done(t);
   }

@@ -144,6 +144,13 @@ test("linear adapter: every comment starts with aw:", async () => {
   expect(bodies[0].variables.i).toEqual({ issueId: "u-1", body: "aw: hi" });
 });
 
+test("linear adapter: a comment Linear reports as not successful throws", async () => {
+  const l = config({ sources: [src({ tracker: "linear", team: "ENG" })] }).sources[0]!;
+  const { io } = fakeIo();
+  io.fetch = (async () => Response.json({ data: { commentCreate: { success: false } } })) as any;
+  await expect(withLinearKey(() => linear(l, "box", io, false).comment({ id: "ENG-1", ref: "u-1", title: "", body: "", url: "" }, "hi"))).rejects.toThrow("not successful for ENG-1");
+});
+
 test("linear adapter: comments parsed, author is the user email, none for a null user", async () => {
   const l = config({ sources: [src({ tracker: "linear", team: "ENG" })] }).sources[0]!;
   const bodies: any[] = [];

@@ -201,3 +201,12 @@ test("findings: filed at the review move and while in review, skipped while park
   const filed = calls.filter((x) => /^(file|review)/.test(x)).map((x) => x.split(" | ")[0]);
   expect(filed).toEqual(["file gh-1 Bug 1", "review gh-1 https://pr/1", "review gh-3 https://pr/1", "file gh-2 Bug 1"]);
 });
+
+test("findings: a marker quoted in another aw comment, such as an agent question, does not count as posted", async () => {
+  const { tr, calls } = fakeTracker({});
+  tr.comments = async () => [{ id: "1", body: `aw: question from agent:\n${mark(1).trim()}`, createdAt: "" }];
+  const { io } = fakeIo();
+  writeFindings("gh-1", [f(1)]);
+  await fileFindings(ticket(1), tr, io, dir());
+  expect(calls.filter((c) => c.startsWith("comment"))).toEqual([`${HEAD}- https://x/acme/web/issues/1 Bug 1${mark(1)}`]);
+});

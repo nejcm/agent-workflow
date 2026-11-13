@@ -274,20 +274,25 @@ test("in review: gh calls per ticket per poll; feedback reuses auto-merge's view
   }
 });
 
-test("in review: a PR merged this poll gets no feedback from the shared view", async () => {
+test("in review: a PR merged or closed during the merge recheck gets no feedback from the stale shared view", async () => {
   const url = "https://github.com/acme/web/pull/7";
   const comments = [{ id: "c1", author: { login: "op" }, body: "nit", createdAt: new Date(Date.now() - 600_000).toISOString() }];
-  const { io, cmds } = fakeIo((a) =>
-    a[1] === "list-windows" ? { out: "@0 acme/web/gh-1" }
-    : a[1] === "list-panes" ? { out: `%5 0 ${join(root, "acme/web/gh-1")}.sh\n` }
-    : a[1] === "pr" && a[2] === "list" ? { out: JSON.stringify([{ url, state: "OPEN" }]) }
-    : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(a.at(-1) === "state" ? { state: "MERGED" } : { ...prFacts(), number: 7, url, headRefOid: "a", reviews: [], comments }) }
-    : a[1] === "repo" ? { out: JSON.stringify({ nameWithOwner: "acme/web" }) }
-    : a[1] === "api" ? { out: "[]" } : undefined);
+  const run = async (states: string[]) => {
+    const { io, cmds } = fakeIo((a) =>
+      a[1] === "list-windows" ? { out: "@0 acme/web/gh-1" }
+      : a[1] === "list-panes" ? { out: `%5 0 ${join(root, "acme/web/gh-1")}.sh\n` }
+      : a[1] === "pr" && a[2] === "list" ? { out: JSON.stringify([{ url, state: "OPEN" }]) }
+      : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify({ ...prFacts(), number: 7, url, headRefOid: "a", reviews: [], comments, state: states.shift() }) }
+      : a[1] === "repo" ? { out: JSON.stringify({ nameWithOwner: "acme/web" }) }
+      : a[1] === "api" ? { out: "[]" } : undefined);
+    const { tr, calls } = fakeTracker({ inReview: [ticket(1)] });
+    await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "all", feedbackAuthors: ["op"] }] }), io, () => tr, "/aw", async () => "idle");
+    return { calls, pasted: cmds.some((c) => c.startsWith("tmux set-buffer")) };
+  };
   worktree("gh-1");
   mkdirSync(join(root, "acme/web/gh-1/.aw"), { recursive: true });
-  const { tr, calls } = fakeTracker({ inReview: [ticket(1)] });
-  await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "all", feedbackAuthors: ["op"] }] }), io, () => tr, "/aw", async () => "idle");
-  expect(calls).toContain("done gh-1");
-  expect(cmds.some((c) => c.startsWith("tmux set-buffer"))).toBe(false);
+  const merged = await run(["OPEN", "OPEN", "MERGED", "MERGED"]);
+  expect(merged.calls).toContain("done gh-1");
+  expect(merged.pasted).toBe(false);
+  expect(await run(["OPEN", "CLOSED", "CLOSED"])).toEqual({ calls: [], pasted: false });
 });

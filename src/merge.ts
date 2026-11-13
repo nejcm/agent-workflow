@@ -124,6 +124,8 @@ export async function autoMerge(cfg: Config, r: Repo, t: Ticket, tr: Tracker, io
   const d = mergeDecision(pr, a, r, t.labels);
   if (d.merge === "wait") return;
   if (d.merge) {
+    // A merge attempt can make this view stale (closed, moved, merged): feedback views the PR itself.
+    if (share) share.pr = undefined;
     if (!(await ours())) return;
     // gh pr merge can pin the head but not the base, so a retarget after this fresh view still races.
     const now = await view();
@@ -135,8 +137,6 @@ export async function autoMerge(cfg: Config, r: Repo, t: Ticket, tr: Tracker, io
     await write(io, ["gh", "pr", "merge", n, "--repo", r.key, "--squash", "--delete-branch", "--match-head-commit", pr.headRefOid]);
     const state = io.dry ? "MERGED" : (await view("state")).state;
     if (state !== "MERGED") return io.log(`merge ${t.id}: ${pr.url} is ${state} after gh pr merge, rechecking next poll`);
-    // Feedback reads this shared view: a merged PR gets none.
-    pr.state = state;
     await tr.comment(t, `auto-merged ${pr.url}: ${d.reason}`);
     return tr.done(t);
   }

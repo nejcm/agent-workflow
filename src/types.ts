@@ -65,7 +65,8 @@ export interface Tracker {
   listReady(): Promise<Ticket[]>;
   listInProgress(): Promise<Ticket[]>;
   listInReview(): Promise<Ticket[]>;
-  isDone(id: string, repo: string): Promise<boolean>;
+  /** Done (cleanup), canceled (stop, keep data) or still open. */
+  closed(id: string, repo: string): Promise<"done" | "canceled" | undefined>;
   claim(t: Ticket): Promise<void>;
   toReview(t: Ticket, prUrl: string): Promise<void>;
   done(t: Ticket): Promise<void>;

@@ -15,7 +15,7 @@ test("config: defaults applied and errors listed", () => {
   expect(c.stallMinutes).toBe(30);
   for (const v of [0, 1.5, "30"]) expect(() => config({ stallMinutes: v })).toThrow("stallMinutes: positive integer");
   expect(c.reposRoot).toMatch(/\/agent-repos$/);
-  expect(c.sources[0]).toMatchObject({ readyLabel: "agent", done: ["Done", "Canceled", "Duplicate"] });
+  expect(c.sources[0]).toMatchObject({ readyLabel: "agent", done: ["Done"] });
   expect(web(c)).toMatchObject({ key: "acme/web", path: join(root, "src-web"), baseBranch: "main", agent: "claude", maxConcurrent: undefined });
   const c2 = config({ reposRoot: "/r", repos: ["acme/web", { name: "acme/api", agent: "codex", testCmd: "make test", maxConcurrent: 1, baseBranch: "dev" }] });
   expect(web(c2).path).toBe("/r/acme/web");

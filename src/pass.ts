@@ -155,7 +155,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
           return step(io, `answer ${t.id}`, () => deliverAnswer(w, tr, io, dir, cfg.repos[key]!.feedbackAuthors, win, () => state(cfg.repos[key]!, dir, t.id)));
         }
         // The in-progress listing can lag a close that cleanup already acted on.
-        if (hasLabel(t.labels, s.needsHumanLabel) || existsSync(ended) || (await tr.isDone(t.id, key))) return;
+        if (hasLabel(t.labels, s.needsHumanLabel) || existsSync(ended) || (await tr.closed(t.id, key))) return;
         await tr.comment(w, endedNotice(lastMessage(join(dir, t.id), cfg.repos[key]!.agent)));
         put(io, ended, new Date().toISOString());
       });
@@ -212,10 +212,16 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
         continue;
       }
       await step(x.io, `cleanup ${r.key}/${id}`, async () => {
-        if (!(await x.tr.isDone(id, r.key))) return;
+        const end = await x.tr.closed(id, r.key);
+        if (!end) return;
         const w = wins.get(winName(r.key, id));
         if (w) await write(x.io, ["tmux", "kill-window", "-t", w]);
         wins.delete(winName(r.key, id));
+        if (end === "canceled") {
+          if (!w) return;
+          put(x.io, join(dir, `${id}.ended`), new Date().toISOString());
+          return x.io.log(`stopped ${r.key}/${id}: ticket canceled; clone and files kept`);
+        }
         const wt = join(dir, id);
         const kind = sessionKind(wt);
         if (!kind) throw new Error(`${wt}/.git is neither a file nor a directory; left in place`);

@@ -28,9 +28,17 @@ test("github adapter: ready requires host label, skips claimed, edits labels", a
   const { io: io2, cmds: cmds2 } = fakeIo(() => ({ out: JSON.stringify({ labels: [{ name: "NEEDS-HUMAN" }] }) }));
   expect(await github(l, "box", io2, false, ["acme/web"]).parked({ ...ticket(7), repo: "acme/web" })).toBe(true);
   expect(cmds2).toEqual(["gh issue view 7 --repo acme/web --json labels"]);
-  expect(await tr.isDone("gh-7", "acme/web")).toBe(true);
-  expect(cmds).toContain("gh issue view 7 --repo acme/web --json state");
-  await expect(tr.isDone("ENG-1", "acme/web")).rejects.toThrow();
+  expect(await tr.closed("gh-7", "acme/web")).toBe("done");
+  expect(cmds).toContain("gh issue view 7 --repo acme/web --json state,stateReason");
+  await expect(tr.closed("ENG-1", "acme/web")).rejects.toThrow();
+});
+
+test("github adapter: closed as not planned or duplicate is canceled, as completed is done, open is neither", async () => {
+  const l = config().sources[0]!;
+  for (const [state, stateReason, want] of [["CLOSED", "NOT_PLANNED", "canceled"], ["CLOSED", "DUPLICATE", "canceled"], ["CLOSED", "COMPLETED", "done"], ["CLOSED", "", "done"], ["OPEN", "REOPENED", undefined]]) {
+    const { io } = fakeIo(() => ({ out: JSON.stringify({ state, stateReason }) }));
+    expect(await github(l, "box", io, false, ["acme/web"]).closed("gh-7", "acme/web")).toBe(want as any);
+  }
 });
 
 test("github adapter: polls every repo of the source and tags tickets with it", async () => {

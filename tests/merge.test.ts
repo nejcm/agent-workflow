@@ -266,6 +266,8 @@ test("in review: gh calls per ticket per poll; feedback reuses auto-merge's view
   const list = "gh pr list --repo acme/web --head agent/gh-1 --state all --json url,state";
   const merge = "gh pr view 7 --repo acme/web --json number,url,state,isDraft,isCrossRepository,baseRefName,mergeable,additions,deletions,changedFiles,files,statusCheckRollup,labels,headRefOid,reviewDecision,mergeStateStatus";
   worktree("gh-1");
+  // The first poll comments "not auto-merged" and so shares nothing; count the held polls after it.
+  expect(await run("intelligent", [], true)).toHaveLength(3);
   for (const win of [true, false]) {
     expect(await run("off", [], win)).toEqual([list, "gh pr view 7 --repo acme/web --json state,baseRefName,headRefOid,mergeStateStatus,statusCheckRollup"]);
     expect(await run("off", ["op"], win)).toHaveLength(3);
@@ -277,12 +279,12 @@ test("in review: gh calls per ticket per poll; feedback reuses auto-merge's view
 test("in review: a PR merged or closed during the merge recheck gets no feedback from the stale shared view", async () => {
   const url = "https://github.com/acme/web/pull/7";
   const comments = [{ id: "c1", author: { login: "op" }, body: "nit", createdAt: new Date(Date.now() - 600_000).toISOString() }];
-  const run = async (states: string[]) => {
+  const run = async (states: string[], over: Partial<PrFacts> = {}) => {
     const { io, cmds } = fakeIo((a) =>
       a[1] === "list-windows" ? { out: "@0 acme/web/gh-1" }
       : a[1] === "list-panes" ? { out: `%5 0 ${join(root, "acme/web/gh-1")}.sh\n` }
       : a[1] === "pr" && a[2] === "list" ? { out: JSON.stringify([{ url, state: "OPEN" }]) }
-      : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify({ ...prFacts(), number: 7, url, headRefOid: "a", reviews: [], comments, state: states.shift() }) }
+      : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify({ ...prFacts(over), number: 7, url, headRefOid: "a", reviews: [], comments, state: states.shift() }) }
       : a[1] === "repo" ? { out: JSON.stringify({ nameWithOwner: "acme/web" }) }
       : a[1] === "api" ? { out: "[]" } : undefined);
     const { tr, calls } = fakeTracker({ inReview: [ticket(1)] });
@@ -295,4 +297,6 @@ test("in review: a PR merged or closed during the merge recheck gets no feedback
   expect(merged.calls).toContain("done gh-1");
   expect(merged.pasted).toBe(false);
   expect(await run(["OPEN", "CLOSED", "CLOSED"])).toEqual({ calls: [], pasted: false });
+  // Closed while the "not auto-merged" comment was awaited.
+  expect(await run(["OPEN", "CLOSED"], { isDraft: true })).toEqual({ calls: ["comment gh-1 not auto-merged: PR is a draft"], pasted: false });
 });

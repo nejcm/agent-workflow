@@ -108,7 +108,6 @@ export async function autoMerge(cfg: Config, r: Repo, t: Ticket, tr: Tracker, io
     return !!name && sameRepo(name, r.key);
   };
   const pr = await view(PR_FIELDS + (share?.fields ?? ""));
-  if (share) share.pr = pr;
   const f = join(dir, `${t.id}.merge`);
   const held = existsSync(f) && readFileSync(f, "utf8") === pr.headRefOid;
   if (!held) remove(io, f);
@@ -122,10 +121,12 @@ export async function autoMerge(cfg: Config, r: Repo, t: Ticket, tr: Tracker, io
     io.log(`merge ${t.id}: .aw/merge.json ignored: ${(e as Error).message}`);
   }
   const d = mergeDecision(pr, a, r, t.labels);
-  if (d.merge === "wait") return;
+  if (d.merge === "wait" || (!d.merge && held)) {
+    // Shared only on these returns, with nothing awaited since the view, so feedback never reads a stale one.
+    if (share) share.pr = pr;
+    return;
+  }
   if (d.merge) {
-    // A merge attempt can make this view stale (closed, moved, merged): feedback views the PR itself.
-    if (share) share.pr = undefined;
     if (!(await ours())) return;
     // gh pr merge can pin the head but not the base, so a retarget after this fresh view still races.
     const now = await view();
@@ -140,7 +141,6 @@ export async function autoMerge(cfg: Config, r: Repo, t: Ticket, tr: Tracker, io
     await tr.comment(t, `auto-merged ${pr.url}: ${d.reason}`);
     return tr.done(t);
   }
-  if (held) return;
   put(io, f, pr.headRefOid);
   try {
     await tr.comment(t, `not auto-merged: ${d.reason}`);

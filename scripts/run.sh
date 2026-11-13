@@ -5,7 +5,7 @@ cd "$(dirname "$(readlink -f "$0")")/.."
 export PATH="$HOME/.local/bin:$PATH"
 
 [ -e aw.json ] || { echo "aw.json missing: run scripts/setup.sh first"; exit 1; }
-for c in bun git gh tmux nono; do command -v "$c" >/dev/null || { echo "MISSING: $c (run scripts/setup.sh)"; exit 1; }; done
+for c in bun git gh tmux nono systemd-run systemctl; do command -v "$c" >/dev/null || { echo "MISSING: $c (run scripts/setup.sh)"; exit 1; }; done
 bun aw.ts once --dry-run >/dev/null
 
 case "${1:-run}" in

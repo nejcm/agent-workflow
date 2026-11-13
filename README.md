@@ -15,8 +15,8 @@ Move a GitHub issue or Linear ticket to **ready**, and `aw` starts a Claude Code
 ready ticket ──► resolve its repo; not in `repos`, or GitHub redirects it ──► one comment, skipped
              ──► gh repo clone <owner>/<name> ~/agent-repos/<owner>/<name>.tmp-…, then rename   (first time only)
              ──► git clone --shared <that clone> ~/agent-ws/<owner>/<name>/<ID>, branch agent/<ID> from origin/<base>
-             ──► tmux window <owner>/<name>/<ID>: nono run … -- claude … "<prompt>"
-             ──► In Progress + comment "aw: picked up on <host>"   (move fails ──► window killed, retried next poll; a failed comment is only logged)
+             ──► tmux window <owner>/<name>/<ID>: systemd-run --scope … nono run … -- claude … "<prompt>"
+             ──► In Progress + comment "aw: picked up on <host>"   (move fails ──► session killed, retried next poll; a failed comment is only logged)
 .aw/phases.json changed  ──► create / update phase sub-tickets
 .aw/question.md changed  ──► comment "aw: question from agent: …"; first reply by a feedbackAuthor ──► .aw/answer.md + one pasted line, once idle
 PR for agent/<ID> exists ──► In Review + comment with the PR link
@@ -26,11 +26,11 @@ in review, window open   ──► feedbackAuthor PR comments, failed checks, co
 session ended, no PR     ──► one comment "aw: session ended without a PR"
 3 feedback rounds used   ──► `needs-human` label + one comment; feedback, auto-merge, start and the ended comment pause until a human removes it
 `working`, quiet 30 min  ──► `needs-human` label + one comment with the last pane lines; the session keeps running
-ticket done / closed     ──► kill window; nothing uncommitted or unpushed ──► delete the session clone
-ticket canceled          ──► kill window, keep the session clone and its files until the ticket is done
+ticket done / closed     ──► kill session; nothing uncommitted or unpushed ──► delete the session clone
+ticket canceled          ──► kill session, keep the session clone and its files until the ticket is done
 ```
 
-- **Canceled** = GitHub: closed as not planned or duplicate, or deleted. Linear: any state of type Canceled or Duplicate, or trashed (a deleted or trashed ticket is never done, so delete its clone by hand). `aw` kills the window (no Ctrl-C first: transcripts are written as they go), writes `<ID>.ended`, logs `stopped`, posts nothing and deletes nothing. The clone and its files stay until the ticket is done (GitHub: reopen and close as completed; Linear: move it to a `done` state), then cleanup runs as usual; or delete them by hand. A canceled ticket is not in the ready listing, so it is never started. Reopened with the in-progress marker still on, it stays stopped and `aw` logs that once per run (as for any ended session still in progress); remove the `in-progress` label (Linear: move it to `Todo`) to start it again in the kept clone.
+- **Canceled** = GitHub: closed as not planned or duplicate, or deleted. Linear: any state of type Canceled or Duplicate, or trashed (a deleted or trashed ticket is never done, so delete its clone by hand). `aw` kills the session (no Ctrl-C first: transcripts are written as they go), writes `<ID>.ended`, logs `stopped`, posts nothing and deletes nothing. The clone and its files stay until the ticket is done (GitHub: reopen and close as completed; Linear: move it to a `done` state), then cleanup runs as usual; or delete them by hand. A canceled ticket is not in the ready listing, so it is never started. Reopened with the in-progress marker still on, it stays stopped and `aw` logs that once per run (as for any ended session still in progress); remove the `in-progress` label (Linear: move it to `Todo`) to start it again in the kept clone.
 
 - **Ready** = GitHub: open + `agent` + `host:<host>` labels. Linear: `Todo` state + the same two labels.
 - The `host:<host>` label decides which machine takes a ticket, so a laptop and a VM never pick up the same one. With `"defaultHost": true` this machine also takes tickets with no `host:` label at all, so on a single laptop you only need `agent`. Set it on one machine only: claiming is not atomic, so two default hosts can both start the same unlabelled ticket.
@@ -98,7 +98,7 @@ The same are available as `bun run setup owner/repo`, `bun run start`, `bun run 
 
 ### 1. Requirements
 
-Linux. On `PATH`: `bun`, `git`, `gh` (logged in: `gh auth status`), `tmux`, GNU `timeout` (coreutils; bounds every command `aw` runs), and `claude` and/or `codex`. The default prompt needs the `agent-orchestration` skill installed globally in `~/.claude/skills` (`scripts/setup.sh` links that dir into both agent config dirs). For sandboxed repos, install nono:
+Linux. On `PATH`: `bun`, `git`, `gh` (logged in: `gh auth status`), `tmux`, GNU `timeout` (coreutils; bounds every command `aw` runs), a systemd user manager (`systemd-run --user`, `systemctl --user`; each session runs in its own scope), and `claude` and/or `codex`. The default prompt needs the `agent-orchestration` skill installed globally in `~/.claude/skills` (`scripts/setup.sh` links that dir into both agent config dirs). For sandboxed repos, install nono:
 
 ```bash
 curl -fsSL https://nono.sh/install.sh | sh
@@ -182,6 +182,8 @@ Unix sockets: Landlock's file rules do not cover `connect()` to a socket, so bot
 Terminals: a session may open `/dev/tty` and its own pane's pty (the launcher adds `--allow-file "$(tty)"`), but no other `/dev/pts/N`, so it cannot read what you type in another pane or shell, or write escape sequences into it. `/dev/ptmx` is denied too, so a session cannot allocate a pty of its own: Codex's `exec_command` with `tty: true` fails, and plain (pipe) commands, which Claude Code and Codex use by default, are unaffected.
 
 Temp dir: each session gets its own `<ID>.tmpdir` next to its clone, emptied and recreated (mode 700) by `aw` on the host at every start and deleted at cleanup. The launcher exports it as `TMPDIR`, `TMP`, `TEMP` and Claude's `CLAUDE_CODE_TMPDIR`, so `mktemp`, `os.tmpdir()`, Python's `tempfile` and tools that follow them, socket-creating test suites included, land there. It is a sidecar rather than a dir in the clone so temp files never show in `git status` or block cleanup. Both profiles exclude nono's `system_write_linux` group, the only one granting `/tmp`, and re-grant its `/dev` and `/proc/self/fd` entries except `/dev/pts`, so a session can no longer write the `/tmp` it shared with your host and other sessions; a tool that hardcodes `/tmp` fails (reading there was already denied). A Unix socket path is at most 107 bytes: with `~/agent-ws/nejcm/agent-workflow` and an ID like `ENG-12345` the temp dir is 57 bytes, which leaves 50 for the socket's own path, so a long `workspaceRoot`, owner or repo name can make a test suite's socket fail with `AF_UNIX path too long`; keep `workspaceRoot` short.
+
+Stopping: the launcher runs each session in its own systemd user scope, `aw-<owner>:<name>:<ID>.scope` (`systemd-run --user --scope --collect`, with or without nono), because `tmux kill-window` only hangs up the pane: a session that ignores `SIGHUP` or `setsid`s a child keeps running, with its credentials and network. Every stop (done, canceled, a failed claim) first runs `systemctl --user kill --signal=KILL` on that scope, which kills every process in it, then kills the window; a scope that is gone is fine. A start kills any scope left under the ticket's name first, and fails (logged, ticket not claimed, retried next poll) if the user manager cannot be reached, so `aw` never starts a session it could not stop. The sandbox cannot reach the user manager's sockets, so a session cannot leave its scope. `systemctl --user list-units 'aw-*'` lists them.
 
 ### 5. First run
 

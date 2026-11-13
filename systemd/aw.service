@@ -9,7 +9,7 @@ ExecStart=%h/.bun/bin/bun aw.ts run --config aw.json
 Environment=PATH=%h/.local/share/mise/shims:%h/.bun/bin:%h/.local/bin:/usr/local/bin:/usr/bin
 Restart=on-failure
 RestartSec=30
-# Only stop the poller; the tmux server and agent sessions live in this cgroup.
+# Only stop the poller; the tmux server lives in this cgroup (sessions run in their own scopes).
 KillMode=process
 
 [Install]

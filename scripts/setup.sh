@@ -40,7 +40,7 @@ if ! command -v nono >/dev/null; then
   curl -fsSL https://nono.sh/install.sh | NONO_INSTALL_DIR="$HOME/.local/bin" sh
 fi
 
-for c in bun git gh tmux timeout; do command -v "$c" >/dev/null || { echo "MISSING: $c"; exit 1; }; done
+for c in bun git gh tmux timeout systemd-run systemctl; do command -v "$c" >/dev/null || { echo "MISSING: $c"; exit 1; }; done
 gh auth status >/dev/null 2>&1 || { echo "MISSING: gh login (gh auth login)"; exit 1; }
 
 for f in nono/aw-claude.json nono/aw-codex.json; do nono profile validate "$f" >/dev/null && echo "ok   $f"; done

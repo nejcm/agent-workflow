@@ -4,7 +4,7 @@ import { allowedRepo, repoDir, validRepo } from "./config";
 import { deliverFeedback } from "./feedback";
 import { fileFindings } from "./findings";
 import { byPriority, canonical, findPr, github, sameRepo } from "./github";
-import { nonoRun, SLOW_SECS, start, windows, winName } from "./launcher";
+import { nonoRun, SLOW_SECS, start, stopScope, windows, winName } from "./launcher";
 import { linear } from "./linear";
 import { autoMerge } from "./merge";
 import { syncPhases } from "./phases";
@@ -221,6 +221,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
       await step(x.io, `cleanup ${r.key}/${id}`, async () => {
         const end = await x.tr.closed(id, r.key);
         if (!end) return;
+        await stopScope(x.io, r.key, id);
         const w = wins.get(winName(r.key, id));
         if (w) await write(x.io, ["tmux", "kill-window", "-t", w]);
         wins.delete(winName(r.key, id));

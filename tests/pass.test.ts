@@ -23,7 +23,7 @@ test("launcher: claude under nono, token read on the host, never written; the ba
   expect(s).toContain(`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-aw/oauth-token")" || exit 1\nexport CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/web/gh-1'.claude CODEX_HOME='/ws/web/gh-1'.codex CLAUDE_CODE_TMPDIR='/ws/web/gh-1'.tmpdir\n`);
   expect(s).toContain(`unset LINEAR_API_KEY\nexport TMPDIR='/ws/web/gh-1.tmpdir' TMP='/ws/web/gh-1.tmpdir' TEMP='/ws/web/gh-1.tmpdir'\n`);
   expect(s).toContain("--no-rollback-prompt");
-  expect(s).toContain(`exec nono run --no-rollback-prompt --profile '/aw/nono/aw-claude.json' --allow '/ws/web/gh-1' --allow-unix-socket-subtree-bind '/ws/web/gh-1' --allow '/ws/web/gh-1.tmpdir' --allow-unix-socket-subtree-bind '/ws/web/gh-1.tmpdir' --allow '/ws/web/gh-1.claude' --allow '/ws/web/gh-1.codex' --read '${root}/src-web/.git/objects' --allow-file "$(tty)" -- claude --permission-mode`);
+  expect(s).toContain(`exec systemd-run --user --scope --quiet --collect --unit 'aw-acme:web:gh-1.scope' -- nono run --no-rollback-prompt --profile '/aw/nono/aw-claude.json' --allow '/ws/web/gh-1' --allow-unix-socket-subtree-bind '/ws/web/gh-1' --allow '/ws/web/gh-1.tmpdir' --allow-unix-socket-subtree-bind '/ws/web/gh-1.tmpdir' --allow '/ws/web/gh-1.claude' --allow '/ws/web/gh-1.codex' --read '${root}/src-web/.git/objects' --allow-file "$(tty)" -- claude --permission-mode`);
   expect(s).toContain(`--permission-mode bypassPermissions "$(cat '/ws/web/gh-1.prompt.md')"`);
 });
 
@@ -31,7 +31,7 @@ test("launcher: codex without sandbox keeps the daemon", () => {
   const c = config({ repos: [{ name: "acme/web", agent: "codex", sandbox: "none" }] });
   const s = launcher(web(c), "/ws/web/gh-2", "/ws/web/gh-2.prompt.md", "/aw");
   expect(s).toContain("export CODEX_HOME='/ws/web/gh-2'.codex");
-  expect(s).toContain(`exec codex --dangerously-bypass-hook-trust --sandbox danger-full-access --ask-for-approval never -C '/ws/web/gh-2' "$(cat '/ws/web/gh-2.prompt.md')"`);
+  expect(s).toContain(`exec systemd-run --user --scope --quiet --collect --unit 'aw-acme:web:gh-2.scope' -- codex --dangerously-bypass-hook-trust --sandbox danger-full-access --ask-for-approval never -C '/ws/web/gh-2' "$(cat '/ws/web/gh-2.prompt.md')"`);
   expect(launcher(web(config({ repos: [{ name: "acme/web", agent: "codex" }] })), "/w", "/p", "/aw")).toContain("-- codex --no-daemon ");
 });
 
@@ -50,14 +50,15 @@ export CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CODEX_HOME
   const codex = (d: string) => String.raw`codex ${d}--dangerously-bypass-hook-trust --sandbox danger-full-access --ask-for-approval never -C '/ws/it'\''s' "$(cat '/ws/p.md')"
 `;
   const s = (agent: string, sandbox: string) => launcher(web(config({ repos: [{ name: "acme/web", path: "/src/web", agent, sandbox }] })), "/ws/it's", "/ws/p.md", "/aw");
+  const scope = String.raw`systemd-run --user --scope --quiet --collect --unit 'aw-acme:web:it'\''s.scope' -- `;
   const gh = String.raw`export GH_CONFIG_DIR='/ws/it'\''s'.gh
 `;
-  expect(s("claude", "nono")).toBe(`${head}${gh}${claudeEnv}exec ${nono("claude", String.raw`--allow '/ws/it'\''s.claude' --allow '/ws/it'\''s.codex' `)}${claude}`);
-  expect(s("claude", "none")).toBe(`${head}${claudeEnv}exec ${claude}`);
+  expect(s("claude", "nono")).toBe(`${head}${gh}${claudeEnv}exec ${scope}${nono("claude", String.raw`--allow '/ws/it'\''s.claude' --allow '/ws/it'\''s.codex' `)}${claude}`);
+  expect(s("claude", "none")).toBe(`${head}${claudeEnv}exec ${scope}${claude}`);
   const codexEnv = String.raw`export CODEX_HOME='/ws/it'\''s'.codex
 `;
-  expect(s("codex", "nono")).toBe(`${head}${gh}${codexEnv}exec ${nono("codex", String.raw`--allow '/ws/it'\''s.codex' `)}${codex("--no-daemon ")}`);
-  expect(s("codex", "none")).toBe(`${head}${codexEnv}exec ${codex("")}`);
+  expect(s("codex", "nono")).toBe(`${head}${gh}${codexEnv}exec ${scope}${nono("codex", String.raw`--allow '/ws/it'\''s.codex' `)}${codex("--no-daemon ")}`);
+  expect(s("codex", "none")).toBe(`${head}${codexEnv}exec ${scope}${codex("")}`);
 });
 
 test("starts ready tickets up to maxConcurrent", async () => {
@@ -323,6 +324,8 @@ test("done: kills window, removes the session clone, files and config dir; keeps
   await pass(c, io, () => tr, "/aw");
   expect(cmds).toContain("tmux kill-window -t @0");
   expect(cmds.filter((x) => x.includes("kill-window"))).toHaveLength(1);
+  expect(cmds.indexOf("systemctl --user kill --signal=KILL aw-acme:web:gh-1.scope")).toBeLessThan(cmds.indexOf("tmux kill-window -t @0"));
+  expect(cmds).toContain("systemctl --user kill --signal=KILL aw-acme:web:gh-2.scope");
   expect(existsSync(join(root, "acme/web/gh-1.sh"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.source"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.pr"))).toBe(false);
@@ -355,6 +358,8 @@ test("canceled: kills the window once, keeps the clone and files, posts nothing;
   await pass(c, io, () => tr, "/aw");
   expect(cmds.filter((x) => x.includes("kill-window"))).toEqual(["tmux kill-window -t @0"]);
   expect(cmds.some((x) => x.startsWith("rm "))).toBe(false);
+  // gh-2 has no window, but a session that left it may still run in its scope.
+  expect(cmds.filter((x) => x.startsWith("systemctl")).sort()).toEqual(["gh-1", "gh-2"].map((id) => `systemctl --user kill --signal=KILL aw-acme:web:${id}.scope`));
   for (const f of ["gh-1", "gh-1.claude", "gh-1.sh", "gh-1.source", "gh-1.ended", "gh-2", "gh-2.source"]) expect(existsSync(join(root, "acme/web", f))).toBe(true);
   // gh-2's session had already exited: still marked ended, so a reopen never reads as "ended without a PR".
   expect(existsSync(join(root, "acme/web/gh-2.ended"))).toBe(true);
@@ -429,8 +434,24 @@ test("a failed start leaves the ticket unclaimed and retries next poll; a failed
   await pass(c, io, () => tr, "/aw");
   expect(logs).toContain(`[web] reuse ${root}/acme/web/gh-1`);
   expect(cmds).toContain("tmux kill-window -t =aw:=acme/web/gh-1");
+  expect(cmds.filter((x) => x.startsWith("systemctl")).at(-1)).toBe("systemctl --user kill --signal=KILL aw-acme:web:gh-1.scope");
   expect(logs.some((l) => l.includes("start gh-1 failed: tracker down"))).toBe(true);
   expect(logs.some((l) => l.includes("kill window acme/web/gh-1 by hand"))).toBe(true);
+});
+
+test("a start first kills a stale scope by its name, and fails unclaimed when systemd --user is unreachable", async () => {
+  const c = config();
+  const { tr, calls } = fakeTracker({ ready: [ticket(1)] });
+  let err = "Failed to connect to user scope bus via local transport";
+  const { io, cmds, logs } = fakeIo((a) => (a[0] === "systemctl" ? { code: 1, err } : noPr(a)));
+  await pass(c, io, () => tr, "/aw");
+  expect(calls).toEqual([]);
+  expect(cmds.some((x) => x.includes("new-window"))).toBe(false);
+  expect(logs.some((l) => l.includes(`start gh-1 failed: systemctl --user kill: ${err}`))).toBe(true);
+  err = "Failed to kill unit aw-acme:web:gh-1.scope: Unit aw-acme:web:gh-1.scope not loaded.";
+  await pass(c, io, () => tr, "/aw");
+  expect(calls).toEqual(["claim gh-1"]);
+  expect(cmds.indexOf("systemctl --user kill --signal=KILL aw-acme:web:gh-1.scope")).toBeLessThan(cmds.findIndex((x) => x.includes("new-window")));
 });
 
 test("one ticket or source failing does not stop the rest", async () => {

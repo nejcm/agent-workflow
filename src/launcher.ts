@@ -1,5 +1,5 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { AGENTS, CLAUDE_TOKEN, claudeHome, codexHome, tmpHome } from "./agents";
 import { repoDir } from "./config";
 import type { Config, Io, Repo, Source, Ticket, Tracker } from "./types";
@@ -13,6 +13,15 @@ const q = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 
 export const nonoRun = (l: Repo, awDir: string, grants: [string, string][], quote = (s: string) => s) =>
   ["nono", "run", "--no-rollback-prompt", "--profile", quote(join(awDir, "nono", `aw-${l.agent}.json`)), ...grants.flatMap(([flag, path]) => [flag, quote(path)]), "--"];
+
+/** The session's systemd user scope; ':' is in no repo key or ticket id, so names never collide. */
+export const scopeUnit = (key: string, id: string) => `aw-${key.replace("/", ":")}:${id}.scope`;
+
+/** SIGKILLs the session's whole scope, setsid'd children included, which tmux kill-window leaves running; fails if systemd --user is unreachable. */
+export const stopScope = (io: Io, key: string, id: string) =>
+  write(io, ["systemctl", "--user", "kill", "--signal=KILL", scopeUnit(key, id)]).catch((e) => {
+    if (!/ not loaded\.$/.test(e.message)) throw e;
+  });
 
 // The pane's own pty, resolved when the script runs; the profiles grant no other /dev/pts entry.
 const PANE_TTY = `"$(tty)"`;
@@ -29,7 +38,8 @@ export function launcher(l: Repo, wt: string, promptFile: string, awDir = AW_DIR
   const [env, cmd] = AGENTS[l.agent].launch(q(wt), prompt, nono);
   // gh exits if it cannot read its config dir; <ID>.gh is never created, so gh runs on defaults plus nono's GH_TOKEN.
   const gh = nono ? `export GH_CONFIG_DIR=${q(wt)}.gh\n` : "";
-  return `#!/usr/bin/env bash\ncd ${q(wt)} || exit 1\nunset LINEAR_API_KEY\nexport TMPDIR=${q(tmp)} TMP=${q(tmp)} TEMP=${q(tmp)}\n${gh}${env}\nexec ${[...wrap, ...cmd].join(" ")}\n`;
+  const scope = ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--unit", q(scopeUnit(l.key, basename(wt))), "--"];
+  return `#!/usr/bin/env bash\ncd ${q(wt)} || exit 1\nunset LINEAR_API_KEY\nexport TMPDIR=${q(tmp)} TMP=${q(tmp)} TEMP=${q(tmp)}\n${gh}${env}\nexec ${[...scope, ...wrap, ...cmd].join(" ")}\n`;
 }
 
 export async function windows(cfg: Config, io: Io) {
@@ -175,6 +185,8 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   const script = join(dir, `${t.id}.sh`);
   const token = join(io.home, CLAUDE_TOKEN);
   if (r.agent === "claude" && !existsSync(token)) throw new Error(`${token} is missing: run \`claude setup-token\` and save the token it prints there (chmod 600)`);
+  // No window means any scope left under this name is a stale session, still writing the clone it is about to share.
+  await stopScope(io, r.key, t.id);
   // Claude sessions run Codex only as a helper, so a missing Codex login does not stop them.
   const login = r.agent === "codex" ? await codexLogin(io) : await codexLogin(io).catch(() => undefined);
   await ensureClone(cfg, io, r);
@@ -205,6 +217,7 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   try {
     await tr.claim(t);
   } catch (e) {
+    await stopScope(io, r.key, t.id).catch((k) => io.log(`${t.id}: claim failed and stopping its scope failed (${k.message}); run systemctl --user kill --signal=KILL ${scopeUnit(r.key, t.id)}`));
     await write(io, ["tmux", "kill-window", "-t", `=${cfg.tmuxSession}:=${winName(r.key, t.id)}`]).catch((k) => io.log(`${t.id}: claim failed and kill-window failed (${k.message}); kill window ${winName(r.key, t.id)} by hand`));
     throw e;
   }

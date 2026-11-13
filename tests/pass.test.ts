@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSy
 import { join } from "node:path";
 import { validRepo } from "../src/config";
 import { canonCache, github } from "../src/github";
-import { adminDir, CODEX_AUTH, codexLogin, codexRefresh, launcher, render, seedClaude, seedCodex } from "../src/launcher";
+import { CODEX_AUTH, codexLogin, codexRefresh, launcher, render, seedClaude, seedCodex } from "../src/launcher";
 import { endedNotice, pass } from "../src/pass";
 import { liveStates, pickAnswer } from "../src/question";
 import type { State } from "../src/state";
@@ -17,15 +17,14 @@ test("render is single-pass so ticket text cannot expand placeholders", () => {
   expect(render("{{title}} / {{body}} / {{nope}}", { title: "{{body}}", body: "b" })).toBe("{{body}} / b / {{nope}}");
 });
 
-test("launcher: claude under nono, token read on the host, never written; only a legacy worktree writes the shared clone", () => {
+test("launcher: claude under nono, token read on the host, never written; the base clone is only read", () => {
   const c = config();
-  const s = launcher(web(c), "/ws/web/gh-1", "/ws/web/gh-1.prompt.md", "/aw", `${root}/src-web/.git/worktrees/gh-1`);
+  const s = launcher(web(c), "/ws/web/gh-1", "/ws/web/gh-1.prompt.md", "/aw");
   expect(s).toContain(`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-aw/oauth-token")" || exit 1\nexport CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/web/gh-1'.claude CODEX_HOME='/ws/web/gh-1'.codex CLAUDE_CODE_TMPDIR='/ws/web/gh-1'.tmpdir\n`);
   expect(s).toContain(`unset LINEAR_API_KEY\nexport TMPDIR='/ws/web/gh-1.tmpdir' TMP='/ws/web/gh-1.tmpdir' TEMP='/ws/web/gh-1.tmpdir'\n`);
   expect(s).toContain("--no-rollback-prompt");
-  expect(s).toContain(`exec nono run --no-rollback-prompt --profile '/aw/nono/aw-claude.json' --allow '/ws/web/gh-1' --allow-unix-socket-subtree-bind '/ws/web/gh-1' --allow '/ws/web/gh-1.tmpdir' --allow-unix-socket-subtree-bind '/ws/web/gh-1.tmpdir' --allow '/ws/web/gh-1.claude' --allow '/ws/web/gh-1.codex' --read '${root}/src-web/.git' --allow '${root}/src-web/.git/objects' --allow '${root}/src-web/.git/refs' --allow '${root}/src-web/.git/logs' --allow '${root}/src-web/.git/worktrees/gh-1' -- claude --permission-mode`);
+  expect(s).toContain(`exec nono run --no-rollback-prompt --profile '/aw/nono/aw-claude.json' --allow '/ws/web/gh-1' --allow-unix-socket-subtree-bind '/ws/web/gh-1' --allow '/ws/web/gh-1.tmpdir' --allow-unix-socket-subtree-bind '/ws/web/gh-1.tmpdir' --allow '/ws/web/gh-1.claude' --allow '/ws/web/gh-1.codex' --read '${root}/src-web/.git/objects' -- claude --permission-mode`);
   expect(s).toContain(`--permission-mode bypassPermissions "$(cat '/ws/web/gh-1.prompt.md')"`);
-  expect(launcher(web(c), "/ws/web/gh-1", "/p", "/aw")).toContain(`--allow '/ws/web/gh-1.codex' --read '${root}/src-web/.git/objects' -- claude`);
 });
 
 test("launcher: codex without sandbox keeps the daemon", () => {
@@ -418,6 +417,7 @@ test("dry-run logs side effects and executes none", async () => {
   expect(logs.some((l) => l.includes("dry: tmux new-session -d -s aw"))).toBe(true);
   expect(logs.some((l) => l.startsWith("[web] dry: nono run ") && l.endsWith(`-C ${root}/acme/web/gh-5 status --porcelain --ignore-submodules=none`))).toBe(true);
   expect(logs.some((l) => l.startsWith("[web] dry: nono run ") && l.endsWith(`-C ${root}/acme/web/gh-5 log --format=%h --branches --not --remotes`))).toBe(true);
+  expect(logs.some((l) => l.startsWith("[web] dry: nono run ") && l.endsWith(`-C ${root}/acme/web/gh-5 for-each-ref --format=%(refname) refs/tags refs/stash refs/notes`))).toBe(true);
   expect(logs).toContain(`[web] dry: rm -rf --one-file-system -- ${root}/acme/web/gh-5`);
   expect(logs.some((l) => l.includes("dry: tmux new-window"))).toBe(true);
   expect(existsSync(join(root, "acme/web/gh-1.prompt.md"))).toBe(false);
@@ -757,96 +757,6 @@ test("aw's git calls run no hook files, fsmonitor or auto-gc planted in the clon
   expect(existsSync(marker)).toBe(true);
 });
 
-test("cleanup never runs git's own dirty check, which follows a planted commondir or config.worktree", async () => {
-  const clone = join(root, "src-web");
-  const marker = join(root, "fired");
-  const sh = (...a: string[]) => Bun.spawnSync(a, { stdout: "pipe", stderr: "pipe" });
-  expect(sh("git", "init", "-q", clone).exitCode).toBe(0);
-  writeFileSync(join(clone, "f"), "a");
-  expect(sh("git", "-C", clone, "add", "f").exitCode).toBe(0);
-  expect(sh("git", "-C", clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "i").exitCode).toBe(0);
-  writeFileSync(join(root, "clean"), `#!/bin/sh\necho x >> '${marker}'; cat\n`, { mode: 0o755 });
-  const plant = (id: string, how: "commondir" | "config.worktree") => {
-    const wt = join(root, "acme/web", id);
-    expect(sh(...GIT, "-C", clone, "worktree", "add", "-q", wt, "-b", `agent/${id}`).exitCode).toBe(0);
-    worktree(id);
-    writeFileSync(join(wt, "f"), "x");
-    writeFileSync(join(wt, ".gitattributes"), "* filter=evil\n");
-    mkdirSync(`${wt}.claude`);
-    const admin = join(clone, ".git/worktrees", id);
-    if (how === "commondir") {
-      const fake = join(root, `fake-${id}`);
-      sh("cp", "-r", join(clone, ".git"), fake);
-      sh("git", "--git-dir", fake, "config", "filter.evil.clean", join(root, "clean"));
-      writeFileSync(join(admin, "commondir"), fake);
-    } else {
-      sh("git", "-C", clone, "config", "extensions.worktreeConfig", "true");
-      writeFileSync(join(admin, "config.worktree"), `[filter "evil"]\n\tclean = ${join(root, "clean")}\n`);
-    }
-    return wt;
-  };
-  const a = plant("gh-1", "commondir");
-  const b = plant("gh-2", "config.worktree");
-  const run = async (nonoOut: string) => {
-    const { tr } = fakeTracker({ done: ["gh-1", "gh-2"] });
-    const { io, logs } = fakeIo((x) => (x[0] === "nono" ? { out: nonoOut } : x[0] === "git" ? (({ exitCode, stdout }) => ({ code: exitCode, out: stdout.toString() }))(sh(...GIT, ...x.slice(1))) : noPr(x)));
-    await pass(config({ repos: [{ name: "acme/web", path: clone }] }), io, () => tr, "/aw");
-    return logs;
-  };
-  expect((await run("?? f\n")).filter((l) => l.includes("has uncommitted, untracked or unpushed work"))).toHaveLength(2);
-  expect([existsSync(a), existsSync(b), existsSync(marker), existsSync(`${a}.claude`)]).toEqual([true, true, false, true]);
-  for (const wt of [a, b]) {
-    expect(sh("git", "-C", clone, "worktree", "remove", wt).exitCode).not.toBe(0);
-    expect(existsSync(marker)).toBe(true);
-    rmSync(marker);
-  }
-  await run("");
-  expect([existsSync(a), existsSync(b), existsSync(marker), existsSync(`${a}.claude`)]).toEqual([false, false, false, false]);
-});
-
-test("cleanup removes a done worktree despite a planted lock file, dir, FIFO or symlink; a dirty one is still kept", async () => {
-  const clone = join(root, "src-web");
-  const target = join(root, "target");
-  const sh = (...a: string[]) => Bun.spawnSync(a, { stdout: "pipe", stderr: "pipe" });
-  expect(sh("git", "init", "-q", clone).exitCode).toBe(0);
-  expect(sh("git", "-C", clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i").exitCode).toBe(0);
-  writeFileSync(target, "keep");
-  const kinds = { "gh-1": "file", "gh-2": "dir", "gh-3": "fifo", "gh-4": "symlink", "gh-5": "file" } as const;
-  for (const [id, kind] of Object.entries(kinds)) {
-    expect(sh(...GIT, "-C", clone, "worktree", "add", "-q", join(root, "acme/web", id), "-b", `agent/${id}`).exitCode).toBe(0);
-    worktree(id);
-    const locked = join(clone, ".git/worktrees", id, "locked");
-    if (kind === "file") writeFileSync(locked, "mine");
-    else if (kind === "dir") mkdirSync(locked);
-    else if (kind === "fifo") expect(sh("mkfifo", locked).exitCode).toBe(0);
-    else symlinkSync(target, locked);
-  }
-  const { tr } = fakeTracker({ done: Object.keys(kinds) });
-  const { io, logs } = fakeIo((x) =>
-    x[0] === "nono" ? { out: x.includes(join(root, "acme/web/gh-5")) ? "?? f\n" : "" } : x[0] === "git" ? (({ exitCode, stdout }) => ({ code: exitCode, out: stdout.toString() }))(sh(...GIT, ...x.slice(1))) : noPr(x),
-  );
-  await pass(config({ repos: [{ name: "acme/web", path: clone }] }), io, () => tr, "/aw");
-  expect(Object.keys(kinds).filter((id) => existsSync(join(root, "acme/web", id)))).toEqual(["gh-5"]);
-  expect(readdirSync(join(clone, ".git/worktrees"))).toEqual(["gh-5"]);
-  expect(logs.filter((l) => l.includes("failed"))).toEqual([expect.stringContaining("gh-5 has uncommitted, untracked or unpushed work")]);
-  expect(readFileSync(target, "utf8")).toBe("keep");
-});
-
-test("the session is granted git's actual admin dir, and a .git pointing elsewhere is refused", () => {
-  const clone = join(root, "src-web");
-  const sh = (...a: string[]) => Bun.spawnSync(a, { stdout: "pipe", stderr: "pipe" }).exitCode;
-  expect(sh("git", "init", "-q", clone)).toBe(0);
-  expect(sh("git", "-C", clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i")).toBe(0);
-  expect(sh(...GIT, "-C", clone, "worktree", "add", "-q", join(root, "other/gh-1"), "-b", "other")).toBe(0);
-  const wt = join(root, "acme/web/gh-1");
-  expect(sh(...GIT, "-C", clone, "worktree", "add", "-q", wt, "-b", "agent/gh-1")).toBe(0);
-  const r = { ...web(config()), path: clone };
-  expect(adminDir(r, wt)).toBe(join(clone, ".git/worktrees/gh-11"));
-  expect(launcher(r, wt, "/p", "/aw", adminDir(r, wt))).toContain(`--allow '${clone}/.git/worktrees/gh-11' --`);
-  writeFileSync(join(wt, ".git"), `gitdir: ${join(clone, ".git/worktrees/gh-1")}\n`);
-  expect(() => adminDir(r, wt)).toThrow("does not point to its own admin dir");
-});
-
 test("ended without a PR: quotes the last claude or codex message from the ticket's own dir; bare notice when none", async () => {
   const say = (text: string) => JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text }] } });
   claudeFile(join(root, "acme/web/gh-1"), "s.jsonl", say("Blocked: tests need a DB."));
@@ -962,7 +872,7 @@ test("liveStates raw keeps a stale working that the resolved state reports as un
   expect(await live(r, root, "a", 20 * 60_000, true)).toBe("working");
 });
 
-test("a session gets its own clone sharing the base's objects; cleanup deletes it without git or symlinks, unless work is unpushed", async () => {
+test("a session gets its own clone sharing the base's objects; cleanup deletes it without git or symlinks, unless work, a stash, a tag or a note is unpushed", async () => {
   const origin = join(root, "origin.git");
   const base = join(root, "src-web");
   const sh = (...a: string[]) => Bun.spawnSync(a, { stdout: "pipe", stderr: "pipe" });
@@ -984,12 +894,12 @@ test("a session gets its own clone sharing the base's objects; cleanup deletes i
   };
   const run = async (t: ReturnType<typeof fakeTracker>) => {
     const { io, cmds, logs } = fakeIo((x) => (x[0] === "git" || x[0] === "nono" || x[0] === "rm" ? real(x) : noPr(x)));
-    await pass(config({ maxConcurrent: 4 }), io, () => t.tr, "/aw");
+    await pass(config({ maxConcurrent: 7 }), io, () => t.tr, "/aw");
     return { cmds, logs };
   };
   const refsBefore = baseRefs();
-  await run(fakeTracker({ ready: [ticket(1), ticket(2)] }));
-  const [wt1, wt2] = [1, 2].map((n) => join(root, `acme/web/gh-${n}`));
+  await run(fakeTracker({ ready: [ticket(1), ticket(2), ticket(4), ticket(5), ticket(6), ticket(7)] }));
+  const [wt1, wt2, wt4, wt5, wt6, wt7] = [1, 2, 4, 5, 6, 7].map((n) => join(root, `acme/web/gh-${n}`));
   for (const wt of [wt1, wt2]) {
     expect(lstatSync(join(wt, ".git")).isDirectory()).toBe(true);
     expect(readFileSync(join(wt, ".git/objects/info/alternates"), "utf8").trim()).toBe(join(base, ".git/objects"));
@@ -997,36 +907,28 @@ test("a session gets its own clone sharing the base's objects; cleanup deletes i
     expect(out("git", "-C", wt, "rev-parse", "origin/main")).toBe(out("git", "-C", base, "rev-parse", "origin/main"));
   }
   expect(out("git", "-C", wt1, "for-each-ref", "--format=%(refname)")).toBe("refs/heads/agent/gh-1\nrefs/remotes/origin/main");
+  expect(out("git", "-C", wt1, "config", "remote.origin.tagOpt")).toBe("--no-tags");
   expect(out("git", "-C", wt2, "rev-parse", "HEAD")).toBe(legacy);
   expect(baseRefs()).toBe(refsBefore);
   expect(out("git", "-C", base, "config", "gc.pruneExpire")).toBe("never");
   writeFileSync(join(root, "target"), "keep");
   symlinkSync(join(root, "target"), join(wt1, "link"));
   writeFileSync(join(wt1, ".git/info/exclude"), "link\n");
+  writeFileSync(join(wt5, "f"), "x");
+  expect(sh("git", "-C", wt5, "add", "f").exitCode).toBe(0);
+  expect(sh("git", "-C", wt5, "-c", "user.name=t", "-c", "user.email=t@t", "stash", "-q").exitCode).toBe(0);
+  expect(out("git", "-C", wt5, "status", "--porcelain")).toBe("");
+  expect(sh("git", "-C", wt6, "tag", "v1").exitCode).toBe(0);
+  expect(sh("git", "-C", wt7, "-c", "user.name=t", "-c", "user.email=t@t", "notes", "add", "-m", "n").exitCode).toBe(0);
   worktree("gh-3");
   rmSync(join(root, "acme/web/gh-3/.git"), { recursive: true });
-  const { logs } = await run(fakeTracker({ done: ["gh-1", "gh-2", "gh-3"] }));
-  expect([existsSync(wt1), existsSync(wt2), readFileSync(join(root, "target"), "utf8")]).toEqual([false, true, "keep"]);
-  expect(logs.filter((l) => l.includes("left in place"))).toEqual([expect.stringContaining("gh-3/.git is neither a file nor a directory"), expect.stringContaining(`${wt2} has uncommitted, untracked or unpushed work`)]);
+  const { logs } = await run(fakeTracker({ done: ["gh-1", "gh-2", "gh-3", "gh-4", "gh-5", "gh-6", "gh-7"] }));
+  expect([existsSync(wt1), existsSync(wt2), existsSync(wt4), existsSync(wt5), existsSync(wt6), existsSync(wt7), readFileSync(join(root, "target"), "utf8")]).toEqual([false, true, false, true, true, true, "keep"]);
+  expect(logs.filter((l) => l.includes("left in place")).sort()).toEqual([expect.stringContaining("gh-2 has uncommitted, untracked or unpushed work"), expect.stringContaining("gh-3/.git is not a directory"), expect.stringContaining("gh-5 has uncommitted"), expect.stringContaining("gh-6 has uncommitted"), expect.stringContaining("gh-7 has uncommitted")]);
   expect(sh("git", "-C", wt2, "push", "-q", "origin", "agent/gh-2").exitCode).toBe(0);
   await run(fakeTracker({ done: ["gh-2"] }));
   expect(existsSync(wt2)).toBe(false);
   expect(baseRefs()).toBe(refsBefore);
-});
-
-test("a legacy worktree still in progress restarts with its old grants and trust on the base clone", async () => {
-  const base = join(root, "src-web");
-  const wt = join(root, "acme/web/gh-1");
-  const sh = (...a: string[]) => Bun.spawnSync(a, { stdout: "pipe", stderr: "pipe" }).exitCode;
-  expect(sh("git", "init", "-q", base)).toBe(0);
-  expect(sh("git", "-C", base, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i")).toBe(0);
-  expect(sh(...GIT, "-C", base, "worktree", "add", "-q", wt, "-b", "agent/gh-1")).toBe(0);
-  const { tr } = fakeTracker({ ready: [ticket(1)] });
-  const { io, cmds } = fakeIo(noPr);
-  await pass(config(), io, () => tr, "/aw");
-  expect(cmds.some((c) => / clone |switch/.test(c))).toBe(false);
-  expect(readFileSync(join(root, "acme/web/gh-1.sh"), "utf8")).toContain(`--read '${base}/.git' --allow '${base}/.git/objects' --allow '${base}/.git/refs' --allow '${base}/.git/logs' --allow '${base}/.git/worktrees/gh-1' --`);
-  expect(JSON.parse(readFileSync(join(root, "acme/web/gh-1.claude/.claude.json"), "utf8")).projects).toEqual({ [realpathSync(base)]: { hasTrustDialogAccepted: true } });
 });
 
 test("a session clone that fails half-way is removed, not reused next poll", async () => {

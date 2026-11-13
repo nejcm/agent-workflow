@@ -193,7 +193,18 @@ export function reader(path: string) {
     }) ?? [];
 }
 
-/** Prints the last `n` events of `<ID>` or `<owner/repo>/<ID>`'s newest transcript; with `follow`, keeps printing until `wait` resolves false. */
+/** Events from the transcript at `p`, restarting on a new `p`; `switched` is true on the call where it changed. */
+export function follower() {
+  let path: string | null = null;
+  let next: (() => string[]) | undefined;
+  return (p: string | null) => {
+    const switched = p !== path;
+    if (switched) [path, next] = [p, p ? reader(p) : undefined];
+    return { switched, events: next?.() ?? [] };
+  };
+}
+
+/** Prints the last `n` events of `<ID>` or `<owner/repo>/<ID>`'s newest transcript; with `follow`, keeps printing (switching to a newer transcript) until `wait` resolves false. */
 export async function tail(cfg: Config, target: string, n: number, follow: boolean, home = homedir(), print = (s: string) => console.log(s), wait = () => Bun.sleep(1000).then(() => true)) {
   const i = target.lastIndexOf("/");
   const [repo, id] = [i < 0 ? undefined : target.slice(0, i), target.slice(i + 1)];
@@ -202,13 +213,25 @@ export async function tail(cfg: Config, target: string, n: number, follow: boole
   const candidates = repo ? [{ key: repo, wt: join(repoDir(cfg, repo), id) }] : all;
   const found = candidates.flatMap(({ key, wt }) => {
     const p = transcript(wt, cfg.repos[key]?.agent, home);
-    return p ? [{ key, p }] : [];
+    return p ? [{ key, wt, p }] : [];
   });
   if (found.length > 1) throw new Error(`${id} is in several repos (${found.map((f) => clean(f.key)).sort().join(", ")}); use aw tail <owner/repo>/${id}`);
   if (!found[0]) throw new Error(`no transcript found for ${clean(target)}`);
-  const path = found[0].p;
-  print(`# ${clean(path, 4096)}`);
-  const next = reader(path);
+  const { key, wt } = found[0];
+  let path = found[0].p;
+  const read = follower();
+  const next = () => {
+    const r = read(path);
+    if (r.switched) print(`# ${clean(path, 4096)}`);
+    return r.events;
+  };
   for (const e of next().slice(-n)) print(e);
-  while (follow && (await wait())) for (const e of next()) print(e);
+  // Only a transcript newer than the current one's last write: a gone current one must not send it back to an older one.
+  let at = mtime(path) ?? 0;
+  while (follow && (await wait())) {
+    const p = transcript(wt, cfg.repos[key]?.agent, home, at);
+    if (p && (mtime(p) ?? 0) > at) path = p;
+    at = mtime(path) ?? at;
+    for (const e of next()) print(e);
+  }
 }

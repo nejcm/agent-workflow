@@ -125,7 +125,9 @@ export async function autoMerge(cfg: Config, r: Repo, t: Ticket, tr: Tracker, io
     if (!(await ours())) return;
     // gh pr merge can pin the head but not the base, so a retarget after this fresh view still races.
     const now = await view();
-    if (now.headRefOid !== pr.headRefOid || mergeDecision(now, a, r, t.labels).merge !== true) return;
+    // A marker kept as `held` names the old head.
+    if (now.headRefOid !== pr.headRefOid) return remove(io, f);
+    if (mergeDecision(now, a, r, t.labels).merge !== true) return;
     // The listing may predate a human parking it; a failed read throws, so no merge.
     if (await tr.parked(t)) return;
     await write(io, ["gh", "pr", "merge", n, "--repo", r.key, "--squash", "--delete-branch", "--match-head-commit", pr.headRefOid]);

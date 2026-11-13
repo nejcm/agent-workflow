@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { appendFileSync, mkdirSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { claudeDir, claudeHome, codexHome } from "../src/agents";
 import { argSummary, events, lastSay, newest, tail, transcript, worktreesFor } from "../src/tail";
@@ -179,6 +179,42 @@ test("follow prints appends and survives replacement, truncation and a vanished 
   };
   const out = await run("PER-11", 20, true, wait);
   expect(out.slice(1).map((l) => l.slice(16))).toEqual(["zero", "one", "two", "3", "4"]);
+});
+
+test("follow switches to a newer transcript (restart, /clear) and announces it", async () => {
+  const wt = join(root, "acme/web/PER-13");
+  const old = claudeFile(wt, "a.jsonl", say("first"));
+  utimesSync(old, 1000, 1000);
+  let fresh = "";
+  const steps = [() => (fresh = claudeFile(wt, "b.jsonl", say("second"))), () => appendFileSync(fresh, `${say("third")}\n`)];
+  const wait = async () => {
+    const step = steps.shift();
+    step?.();
+    return !!step;
+  };
+  const out = await run("PER-13", 20, true, wait);
+  expect(out.map((l) => (l.startsWith("#") ? l : l.slice(16)))).toEqual([`# ${old}`, "first", `# ${fresh}`, "second", "third"]);
+});
+
+test("follow never goes back to an older transcript when the newer one turns unreadable or vanishes", async () => {
+  const wt = join(root, "acme/web/PER-14");
+  const old = claudeFile(wt, "a.jsonl", say("first"));
+  utimesSync(old, 1000, 1000);
+  let fresh = "";
+  const steps = [
+    () => (fresh = claudeFile(wt, "b.jsonl", say("second"))),
+    () => (utimesSync(old, 2000, 2000), utimesSync(fresh, 2000, 2000)),
+    () => chmodSync(fresh, 0),
+    () => (chmodSync(fresh, 0o644), appendFileSync(fresh, `${say("third")}\n`)),
+    () => rmSync(fresh),
+  ];
+  const wait = async () => {
+    const step = steps.shift();
+    step?.();
+    return !!step;
+  };
+  const out = await run("PER-14", 20, true, wait);
+  expect(out.map((l) => (l.startsWith("#") ? l : l.slice(16)))).toEqual([`# ${old}`, "first", `# ${fresh}`, "second", "third"]);
 });
 
 test("the initial view reads only the trailing chunk and drops its partial first line", async () => {

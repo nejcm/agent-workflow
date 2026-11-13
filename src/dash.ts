@@ -6,7 +6,7 @@ import { repoDir } from "./config";
 import { type Line, type Pane, palette, screen, sortRows } from "./dash-view";
 import { PR_URL } from "./github";
 import { type Row, snapshot } from "./status";
-import { reader } from "./tail";
+import { follower } from "./tail";
 import { clean } from "./util";
 import type { Config, Io } from "./types";
 
@@ -156,7 +156,8 @@ export async function dashboard(cfg: Config, io: Io, interval: number) {
   let maxBack = 0;
   let at = "--:--:--";
   let msg = "";
-  let tail: { path: string | null; next?: () => string[]; lines: string[] } = { path: null, lines: [] };
+  let tail: { path: string | null; lines: string[] } = { path: null, lines: [] };
+  const read = follower();
   const P = palette();
   const home = homedir();
   const memo = new Map<string, Line[]>();
@@ -186,9 +187,9 @@ export async function dashboard(cfg: Config, io: Io, interval: number) {
 
   function pump() {
     const p = rs[view.sel]?.transcript ?? null;
-    if (p !== tail.path) tail = { path: p, next: p ? reader(p) : undefined, lines: [] };
+    const { switched, events: add } = read(p);
+    if (switched) tail = { path: p, lines: [] };
     // events() already clean()s every field; cleaning again would collapse its column padding.
-    const add = tail.next?.() ?? [];
     if (add.length) tail.lines = [...tail.lines, ...add].slice(-MAX_TAIL);
   }
 

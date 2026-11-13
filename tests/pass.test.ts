@@ -372,6 +372,50 @@ test("canceled: kills the window once, keeps the clone and files, posts nothing;
   expect(existsSync(join(root, "acme/web/gh-2"))).toBe(true);
 });
 
+test("canceled then reopened while in progress: no session, no comment, one log line saying how to restart", async () => {
+  const c = config();
+  worktree("gh-1");
+  const s = { inProgress: [ticket(1)], canceled: ["gh-1"] as string[] };
+  const { tr, calls } = fakeTracker(s);
+  const { io, cmds, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : noPr(a)));
+  await pass(c, io, () => tr, "/aw");
+  expect(logs.filter((l) => l.includes("still in progress"))).toEqual([]);
+  s.canceled = [];
+  for (let i = 0; i < 3; i++) await pass(c, io, () => tr, "/aw");
+  expect(calls).toEqual([]);
+  expect(cmds.some((x) => x.includes("new-window"))).toBe(false);
+  expect(logs.filter((l) => l.includes("still in progress"))).toEqual(["[web] acme/web/gh-1: session ended, ticket still in progress; remove the in-progress label to start it again"]);
+});
+
+test("a failed pickup comment after the label edit keeps the session running", async () => {
+  const c = config();
+  let wins: string[] = [];
+  let labels = ["agent", "host:box"];
+  const issue = () => JSON.stringify([{ number: 1, title: "t", body: "b", url: "https://github.com/acme/web/issues/1", labels: labels.map((name) => ({ name })) }]);
+  const { io, cmds, logs } = fakeIo((a) => {
+    if (a[1] === "list-windows") return windowsOut(wins);
+    if (a[1] === "new-window") return (wins = ["acme/web/gh-1"]), {};
+    if (a[1] === "pr") return { out: "[]" };
+    if (a[1] === "issue" && a[2] === "list") {
+      const want = a.flatMap((x, i) => (x === "--label" ? [a[i + 1]!] : []));
+      const ok = want.every((w) => labels.includes(w)) && !(a.includes("--search") && labels.includes("in-progress"));
+      return { out: ok ? issue() : "[]" };
+    }
+    if (a[1] === "issue" && a[2] === "edit") return (labels = [...labels, "in-progress"]), {};
+    if (a[1] === "issue" && a[2] === "comment") return a.at(-1)!.includes("picked up") ? { code: 1 } : {};
+    if (a[1] === "issue" && a[2] === "view") return { out: JSON.stringify({ state: "OPEN", stateReason: "" }) };
+  });
+  const mk = (s: any, h: string, i: Io, d: boolean, r: string[]) => github(s, h, i, d, r);
+  await pass(c, io, mk, "/aw");
+  expect(logs).toContain("[web] gh-1: picked-up comment failed: gh issue comment: boom");
+  expect(logs.some((l) => l.includes("start gh-1 failed"))).toBe(false);
+  expect(cmds.some((x) => x.includes("kill-window"))).toBe(false);
+  await pass(c, io, mk, "/aw");
+  expect(cmds.filter((x) => x.includes("new-window"))).toHaveLength(1);
+  expect(cmds.some((x) => x.includes("session ended without a PR"))).toBe(false);
+  expect(existsSync(join(root, "acme/web/gh-1.ended"))).toBe(false);
+});
+
 test("a failed start leaves the ticket unclaimed and retries next poll; a failed claim kills the window", async () => {
   const c = config();
   const { tr, calls } = fakeTracker({ ready: [ticket(1)] });

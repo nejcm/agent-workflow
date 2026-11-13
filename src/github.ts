@@ -65,12 +65,17 @@ export function github(l: Source, host: string, io: Io, defaultHost: boolean, re
     async closed(id, repo) {
       const n = /^gh-(\d+)$/.exec(id)?.[1];
       if (!n) throw new Error(`not a github ticket id: ${id}`);
-      const i = JSON.parse(await read(io, ["gh", "issue", "view", n, "--repo", repo, "--json", "state,stateReason"]));
+      const r = await io.run(["gh", "issue", "view", n, "--repo", repo, "--json", "state,stateReason"]);
+      // A deleted issue: gh's GraphQL lookup finds no issue in a repo it can resolve.
+      if (r.code !== 0 && r.err.includes("Could not resolve to an issue or pull request")) return "canceled";
+      if (r.code !== 0) throw new Error(`gh issue view: ${r.err.trim() || `exit ${r.code}`}`);
+      const i = JSON.parse(r.out);
       if (i.state === "CLOSED") return ["NOT_PLANNED", "DUPLICATE"].includes(i.stateReason) ? "canceled" : "done";
     },
     async claim(t) {
       await edit(t, l.inProgressLabel);
-      await comment(t, `picked up on ${host}`);
+      // Best-effort: once the ticket is in progress, a throw here would strand it with its session killed.
+      await comment(t, `picked up on ${host}`).catch((e) => io.log(`${t.id}: picked-up comment failed: ${e.message}`));
     },
     async toReview(t, prUrl) {
       await edit(t, l.inReviewLabel, l.inProgressLabel);

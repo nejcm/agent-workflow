@@ -1,7 +1,10 @@
-import { readdirSync } from "node:fs";
+import { readdirSync, writeFileSync } from "node:fs";
 import { expect, test } from "bun:test";
-import { resolve } from "node:path";
-import { parseArgs, spawnRun } from "../aw";
+import { join, resolve } from "node:path";
+import { holdLock, parseArgs, spawnRun } from "../aw";
+import { raw, root, useTempRoot } from "./helpers";
+
+useTempRoot();
 
 test("parseArgs accepts known commands and flags", () => {
   expect(parseArgs(["status", "--json"])).toMatchObject({ cmd: "status", interval: 2, n: 20, path: resolve("aw.json") });
@@ -80,3 +83,20 @@ test("spawnRun gives up on output a finished command left open, and releases its
     }
   }
 }, 20_000);
+
+test("a second run or once on the same workspace is refused; the lock dies with its holder, SIGKILL included", async () => {
+  const cfg = join(root, "aw.json");
+  writeFileSync(cfg, JSON.stringify(raw()));
+  const aw = resolve(import.meta.dir, "../aw.ts");
+  const holder = Bun.spawn(["bun", "-e", `import { holdLock } from ${JSON.stringify(aw)}; console.log(holdLock(${JSON.stringify(join(root, ".lock"))})); await Bun.sleep(60_000);`], { stdout: "pipe" });
+  try {
+    expect((await holder.stdout.getReader().read()).value).toEqual(new TextEncoder().encode("true\n"));
+    const second = Bun.spawnSync(["bun", aw, "once", "--config", cfg]);
+    expect(second.exitCode).toBe(1);
+    expect(second.stderr.toString()).toBe(`another aw run or once holds ${join(root, ".lock")}; stop it first\n`);
+  } finally {
+    holder.kill("SIGKILL");
+    await holder.exited;
+  }
+  expect(holdLock(join(root, ".lock"))).toBe(true);
+}, 15_000);

@@ -53,7 +53,7 @@ const GONE = "[linear[.]app link removed]";
 const HEAD = "comment gh-1 out-of-scope findings from this session, filed as new tickets (not picked up automatically):\n";
 const sidecar = () => JSON.parse(readFileSync(join(dir(), "gh-1.findings"), "utf8"));
 
-test("findings: a create that fails after the issue was made is never retried and is listed as not filed", async () => {
+test("findings: a create that fails after the issue was made is never retried and is listed as not confirmed filed", async () => {
   const { tr, calls } = fakeTracker({});
   const create = tr.createTicket;
   tr.createTicket = async (...a) => (await create(...a), Promise.reject(new Error("response lost")));
@@ -63,7 +63,7 @@ test("findings: a create that fails after the issue was made is never retried an
   tr.createTicket = create;
   await fileFindings(ticket(1), tr, io, dir());
   expect(calls.filter((c) => c.startsWith("file"))).toHaveLength(1);
-  expect(calls.filter((c) => c.startsWith("comment"))).toEqual([`${HEAD}- not filed (create failed): Bug 1${mark(1)}`]);
+  expect(calls.filter((c) => c.startsWith("comment"))).toEqual([`${HEAD}- not confirmed filed: Bug 1${mark(1)}`]);
   expect(sidecar()).toEqual([{ h: expect.any(String), title: "Bug 1", url: null, posted: true }]);
 });
 
@@ -128,7 +128,7 @@ test("findings: a tampered sidecar files and posts nothing, and published titles
   rmSync(join(dir(), "gh-1/.aw/findings.json"));
   writeFileSync(join(dir(), "gh-1.findings"), JSON.stringify([{ ...rec, title: "hi @bob https://linear.app/a/profiles/b \x1b[2J a%0Ab%1Bc" }]));
   await fileFindings(ticket(1), tr, io, dir());
-  expect(calls).toEqual([`${HEAD}- not filed (create failed): hi @\u200bbob ${GONE} a%0Ab%1Bc\n\naw-findings ${"a".repeat(12)}`]);
+  expect(calls).toEqual([`${HEAD}- not confirmed filed: hi @\u200bbob ${GONE} a%0Ab%1Bc\n\naw-findings ${"a".repeat(12)}`]);
 });
 
 test("findings: a legacy sidecar of bare hashes counts as filed and linked", async () => {

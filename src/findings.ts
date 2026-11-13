@@ -82,7 +82,7 @@ export async function fileFindings(t: Ticket, tr: Tracker, io: Io, dir: string) 
       const body = `${f.body}\n\n---\nFiled by aw from the agent session on ${t.id} (${t.url}): agent-written, not reviewed by a human.`.trimStart();
       const url = await tr.createTicket(t, f.title, body);
       if (issueUrl(url, origin)) r.url = url;
-      else io.log(`findings ${t.id}: unexpected ticket URL ${clean(url)}, recorded as not filed`);
+      else io.log(`findings ${t.id}: unexpected ticket URL ${clean(url)}, recorded as not confirmed filed`);
       put(io, file, JSON.stringify(filed));
     }
   } finally {
@@ -100,7 +100,7 @@ async function postLinks(t: Ticket, tr: Tracker, io: Io, file: string, filed: Fi
   for (const r of filed) if (seen.has(r.h.slice(0, 12))) r.posted = true;
   const pending = filed.filter((r) => !r.posted);
   if (pending.length) {
-    const lines = pending.map((r) => `- ${r.url ? `${r.url} ` : "not filed (create failed): "}${unmention(clean(r.title, 120))}`);
+    const lines = pending.map((r) => `- ${r.url ? `${r.url} ` : "not confirmed filed: "}${unmention(clean(r.title, 120))}`);
     const marker = `aw-findings ${pending.map((r) => r.h.slice(0, 12)).join(" ")}`;
     await tr.comment(t, `${LINKS}\n${lines.join("\n")}\n\n${marker}`);
     for (const r of pending) r.posted = true;

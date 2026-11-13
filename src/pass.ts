@@ -155,7 +155,13 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
           return step(io, `answer ${t.id}`, () => deliverAnswer(w, tr, io, dir, cfg.repos[key]!.feedbackAuthors, win, () => state(cfg.repos[key]!, dir, t.id)));
         }
         // The in-progress listing can lag a close that cleanup already acted on.
-        if (hasLabel(t.labels, s.needsHumanLabel) || existsSync(ended) || (await tr.closed(t.id, key))) return;
+        if (hasLabel(t.labels, s.needsHumanLabel)) return;
+        if (existsSync(ended)) {
+          if (warned.has(ended) || (await tr.closed(t.id, key))) return;
+          warned.add(ended);
+          return io.log(`${key}/${t.id}: session ended, ticket still in progress; ${s.tracker === "linear" ? `move it to ${s.todo}` : `remove the ${s.inProgressLabel} label`} to start it again`);
+        }
+        if (await tr.closed(t.id, key)) return;
         await tr.comment(w, endedNotice(lastMessage(join(dir, t.id), cfg.repos[key]!.agent)));
         put(io, ended, new Date().toISOString());
       });

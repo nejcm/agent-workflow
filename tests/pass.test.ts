@@ -51,7 +51,7 @@ export CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CODEX_HOME
 `;
   const s = (agent: string, sandbox: string) => launcher(web(config({ repos: [{ name: "acme/web", path: "/src/web", agent, sandbox }] })), "/ws/it's", "/ws/p.md", "/aw");
   const scope = String.raw`systemd-run --user --scope --quiet --collect --unit 'aw-acme:web:it'\''s.scope' -- `;
-  const gh = String.raw`export GH_CONFIG_DIR='/ws/it'\''s'.gh
+  const gh = String.raw`export GH_CONFIG_DIR='/ws/it'\''s'.gh XDG_CACHE_HOME='/ws/it'\''s.tmpdir/cache'
 `;
   expect(s("claude", "nono")).toBe(`${head}${gh}${claudeEnv}exec ${scope}${nono("claude", String.raw`--allow '/ws/it'\''s.claude' --allow '/ws/it'\''s.codex' `)}${claude}`);
   expect(s("claude", "none")).toBe(`${head}${claudeEnv}exec ${scope}${claude}`);
@@ -88,7 +88,8 @@ test("starts ready tickets up to maxConcurrent", async () => {
   expect(seeded.projects).toEqual({ [realpathSync(wt)]: { hasTrustDialogAccepted: true } });
   expect(readFileSync(join(root, "acme/web/gh-1.sh"), "utf8")).toContain(`--read '${root}/src-web/.git/objects' --allow-file "$(tty)" --`);
   expect(existsSync(join(root, "acme/web/gh-1.codex"))).toBe(true);
-  expect(readdirSync(`${wt}.tmpdir`)).toEqual([]);
+  expect(readdirSync(`${wt}.tmpdir`)).toEqual(["cache"]);
+  expect(readdirSync(`${wt}.tmpdir/cache`)).toEqual([]);
   expect(statSync(`${wt}.tmpdir`).mode & 0o777).toBe(0o700);
 });
 

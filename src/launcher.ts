@@ -37,7 +37,8 @@ export function launcher(l: Repo, wt: string, promptFile: string, awDir = AW_DIR
   const wrap = nono ? nonoRun(l, awDir, grants, (s) => (s === PANE_TTY ? s : q(s))) : [];
   const [env, cmd] = AGENTS[l.agent].launch(q(wt), prompt, nono);
   // gh exits if it cannot read its config dir; <ID>.gh is never created, so gh runs on defaults plus nono's GH_TOKEN.
-  const gh = nono ? `export GH_CONFIG_DIR=${q(wt)}.gh\n` : "";
+  // A private XDG cache: the host's ~/.cache (Claude's claude-cli-nodejs included) stays out of the sandbox.
+  const gh = nono ? `export GH_CONFIG_DIR=${q(wt)}.gh XDG_CACHE_HOME=${q(join(tmp, "cache"))}\n` : "";
   const scope = ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--unit", q(scopeUnit(l.key, basename(wt))), "--"];
   return `#!/usr/bin/env bash\ncd ${q(wt)} || exit 1\nunset LINEAR_API_KEY\nexport TMPDIR=${q(tmp)} TMP=${q(tmp)} TEMP=${q(tmp)}\n${gh}${env}\nexec ${[...scope, ...wrap, ...cmd].join(" ")}\n`;
 }
@@ -194,7 +195,7 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   io.log(`${io.dry ? "dry: " : ""}mkdir ${tmpHome(wt)}`);
   if (!io.dry) {
     rmSync(tmpHome(wt), { recursive: true, force: true });
-    mkdirSync(tmpHome(wt), { recursive: true, mode: 0o700 });
+    mkdirSync(join(tmpHome(wt), "cache"), { recursive: true, mode: 0o700 });
   }
   put(io, join(dir, `${t.id}.source`), s.name);
   remove(io, join(dir, `${t.id}.ended`));

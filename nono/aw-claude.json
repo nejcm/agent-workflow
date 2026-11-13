@@ -9,7 +9,6 @@
   "groups": {
     "include": [
       "git_config",
-      "claude_cache_linux",
       "mise_manager",
       "bun_runtime",
       "node_runtime"

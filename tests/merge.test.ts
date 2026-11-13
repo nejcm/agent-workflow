@@ -213,7 +213,7 @@ test("auto-merge pass: re-checks the PR right before merging, confirms it merged
   expect((await run([{ ...pr, state: "MERGED" }])).calls).toEqual(["done gh-1"]);
 });
 
-test("in review: .pr comes from autoMerge's lookup, else one lookup when off; unchanged is not rewritten, dry run writes none", async () => {
+test("in review: .pr comes from autoMerge's lookup, else its own lookup each poll when off; unchanged is not rewritten, dry run writes none", async () => {
   let url = "https://github.com/acme/web/pull/7";
   const f = join(root, "acme/web/gh-1.pr");
   const respond = (a: string[]) => (a[1] === "pr" && a[2] === "list" ? { out: JSON.stringify([{ url, state: "OPEN" }]) } : a[1] === "pr" ? { out: JSON.stringify({ ...prFacts(), number: 7, url, headRefOid: "a" }) } : undefined);
@@ -227,7 +227,10 @@ test("in review: .pr comes from autoMerge's lookup, else one lookup when off; un
   expect(existsSync(f)).toBe(false);
   expect(await run("off")).toEqual({ lookups: 1, writes: 1 });
   expect(readFileSync(f, "utf8")).toBe(url);
-  expect(await run("off")).toEqual({ lookups: 0, writes: 0 });
+  expect(await run("off")).toEqual({ lookups: 1, writes: 0 });
+  url = "https://github.com/acme/web/pull/9";
+  expect(await run("off")).toEqual({ lookups: 1, writes: 1 });
+  expect(readFileSync(f, "utf8")).toBe(url);
   expect(await run("intelligent")).toEqual({ lookups: 1, writes: 0 });
   url = "https://github.com/acme/web/pull/8";
   expect(await run("intelligent")).toEqual({ lookups: 1, writes: 1 });

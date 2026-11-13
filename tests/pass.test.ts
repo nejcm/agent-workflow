@@ -216,7 +216,7 @@ test("dry-run logs side effects and executes none", async () => {
   expect(cmds.every((x) => /has-session|list-windows|rev-parse|gh pr list|gh repo view/.test(x))).toBe(true);
   expect(logs.some((l) => l.includes("dry: tmux new-session -d -s aw"))).toBe(true);
   expect(logs.some((l) => l.startsWith("[web] dry: nono run ") && l.endsWith(`-C ${root}/acme/web/gh-5 status --porcelain --ignore-submodules=none`))).toBe(true);
-  expect(logs.some((l) => l.includes(`dry: ${GIT.join(" ")} -C ${root}/src-web worktree remove --force ${root}/acme/web/gh-5`))).toBe(true);
+  expect(logs.some((l) => l.includes(`dry: ${GIT.join(" ")} -C ${root}/src-web worktree remove --force --force ${root}/acme/web/gh-5`))).toBe(true);
   expect(logs.some((l) => l.includes("dry: tmux new-window"))).toBe(true);
   expect(existsSync(join(root, "acme/web/gh-1.prompt.md"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.source"))).toBe(false);
@@ -349,7 +349,7 @@ test("after a restart cleanup and findPr use the repo and source recorded next t
     return noPr(a);
   });
   await pass(c, io, (s) => (s.name === "gh" ? gh.tr : lin.tr), "/aw");
-  expect(cmds.filter((x) => /worktree remove|kill-window/.test(x))).toEqual(["tmux kill-window -t @1", `git -C ${root}/src-api worktree remove --force ${root}/acme/api/gh-5`]);
+  expect(cmds.filter((x) => /worktree remove|kill-window/.test(x))).toEqual(["tmux kill-window -t @1", `git -C ${root}/src-api worktree remove --force --force ${root}/acme/api/gh-5`]);
   expect(existsSync(join(root, "acme/web/gh-5.source"))).toBe(true);
   expect(logs.some((l) => l.includes(`acme/web/gh-6: source "gone" in gh-6.source is not configured; left alone`))).toBe(true);
   expect(cmds).toContain("gh pr list --repo acme/api --head agent/gh-5 --state all --json url,state");
@@ -600,6 +600,34 @@ test("cleanup never runs git's own dirty check, which follows a planted commondi
   }
   await run("");
   expect([existsSync(a), existsSync(b), existsSync(marker), existsSync(`${a}.claude`)]).toEqual([false, false, false, false]);
+});
+
+test("cleanup removes a done worktree despite a planted lock file, dir, FIFO or symlink; a dirty one is still kept", async () => {
+  const clone = join(root, "src-web");
+  const target = join(root, "target");
+  const sh = (...a: string[]) => Bun.spawnSync(a, { stdout: "pipe", stderr: "pipe" });
+  expect(sh("git", "init", "-q", clone).exitCode).toBe(0);
+  expect(sh("git", "-C", clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i").exitCode).toBe(0);
+  writeFileSync(target, "keep");
+  const kinds = { "gh-1": "file", "gh-2": "dir", "gh-3": "fifo", "gh-4": "symlink", "gh-5": "file" } as const;
+  for (const [id, kind] of Object.entries(kinds)) {
+    expect(sh(...GIT, "-C", clone, "worktree", "add", "-q", join(root, "acme/web", id), "-b", `agent/${id}`).exitCode).toBe(0);
+    worktree(id);
+    const locked = join(clone, ".git/worktrees", id, "locked");
+    if (kind === "file") writeFileSync(locked, "mine");
+    else if (kind === "dir") mkdirSync(locked);
+    else if (kind === "fifo") expect(sh("mkfifo", locked).exitCode).toBe(0);
+    else symlinkSync(target, locked);
+  }
+  const { tr } = fakeTracker({ done: Object.keys(kinds) });
+  const { io, logs } = fakeIo((x) =>
+    x[0] === "nono" ? { out: x.includes(join(root, "acme/web/gh-5")) ? "?? f\n" : "" } : x[0] === "git" ? (({ exitCode, stdout }) => ({ code: exitCode, out: stdout.toString() }))(sh(...GIT, ...x.slice(1))) : noPr(x),
+  );
+  await pass(config({ repos: [{ name: "acme/web", path: clone }] }), io, () => tr, "/aw");
+  expect(Object.keys(kinds).filter((id) => existsSync(join(root, "acme/web", id)))).toEqual(["gh-5"]);
+  expect(readdirSync(join(clone, ".git/worktrees"))).toEqual(["gh-5"]);
+  expect(logs.filter((l) => l.includes("failed"))).toEqual([expect.stringContaining("gh-5 has uncommitted or untracked files")]);
+  expect(readFileSync(target, "utf8")).toBe("keep");
 });
 
 test("the session is granted git's actual admin dir, and a .git pointing elsewhere is refused", () => {

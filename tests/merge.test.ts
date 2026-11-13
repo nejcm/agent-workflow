@@ -93,7 +93,7 @@ test("auto-merge pass: merges only when enabled, pinned to the head; not-merged 
   };
 
   const off = await run("off");
-  expect(off.cmds.some((x) => x.includes("gh pr view"))).toBe(false);
+  expect(off.cmds.some((x) => x.includes("gh pr view") && x.includes("reviewDecision"))).toBe(false);
   expect(off.calls).toEqual([]);
 
   const dry = await run("all", true);

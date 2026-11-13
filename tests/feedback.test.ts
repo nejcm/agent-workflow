@@ -117,7 +117,25 @@ test("feedback: nothing while the session is busy or the window is gone", async 
   const gone = setup({ open: [] });
   writeFileSync(join(root, "acme/web/gh-1.pr"), URL);
   await gone.run();
-  expect(gone.cmds.some((c) => c.startsWith("gh pr view"))).toBe(false);
+  expect(gone.keys()).toEqual([]);
+});
+
+test("feedback: a dead session's pending feedback is logged once per pending state", async () => {
+  const d = setup({ authors: [], open: [] });
+  writeFileSync(join(root, "acme/web/gh-1.pr"), URL);
+  const notice = `gh-1: PR feedback pending but the session's window is gone; restart it or act on ${URL} by hand`;
+  const count = () => d.logs.filter((l) => l.endsWith(notice)).length;
+  await d.run();
+  expect(count()).toBe(0);
+  d.pr.statusCheckRollup = [fail];
+  await d.run();
+  await d.run();
+  expect(count()).toBe(1);
+  d.pr.headRefOid = "b";
+  await d.run();
+  expect(count()).toBe(2);
+  expect(d.keys()).toEqual([]);
+  expect(existsSync(join(root, "acme/web/gh-1.feedback"))).toBe(false);
 });
 
 test("feedback: the round limit parks the ticket with one comment; removing the label restarts the rounds", async () => {

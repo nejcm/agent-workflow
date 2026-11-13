@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { validRepo } from "../src/config";
 import { canonCache, github } from "../src/github";
-import { adminDir, launcher, render, seedClaude } from "../src/launcher";
+import { adminDir, CODEX_AUTH, codexLogin, codexRefresh, launcher, render, seedClaude, seedCodex } from "../src/launcher";
 import { endedNotice, pass } from "../src/pass";
 import { liveStates, pickAnswer } from "../src/question";
 import type { State } from "../src/state";
@@ -20,17 +20,17 @@ test("render is single-pass so ticket text cannot expand placeholders", () => {
 test("launcher: claude under nono, token read on the host, never written", () => {
   const c = config();
   const s = launcher(web(c), "/ws/web/gh-1", "/ws/web/gh-1.prompt.md", "/aw");
-  expect(s).toContain(`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-aw/oauth-token")" || exit 1\nexport CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/web/gh-1'.claude CODEX_HOME="$HOME/.codex-aw" CLAUDE_CODE_TMPDIR='/ws/web/gh-1'.claude/tmp`);
+  expect(s).toContain(`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-aw/oauth-token")" || exit 1\nexport CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/web/gh-1'.claude CODEX_HOME='/ws/web/gh-1'.codex CLAUDE_CODE_TMPDIR='/ws/web/gh-1'.claude/tmp`);
   expect(s).toContain("--no-rollback-prompt");
-  expect(s).toContain(`exec nono run --no-rollback-prompt --profile '/aw/nono/aw-claude.json' --allow '/ws/web/gh-1' --allow '/ws/web/gh-1.claude' --read '${root}/src-web/.git' --allow '${root}/src-web/.git/objects' --allow '${root}/src-web/.git/refs' --allow '${root}/src-web/.git/logs' --allow '${root}/src-web/.git/worktrees/gh-1' -- claude --permission-mode`);
+  expect(s).toContain(`exec nono run --no-rollback-prompt --profile '/aw/nono/aw-claude.json' --allow '/ws/web/gh-1' --allow '/ws/web/gh-1.claude' --allow '/ws/web/gh-1.codex' --read '${root}/src-web/.git' --allow '${root}/src-web/.git/objects' --allow '${root}/src-web/.git/refs' --allow '${root}/src-web/.git/logs' --allow '${root}/src-web/.git/worktrees/gh-1' -- claude --permission-mode`);
   expect(s).toContain(`--permission-mode bypassPermissions "$(cat '/ws/web/gh-1.prompt.md')"`);
 });
 
 test("launcher: codex without sandbox keeps the daemon", () => {
   const c = config({ repos: [{ name: "acme/web", agent: "codex", sandbox: "none" }] });
   const s = launcher(web(c), "/ws/web/gh-2", "/ws/web/gh-2.prompt.md", "/aw");
-  expect(s).toContain('export CODEX_HOME="$HOME/.codex-aw"');
-  expect(s).toContain(`exec codex --sandbox danger-full-access --ask-for-approval never -C '/ws/web/gh-2' "$(cat '/ws/web/gh-2.prompt.md')"`);
+  expect(s).toContain("export CODEX_HOME='/ws/web/gh-2'.codex");
+  expect(s).toContain(`exec codex --dangerously-bypass-hook-trust --sandbox danger-full-access --ask-for-approval never -C '/ws/web/gh-2' "$(cat '/ws/web/gh-2.prompt.md')"`);
   expect(launcher(web(config({ repos: [{ name: "acme/web", agent: "codex" }] })), "/w", "/p", "/aw")).toContain("-- codex --no-daemon ");
 });
 
@@ -40,18 +40,20 @@ cd '/ws/it'\''s' || exit 1
 unset LINEAR_API_KEY
 `;
   const claudeEnv = String.raw`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-aw/oauth-token")" || exit 1
-export CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CODEX_HOME="$HOME/.codex-aw" CLAUDE_CODE_TMPDIR='/ws/it'\''s'.claude/tmp; mkdir -p "$CLAUDE_CODE_TMPDIR"
+export CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CODEX_HOME='/ws/it'\''s'.codex CLAUDE_CODE_TMPDIR='/ws/it'\''s'.claude/tmp; mkdir -p "$CLAUDE_CODE_TMPDIR"
 `;
   const nono = (a: string, own = "") => String.raw`nono run --no-rollback-prompt --profile '/aw/nono/aw-${a}.json' --allow '/ws/it'\''s' ${own}--read '/src/web/.git' --allow '/src/web/.git/objects' --allow '/src/web/.git/refs' --allow '/src/web/.git/logs' --allow '/src/web/.git/worktrees/it'\''s' -- `;
   const claude = String.raw`claude --permission-mode bypassPermissions "$(cat '/ws/p.md')"
 `;
-  const codex = (d: string) => String.raw`codex ${d}--sandbox danger-full-access --ask-for-approval never -C '/ws/it'\''s' "$(cat '/ws/p.md')"
+  const codex = (d: string) => String.raw`codex ${d}--dangerously-bypass-hook-trust --sandbox danger-full-access --ask-for-approval never -C '/ws/it'\''s' "$(cat '/ws/p.md')"
 `;
   const s = (agent: string, sandbox: string) => launcher(web(config({ repos: [{ name: "acme/web", path: "/src/web", agent, sandbox }] })), "/ws/it's", "/ws/p.md", "/aw");
-  expect(s("claude", "nono")).toBe(`${head}${claudeEnv}exec ${nono("claude", String.raw`--allow '/ws/it'\''s.claude' `)}${claude}`);
+  expect(s("claude", "nono")).toBe(`${head}${claudeEnv}exec ${nono("claude", String.raw`--allow '/ws/it'\''s.claude' --allow '/ws/it'\''s.codex' `)}${claude}`);
   expect(s("claude", "none")).toBe(`${head}${claudeEnv}exec ${claude}`);
-  expect(s("codex", "nono")).toBe(`${head}export CODEX_HOME="$HOME/.codex-aw"\nexec ${nono("codex")}${codex("--no-daemon ")}`);
-  expect(s("codex", "none")).toBe(`${head}export CODEX_HOME="$HOME/.codex-aw"\nexec ${codex("")}`);
+  const codexEnv = String.raw`export CODEX_HOME='/ws/it'\''s'.codex
+`;
+  expect(s("codex", "nono")).toBe(`${head}${codexEnv}exec ${nono("codex", String.raw`--allow '/ws/it'\''s.codex' `)}${codex("--no-daemon ")}`);
+  expect(s("codex", "none")).toBe(`${head}${codexEnv}exec ${codex("")}`);
 });
 
 test("starts ready tickets up to maxConcurrent", async () => {
@@ -67,6 +69,119 @@ test("starts ready tickets up to maxConcurrent", async () => {
   expect(prompt).toContain("git push origin agent/gh-1");
   const seeded = JSON.parse(readFileSync(join(root, "acme/web/gh-1.claude/.claude.json"), "utf8"));
   expect(seeded.projects).toEqual({ [realpathSync(join(root, "src-web"))]: { hasTrustDialogAccepted: true } });
+  expect(existsSync(join(root, "acme/web/gh-1.codex"))).toBe(true);
+});
+
+const jwt = (exp: number) => `h.${Buffer.from(JSON.stringify({ exp: Math.floor(exp / 1000) })).toString("base64url")}.s`;
+const login = (exp: number) => {
+  mkdirSync(join(root, ".codex-aw"), { recursive: true });
+  writeFileSync(join(root, CODEX_AUTH), JSON.stringify({ auth_mode: "chatgpt", OPENAI_API_KEY: null, tokens: { id_token: "i", access_token: jwt(exp), refresh_token: "secret-rt", account_id: "a" }, last_refresh: "x" }));
+};
+const DAY = 24 * 3600_000;
+
+test("codexLogin copies a fresh template login with the refresh token emptied and runs nothing", async () => {
+  login(Date.now() + 5 * DAY);
+  const { io, cmds } = fakeIo();
+  const o = JSON.parse(await codexLogin(io));
+  expect(o.tokens).toEqual({ id_token: "i", access_token: jwt(Date.now() + 5 * DAY), refresh_token: "", account_id: "a" });
+  expect(o.auth_mode).toBe("chatgpt");
+  expect(cmds).toEqual([]);
+  expect(readFileSync(join(root, CODEX_AUTH), "utf8")).toContain("secret-rt");
+});
+
+test("codexLogin refreshes a login expiring within a day on the host first, and fails when that does not help", async () => {
+  login(Date.now() + 3600_000);
+  const { io, cmds } = fakeIo((a) => {
+    if (a[0] === "bash") login(Date.now() + 10 * DAY);
+  });
+  expect(JSON.parse(await codexLogin(io)).tokens.access_token).toBe(jwt(Date.now() + 10 * DAY));
+  expect(cmds).toEqual([codexRefresh(root).join(" ")]);
+  expect(codexRefresh(root).slice(-2)).toEqual(["aw-codex-refresh", join(root, ".codex-aw")]);
+  login(Date.now() + 3600_000);
+  await expect(codexLogin(fakeIo(() => ({ code: 1 })).io)).rejects.toThrow("could not refresh the Codex login");
+  await expect(codexLogin(fakeIo().io)).rejects.toThrow("could not refresh the Codex login");
+  login(Date.now() + 3600_000);
+  const dry = fakeIo(undefined, true);
+  expect(JSON.parse(await codexLogin(dry.io)).tokens.refresh_token).toBe("");
+  expect(dry.logs[0]).toStartWith("dry: bash -c");
+});
+
+test("codexLogin refuses a missing, malformed or non-ChatGPT template login", async () => {
+  await expect(codexLogin(fakeIo().io)).rejects.toThrow("is missing or unreadable");
+  mkdirSync(join(root, ".codex-aw"), { recursive: true });
+  writeFileSync(join(root, CODEX_AUTH), "{");
+  await expect(codexLogin(fakeIo().io)).rejects.toThrow("CODEX_HOME=~/.codex-aw codex login");
+  writeFileSync(join(root, CODEX_AUTH), JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "k" }));
+  await expect(codexLogin(fakeIo().io)).rejects.toThrow("is not a ChatGPT login");
+  for (const payload of ['{"exp":1e309}', '{"exp":"9999999999"}', "{}"]) {
+    writeFileSync(join(root, CODEX_AUTH), JSON.stringify({ tokens: { access_token: `h.${Buffer.from(payload).toString("base64url")}.s`, refresh_token: "r" } }));
+    await expect(codexLogin(fakeIo().io)).rejects.toThrow("could not refresh the Codex login");
+  }
+});
+
+test("the refresh script asks app-server to refresh and closes stdin only after the reply", () => {
+  const bin = join(root, "bin");
+  mkdirSync(bin);
+  // Fake app-server: answers account/read, then exits only on EOF, so a script that never closes stdin hangs.
+  writeFileSync(join(bin, "codex"), `#!/usr/bin/env bash\nwhile IFS= read -r l; do case $l in *account/read*refreshToken*true*) echo "$CODEX_HOME" > "$CODEX_HOME/called"; echo '{"method":"note","params":{"id":1}}'; echo '{"id":1,"result":{}}';; esac; done\n`, { mode: 0o755 });
+  mkdirSync(join(root, ".codex-aw"));
+  const run = (env: Record<string, string>) => Bun.spawnSync(["timeout", "10", ...codexRefresh(root)], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, ...env } });
+  expect(run({}).exitCode).toBe(0);
+  expect(readFileSync(join(root, ".codex-aw/called"), "utf8").trim()).toBe(join(root, ".codex-aw"));
+  writeFileSync(join(bin, "codex"), "#!/usr/bin/env bash\nexit 0\n", { mode: 0o755 });
+  expect(run({}).exitCode).toBe(1);
+});
+
+test("concurrent refresh scripts run app-server one at a time", async () => {
+  const bin = join(root, "bin");
+  mkdirSync(bin);
+  const home = join(root, ".codex-aw");
+  writeFileSync(join(bin, "codex"), `#!/usr/bin/env bash\nwhile IFS= read -r l; do case $l in *account/read*) mkdir "$CODEX_HOME/busy" || touch "$CODEX_HOME/overlap"; sleep 0.5; rmdir "$CODEX_HOME/busy"; echo '{"id":1,"result":{}}';; esac; done\n`, { mode: 0o755 });
+  mkdirSync(home);
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+  const codes = await Promise.all([1, 2].map(() => Bun.spawn(["timeout", "10", ...codexRefresh(root)], { env, stderr: "ignore" }).exited));
+  expect(codes).toEqual([0, 0]);
+  expect(existsSync(join(home, "overlap"))).toBe(false);
+});
+
+test("a codex start without a usable template login fails before cloning", async () => {
+  const { tr, calls } = fakeTracker({ ready: [ticket(1)] });
+  const { io, cmds, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : noPr(a)));
+  await pass(config({ defaults: { agent: "codex", sandbox: "nono", testCmd: "bun test" } }), io, () => tr, "/aw");
+  expect(calls).toEqual([]);
+  expect(cmds.filter((c) => / clone | worktree add | new-window /.test(c))).toEqual([]);
+  expect(logs.join("\n")).toContain(`${root}/${CODEX_AUTH} is missing or unreadable`);
+});
+
+test("a codex start seeds the ticket's own auth.json, 0600, without the refresh token", async () => {
+  login(Date.now() + 5 * DAY);
+  const { tr, calls } = fakeTracker({ ready: [ticket(1)] });
+  const { io } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : a[4] === "--verify" ? { code: 1 } : noPr(a)));
+  await pass(config({ defaults: { agent: "codex", sandbox: "none", testCmd: "bun test" } }), io, () => tr, "/aw");
+  expect(calls).toEqual(["claim gh-1"]);
+  const f = join(root, "acme/web/gh-1.codex/auth.json");
+  expect(statSync(f).mode & 0o777).toBe(0o600);
+  expect(JSON.parse(readFileSync(f, "utf8")).tokens.refresh_token).toBe("");
+  expect(readFileSync(f, "utf8")).not.toContain("secret-rt");
+});
+
+test("seedCodex: a fresh dir with copied config, linked instructions and skills, never the template's auth", () => {
+  const tpl = join(root, ".codex-aw");
+  mkdirSync(join(root, ".claude/skills"), { recursive: true });
+  mkdirSync(join(tpl, "sessions"), { recursive: true });
+  writeFileSync(join(root, ".claude/AGENTS.md"), "a");
+  symlinkSync(join(root, ".claude/AGENTS.md"), join(tpl, "AGENTS.md"));
+  symlinkSync(join(root, ".claude/skills"), join(tpl, "skills"));
+  for (const f of ["config.toml", "auth.json", "history.jsonl"]) writeFileSync(join(tpl, f), f);
+  const dir = join(root, "acme/web/gh-1.codex");
+  mkdirSync(join(dir, "sessions"), { recursive: true });
+  seedCodex({ ...fakeIo().io, dry: true }, dir, "{}");
+  expect(readdirSync(dir)).toEqual(["sessions"]);
+  seedCodex(fakeIo().io, dir, undefined);
+  expect(readdirSync(dir).sort()).toEqual(["AGENTS.md", "config.toml", "skills"]);
+  expect(realpathSync(join(dir, "skills"))).toBe(realpathSync(join(root, ".claude/skills")));
+  expect(lstatSync(join(dir, "config.toml")).isFile()).toBe(true);
+  expect(readFileSync(join(dir, "config.toml"), "utf8")).toBe("config.toml");
 });
 
 test("a claude start without the token file fails before cloning, with the fix in the log", async () => {
@@ -151,6 +266,7 @@ test("done: kills window, removes worktree, files and config dir; keeps them all
     for (const ext of [".prompt.md", ".sh", ".ended", ".pr", ".question", ".findings"]) writeFileSync(join(root, "acme/web", id + ext), "");
     writeFileSync(join(root, "acme/web", `${id}.source`), "web\n");
     mkdirSync(join(root, "acme/web", `${id}.claude/projects/p`), { recursive: true });
+    mkdirSync(join(root, "acme/web", `${id}.codex/sessions`), { recursive: true });
     symlinkSync(join(root, "src-web"), join(root, "acme/web", `${id}.claude/link`));
   }
   mkdirSync(join(root, "src-web"), { recursive: true });
@@ -168,6 +284,8 @@ test("done: kills window, removes worktree, files and config dir; keeps them all
   expect(existsSync(join(root, "acme/web/gh-1.question"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.findings"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.claude"))).toBe(false);
+  expect(existsSync(join(root, "acme/web/gh-1.codex"))).toBe(false);
+  expect(existsSync(join(root, "acme/web/gh-2.codex"))).toBe(true);
   expect(existsSync(join(root, "src-web"))).toBe(true);
   expect(existsSync(join(root, "acme/web/gh-3.claude"))).toBe(true);
   expect(existsSync(join(root, "acme/web/gh-2.claude"))).toBe(true);
@@ -647,10 +765,10 @@ test("the session is granted git's actual admin dir, and a .git pointing elsewhe
   expect(() => adminDir(r, wt)).toThrow("does not point to its own admin dir");
 });
 
-test("ended without a PR: quotes the last claude message; bare notice for codex or when no transcript", async () => {
+test("ended without a PR: quotes the last claude or codex message from the ticket's own dir; bare notice when none", async () => {
   const say = (text: string) => JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text }] } });
   claudeFile(join(root, "acme/web/gh-1"), "s.jsonl", say("Blocked: tests need a DB."));
-  const sd = join(root, ".codex-aw/sessions/2026/11/12");
+  const sd = join(root, "acme/web/gh-2.codex/sessions/2026/11/12");
   mkdirSync(sd, { recursive: true });
   const meta = JSON.stringify({ type: "session_meta", payload: { cwd: join(root, "acme/web/gh-2") } });
   writeFileSync(join(sd, "rollout.jsonl"), `${meta}\n${JSON.stringify({ type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Need the API key." }] } })}\n`);
@@ -659,7 +777,7 @@ test("ended without a PR: quotes the last claude message; bare notice for codex 
   const codex = fakeTracker({ inProgress: [ticket(2)] });
   await pass(config({ defaults: { agent: "codex", sandbox: "nono", testCmd: "bun test" } }), fakeIo(noPr).io, () => codex.tr, "/aw");
   expect(calls).toEqual(["comment gh-1 session ended without a PR. Last message:\n\n```\nBlocked: tests need a DB.\n```", "comment gh-3 session ended without a PR"]);
-  expect(codex.calls).toEqual(["comment gh-2 session ended without a PR"]);
+  expect(codex.calls).toEqual(["comment gh-2 session ended without a PR. Last message:\n\n```\nNeed the API key.\n```"]);
 });
 
 test("endedNotice caps to the tail, strips escapes and controls, and outfences any backtick run", () => {

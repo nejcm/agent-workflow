@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { claudeDir, claudeHome } from "../src/agents";
+import { claudeDir, claudeHome, codexHome } from "../src/agents";
 import { argSummary, events, lastSay, newest, tail, transcript, worktreesFor } from "../src/tail";
 import { clean } from "../src/util";
 import { claudeFile, config, root, useTempRoot, worktree } from "./helpers";
@@ -89,7 +89,7 @@ test("transcript finds the newest claude file, or the codex session whose meta c
   utimesSync(join(cd, "old.jsonl"), 1000, 1000);
   expect(transcript(wt, "claude", root)).toBe(join(cd, "new.jsonl"));
 
-  const sd = join(root, ".codex-aw/sessions/2026/11/12");
+  const sd = join(codexHome(wt), "sessions/2026/11/12");
   mkdirSync(sd, { recursive: true });
   writeFileSync(join(sd, "rollout-other.jsonl"), `${codexMeta("/elsewhere")}\n${codexSay}\n`);
   writeFileSync(join(sd, "rollout-mine.jsonl"), `${codexMeta(wt)}\n${codexSay}\n`);
@@ -198,15 +198,15 @@ test("hostile JSON shapes never crash formatting", () => {
 
 test("lastSay: the last non-empty claude assistant text, an unterminated final record included; undefined when missing", () => {
   const wt = join(root, "acme/web/PER-2");
-  expect(lastSay(wt)).toBeUndefined();
+  expect(lastSay(wt, "claude")).toBeUndefined();
   claudeFile(wt, "a.jsonl", say("first"), say("why I stopped"), claudeTool, claudeOk, claudePrompt, "{bad");
-  expect(lastSay(wt)).toBe("why I stopped");
+  expect(lastSay(wt, "claude")).toBe("why I stopped");
   appendFileSync(join(claudeDir(wt), "a.jsonl"), say("unterminated"));
-  expect(lastSay(wt)).toBe("unterminated");
+  expect(lastSay(wt, "claude")).toBe("unterminated");
   appendFileSync(join(claudeDir(wt), "a.jsonl"), "\n" + say("  indented\n    more"));
-  expect(lastSay(wt)).toBe("  indented\n    more");
+  expect(lastSay(wt, "claude")).toBe("  indented\n    more");
   claudeFile(wt, "b.jsonl", claudeTool);
-  expect(lastSay(wt)).toBeUndefined();
+  expect(lastSay(wt, "claude")).toBeUndefined();
 });
 
 test("lastSay refuses a transcript that resolves outside the ticket's own config dir", () => {
@@ -217,5 +217,21 @@ test("lastSay refuses a transcript that resolves outside the ticket's own config
   renameSync(join(claudeHome(wt), "projects"), join(other, "projects"));
   symlinkSync(join(other, "projects"), join(claudeHome(wt), "projects"));
   expect(transcript(wt, "claude", root)).toBeDefined();
-  expect(lastSay(wt)).toBeUndefined();
+  expect(lastSay(wt, "claude")).toBeUndefined();
+});
+
+test("lastSay reads codex assistant text from the ticket's own CODEX_HOME only", () => {
+  const wt = join(root, "acme/web/PER-5");
+  const sd = join(codexHome(wt), "sessions/2026/11/12");
+  mkdirSync(sd, { recursive: true });
+  writeFileSync(join(sd, "r.jsonl"), `${codexMeta(wt)}\n${codexSay}\n${codexFn}\n`);
+  expect(lastSay(wt, "codex")).toBe("rc=1\nrc2=0");
+  writeFileSync(join(sd, "r.jsonl"), `${codexMeta("/elsewhere")}\n${codexSay}\n`);
+  expect(lastSay(wt, "codex")).toBeUndefined();
+  const other = join(root, "acme/web/PER-6.codex");
+  mkdirSync(other, { recursive: true });
+  writeFileSync(join(sd, "r.jsonl"), `${codexMeta(wt)}\n${codexSay}\n`);
+  renameSync(join(codexHome(wt), "sessions"), join(other, "sessions"));
+  symlinkSync(join(other, "sessions"), join(codexHome(wt), "sessions"));
+  expect(lastSay(wt, "codex")).toBeUndefined();
 });

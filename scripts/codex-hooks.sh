@@ -34,4 +34,4 @@ printf '\n%s\n' "$block" >> "$tmp"
 if ! bun -e 'Bun.TOML.parse(await Bun.file(process.argv[1]).text())' "$tmp" 2>/dev/null; then echo "skip $file (would not be valid TOML with aw's hooks, e.g. an inline hooks table; fix by hand)"; exit 1; fi
 # cat, not mv: keeps the file's mode, owner and a symlinked config.toml in place.
 cat "$tmp" > "$file"
-echo "write $file (aw state hooks; trust them once: CODEX_HOME=${file%/*} codex, then /hooks)"
+echo "write $file (aw state hooks)"

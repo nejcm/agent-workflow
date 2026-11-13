@@ -1,6 +1,6 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { AGENTS, CLAUDE_TOKEN, claudeHome } from "./agents";
+import { AGENTS, CLAUDE_TOKEN, claudeHome, codexHome } from "./agents";
 import { repoDir } from "./config";
 import type { Config, Io, Repo, Source, Ticket, Tracker } from "./types";
 import { AW_DIR, GIT, inAw, put, remove, write } from "./util";
@@ -20,7 +20,7 @@ export function launcher(l: Repo, wt: string, promptFile: string, awDir = AW_DIR
   const git = join(l.path, ".git");
   // Read-only .git: config, hooks and info stay out of reach; only what commits and pushes write is granted.
   const rw = [join(git, "objects"), join(git, "refs"), join(git, "logs"), admin].map((p): [string, string] => ["--allow", p]);
-  const own: [string, string][] = l.agent === "claude" ? [["--allow", claudeHome(wt)]] : [];
+  const own = [...(l.agent === "claude" ? [claudeHome(wt)] : []), codexHome(wt)].map((p): [string, string] => ["--allow", p]);
   const wrap = nono ? nonoRun(l, awDir, [["--allow", wt], ...own, ["--read", git], ...rw], q) : [];
   const [env, cmd] = AGENTS[l.agent].launch(q(wt), prompt, nono);
   return `#!/usr/bin/env bash\ncd ${q(wt)} || exit 1\nunset LINEAR_API_KEY\n${env}\nexec ${[...wrap, ...cmd].join(" ")}\n`;
@@ -86,6 +86,65 @@ export function seedClaude(io: Io, dir: string, root: string) {
   writeFileSync(join(dir, ".claude.json"), JSON.stringify({ ...seed, projects: { [root]: { hasTrustDialogAccepted: true } } }, null, 2), { mode: 0o600, flag: "wx" });
 }
 
+/** The ChatGPT login sessions copy, relative to home; only the host holds and uses its refresh token. */
+export const CODEX_AUTH = ".codex-aw/auth.json";
+const REFRESH_MARGIN = 24 * 3600_000;
+// Codex has no refresh command; app-server's `account/read` with `refreshToken` forces one. Stdin closes only after the reply.
+// flock on the template dir: two aw processes refreshing the same rotating token at once would invalidate the login.
+const REFRESH = [
+  'export CODEX_HOME="$1"',
+  'exec {L}<"$CODEX_HOME" && flock -w 30 "$L" || exit 1',
+  "coproc APP { exec codex app-server 2>/dev/null; }",
+  `printf '%s\\n' '{"method":"initialize","id":0,"params":{"clientInfo":{"name":"aw","version":"1"}}}' '{"method":"initialized"}' '{"method":"account/read","id":1,"params":{"refreshToken":true}}' >&"\${APP[1]}"`,
+  `while IFS= read -r l <&"\${APP[0]}"; do [[ $l == '{"id":1,'* ]] && { exec {APP[1]}>&-; wait; exit 0; }; done`,
+  "exit 1",
+].join("\n");
+export const codexRefresh = (home: string) => ["bash", "-c", REFRESH, "aw-codex-refresh", join(home, ".codex-aw")];
+
+const expiresAt = (o: any) => {
+  try {
+    const exp = JSON.parse(Buffer.from(String(o.tokens.access_token).split(".")[1]!, "base64url").toString()).exp;
+    return Number.isFinite(exp) ? exp * 1000 : 0;
+  } catch {
+    return 0;
+  }
+};
+
+/** The template's ChatGPT login with an empty refresh token (Codex rejects a missing one); refreshed on the host first when it expires within a day. */
+export async function codexLogin(io: Io, now = Date.now()) {
+  const file = join(io.home, CODEX_AUTH);
+  const fix = `run \`CODEX_HOME=~/.codex-aw codex login\``;
+  const load = () => {
+    let o: any;
+    try {
+      o = JSON.parse(readFileSync(file, "utf8"));
+    } catch (e) {
+      throw new Error(`${file} is missing or unreadable (${(e as Error).message}): ${fix}`);
+    }
+    if (typeof o?.tokens?.access_token !== "string" || typeof o.tokens.refresh_token !== "string") throw new Error(`${file} is not a ChatGPT login: ${fix}`);
+    return o;
+  };
+  let o = load();
+  if (expiresAt(o) - now < REFRESH_MARGIN) {
+    await write(io, codexRefresh(io.home)).catch(() => undefined);
+    if (!io.dry && expiresAt((o = load())) - now < REFRESH_MARGIN) throw new Error(`could not refresh the Codex login in ${file}: ${fix}`);
+  }
+  return JSON.stringify({ ...o, tokens: { ...o.tokens, refresh_token: "" } });
+}
+
+// Same as seedClaude; `login` is codexLogin's copy, the session's own credential.
+export function seedCodex(io: Io, dir: string, login: string | undefined) {
+  const tpl = join(io.home, ".codex-aw");
+  io.log(`${io.dry ? "dry: " : ""}seed ${dir} from ${tpl}`);
+  if (io.dry) return;
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  for (const f of ["AGENTS.md", "skills"]) if (existsSync(join(tpl, f))) symlinkSync(realpathSync(join(tpl, f)), join(dir, f));
+  // Copies, not links: Codex rewrites config.toml in place, and the template stays out of the sandbox.
+  for (const f of ["config.toml", "hooks.json"]) if (existsSync(join(tpl, f))) copyFileSync(join(tpl, f), join(dir, f));
+  if (login) writeFileSync(join(dir, "auth.json"), login, { mode: 0o600, flag: "wx" });
+}
+
 export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Tracker, io: Io, awDir: string) {
   const dir = repoDir(cfg, r.key);
   const wt = join(dir, t.id);
@@ -94,8 +153,11 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   const script = join(dir, `${t.id}.sh`);
   const token = join(io.home, CLAUDE_TOKEN);
   if (r.agent === "claude" && !existsSync(token)) throw new Error(`${token} is missing: run \`claude setup-token\` and save the token it prints there (chmod 600)`);
+  // Claude sessions run Codex only as a helper, so a missing Codex login does not stop them.
+  const login = r.agent === "codex" ? await codexLogin(io) : await codexLogin(io).catch(() => undefined);
   await ensureClone(cfg, io, r);
   if (r.agent === "claude") seedClaude(io, claudeHome(wt), existsSync(r.path) ? realpathSync(r.path) : r.path);
+  seedCodex(io, codexHome(wt), login);
   put(io, join(dir, `${t.id}.source`), s.name);
   remove(io, join(dir, `${t.id}.ended`));
   await write(io, [...GIT, "-C", r.path, "fetch", "origin", r.baseBranch], undefined, SLOW_SECS);

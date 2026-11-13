@@ -19,9 +19,6 @@
     "access": "none"
   },
   "filesystem": {
-    "allow": [
-      "$HOME/.codex-aw"
-    ],
     "read": [
       "$HOME/.claude-aw/plugins",
       "$HOME/.claude/skills",

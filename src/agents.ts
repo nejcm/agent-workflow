@@ -9,6 +9,8 @@ export type Lookup = (wt: string, since: number, now: number) => Live | undefine
 export interface Agent {
   /** The script's env line and command; every argument is already a shell word. */
   launch(wt: string, prompt: string, nono: boolean): [env: string, argv: string[]];
+  /** The ticket's config dir and its subdir that holds every transcript of `wt`. */
+  store(wt: string): [home: string, sub: string];
   /** Transcript files that may belong to `wt`; the caller matches them on the recorded cwd. */
   transcripts(wt: string, home: string): string[];
   /** The cwd a transcript line records, if any. */
@@ -26,6 +28,8 @@ const MAX_FILE = 4096;
 export const CLAUDE_TOKEN = ".claude-aw/oauth-token";
 /** The ticket's own Claude config dir, a sidecar of its worktree. */
 export const claudeHome = (wt: string) => `${wt}.claude`;
+/** The ticket's own CODEX_HOME, a sidecar of its worktree; Claude sessions get one too, to run Codex. */
+export const codexHome = (wt: string) => `${wt}.codex`;
 
 /** Claude Code's project dir name for a cwd: every non-alphanumeric char becomes "-". */
 export const claudeDir = (wt: string) => join(claudeHome(wt), "projects", wt.replace(/[^A-Za-z0-9]/g, "-"));
@@ -107,8 +111,8 @@ export function codexState(wt: string, since: number, now: number): Live | undef
 
 export const AGENTS: Record<Repo["agent"], Agent> = {
   claude: {
-    // Claude sessions run Codex too, so they get aw's CODEX_HOME as well.
-    launch: (wt, prompt) => [`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/${CLAUDE_TOKEN}")" || exit 1\nexport CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR=${claudeHome(wt)} CODEX_HOME="$HOME/.codex-aw" CLAUDE_CODE_TMPDIR=${claudeHome(wt)}/tmp; mkdir -p "$CLAUDE_CODE_TMPDIR"`, ["claude", "--permission-mode", "bypassPermissions", prompt]],
+    launch: (wt, prompt) => [`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/${CLAUDE_TOKEN}")" || exit 1\nexport CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR=${claudeHome(wt)} CODEX_HOME=${codexHome(wt)} CLAUDE_CODE_TMPDIR=${claudeHome(wt)}/tmp; mkdir -p "$CLAUDE_CODE_TMPDIR"`, ["claude", "--permission-mode", "bypassPermissions", prompt]],
+    store: (wt) => [claudeHome(wt), "projects"],
     transcripts: (wt) => jsonl(claudeDir(wt)),
     cwd: (o) => o?.cwd,
     live: async (_home, wts) => {
@@ -117,8 +121,10 @@ export const AGENTS: Record<Repo["agent"], Agent> = {
     },
   },
   codex: {
-    launch: (wt, prompt, nono) => ['export CODEX_HOME="$HOME/.codex-aw"', ["codex", ...(nono ? ["--no-daemon"] : []), "--sandbox", "danger-full-access", "--ask-for-approval", "never", "-C", wt, prompt]],
-    transcripts: (_wt, home) => jsonl(join(home, ".codex-aw", "sessions"), true),
+    // Hook trust is keyed on the config file's path, so every fresh CODEX_HOME would skip the hooks aw seeds from the template.
+    launch: (wt, prompt, nono) => [`export CODEX_HOME=${codexHome(wt)}`, ["codex", ...(nono ? ["--no-daemon"] : []), "--dangerously-bypass-hook-trust", "--sandbox", "danger-full-access", "--ask-for-approval", "never", "-C", wt, prompt]],
+    store: (wt) => [codexHome(wt), "sessions"],
+    transcripts: (wt) => jsonl(join(codexHome(wt), "sessions"), true),
     cwd: (o) => o?.type === "session_meta" && o.payload?.cwd,
     live: async () => codexState,
   },

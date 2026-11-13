@@ -53,8 +53,11 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
   const url = existsSync(prFile) ? readFileSync(prFile, "utf8") : "";
   const n = /\/pull\/(\d+)$/.exec(url)?.[1];
   const file = join(dir, `${t.id}.feedback`);
-  const cur: FeedbackCursor = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : { seenAt: 0, rounds: 0 };
-  if (!n || !/^@\d+$/.test(win) || cur.capped) return;
+  const saved: FeedbackCursor = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : { seenAt: 0, rounds: 0 };
+  if (!n || !/^@\d+$/.test(win)) return;
+  // A capped cursor on an unparked ticket means a human removed the label; confirm fresh (a failed read throws) before the rounds restart.
+  if (saved.capped && (await tr.parked(t))) return;
+  const cur: FeedbackCursor = saved.capped ? { ...saved, rounds: 0, capped: undefined } : saved;
   const talk = r.feedbackAuthors.length > 0;
   const pr = JSON.parse(await read(io, ["gh", "pr", "view", n, "--repo", r.key, "--json", `state,baseRefName,headRefOid,mergeStateStatus,statusCheckRollup${talk ? ",reviews,comments" : ""}`]));
   if (pr.state !== "OPEN") return;
@@ -71,6 +74,8 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
   const dirty = pr.mergeStateStatus === "DIRTY" && !cur.dirtyShas?.includes(pr.headRefOid);
   if (!items.length && !failed.length && !dirty) return;
   if (cur.rounds >= MAX_ROUNDS) {
+    // Label first: if adding it fails, this retries next poll instead of leaving a capped cursor that reads as resumed.
+    await tr.park(t);
     put(io, file, JSON.stringify({ ...cur, capped: true } satisfies FeedbackCursor));
     return tr.comment(t, `PR feedback stopped after ${MAX_ROUNDS} rounds on ${url}: a human is needed`);
   }

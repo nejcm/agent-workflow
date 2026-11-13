@@ -10,7 +10,7 @@ import { syncPhases } from "./phases";
 import { deliverAnswer, liveStates, syncQuestion } from "./question";
 import { lastSay } from "./tail";
 import type { Config, Io, Repo, Source, Ticket, Tracker } from "./types";
-import { AW_DIR, clean, diskRepos, GIT, mtime, put, remove, SAFE_ID, subdirs, write } from "./util";
+import { AW_DIR, clean, diskRepos, GIT, hasLabel, mtime, put, remove, SAFE_ID, subdirs, write } from "./util";
 
 const sourceOf = (dir: string, id: string) => {
   const f = join(dir, `${id}.source`);
@@ -128,7 +128,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
           return step(io, `answer ${t.id}`, () => deliverAnswer(w, tr, io, dir, cfg.repos[key]!.feedbackAuthors, win, () => state(cfg.repos[key]!, dir, t.id)));
         }
         // The in-progress listing can lag a close that cleanup already acted on.
-        if (existsSync(ended) || (await tr.isDone(t.id, key))) return;
+        if (hasLabel(t.labels, s.needsHumanLabel) || existsSync(ended) || (await tr.isDone(t.id, key))) return;
         await tr.comment(w, endedNotice(lastMessage(join(dir, t.id), cfg.repos[key]!.agent)));
         put(io, ended, new Date().toISOString());
       });
@@ -143,11 +143,12 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
       const dir = repoDir(cfg, key);
       const r = cfg.repos[key]!;
       const win = wins.get(winName(key, t.id));
+      const parked = hasLabel(t.labels, s.needsHumanLabel);
       await step(io, `phases ${t.id}`, () => syncPhases(w, tr, io, dir, true));
-      if (r.autoMerge !== "off") await step(io, `merge ${t.id}`, () => autoMerge(cfg, r, w, tr, io));
+      if (r.autoMerge !== "off") await step(io, `merge ${t.id}`, () => autoMerge(cfg, r, w, tr, io, parked));
       // autoMerge looks the PR up anyway; otherwise every poll while the session lives (feedback needs the current PR), else once.
       else if (win || !existsSync(join(dir, `${t.id}.pr`))) await step(io, `pr ${t.id}`, () => findPr(key, t.id, io, dir));
-      if (win) await step(io, `feedback ${t.id}`, () => deliverFeedback(r, w, tr, io, dir, win, () => state(r, dir, t.id)));
+      if (win && !parked) await step(io, `feedback ${t.id}`, () => deliverFeedback(r, w, tr, io, dir, win, () => state(r, dir, t.id)));
     }
   });
 }

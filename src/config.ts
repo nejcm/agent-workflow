@@ -90,6 +90,7 @@ export function parseConfig(raw: any, base: string): Config {
       readyLabel: r.readyLabel ?? "agent",
       inProgressLabel: r.inProgressLabel ?? "in-progress",
       inReviewLabel: r.inReviewLabel ?? "in-review",
+      needsHumanLabel: r.needsHumanLabel ?? "needs-human",
       team: r.team,
       todo: r.todo ?? "Todo",
       inProgress: r.inProgress ?? "In Progress",
@@ -98,7 +99,7 @@ export function parseConfig(raw: any, base: string): Config {
     };
     check(NAME.test(s.name ?? ""), `${at}.name: required, [a-z0-9-]`);
     check(["github", "linear"].includes(s.tracker), `${at}.tracker: "github" | "linear"`);
-    for (const k of ["readyLabel", "inProgressLabel", "inReviewLabel", "todo", "inProgress", "inReview"] as const)
+    for (const k of ["readyLabel", "inProgressLabel", "inReviewLabel", "needsHumanLabel", "todo", "inProgress", "inReview"] as const)
       check(str(s[k]), `${at}.${k}: non-empty string`);
     check(Array.isArray(s.done) && s.done.length > 0 && s.done.every(str), `${at}.done: non-empty string array`);
     if (s.tracker === "linear") check(/^[A-Z0-9]+$/.test(s.team ?? ""), `${at}.team: Linear team key, e.g. ENG`);

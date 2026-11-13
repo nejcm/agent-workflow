@@ -7,7 +7,7 @@ import { CLAUDE_TOKEN, claudeDir } from "../src/agents";
 import { parseConfig } from "../src/config";
 import { canonCache } from "../src/github";
 import type { Config, Io, Ticket, Tracker } from "../src/types";
-import { AW_DIR, GIT } from "../src/util";
+import { AW_DIR, GIT, hasLabel } from "../src/util";
 
 export let root: string;
 // Called per test file: bun shares this module across files, so top-level hooks would only bind to the first.
@@ -53,6 +53,11 @@ export function fakeTracker(s: { ready?: Ticket[]; inProgress?: Ticket[]; inRevi
     claim: async (t) => void calls.push(`claim ${t.id}`),
     toReview: async (t, pr) => void calls.push(`review ${t.id} ${pr}`),
     done: async (t) => void calls.push(`done ${t.id}`),
+    park: async (t) => {
+      calls.push(`park ${t.id}`);
+      for (const x of [...(s.inProgress ?? []), ...(s.inReview ?? [])]) if (x.id === t.id) x.labels = [...(x.labels ?? []), "needs-human"];
+    },
+    parked: async (t) => [...(s.inProgress ?? []), ...(s.inReview ?? [])].some((x) => x.id === t.id && hasLabel(x.labels, "needs-human")),
     comment: async (t, b) => void calls.push(`comment ${t.id} ${b}`),
     comments: async () => [],
     createPhase: async (t, title) => (calls.push(`create ${t.id} ${title}`), subs.push({ ref: `sub-${calls.length}`, title }), `sub-${calls.length}`),

@@ -49,7 +49,7 @@ for f in nono/aw-claude.json nono/aw-codex.json; do nono profile validate "$f" >
 [ -e aw.json ] || { cp aw.example.json aw.json && sed -i "s/\"host\": \"laptop\"/\"host\": \"$host\"/" aw.json && echo "write aw.json (edit repos and sources)"; }
 
 for repo in "$@"; do
-  for l in agent in-progress in-review "host:$host"; do
+  for l in agent in-progress in-review needs-human "host:$host"; do
     gh label create "$l" --repo "$repo" --force >/dev/null && echo "label $repo $l"
   done
 done
@@ -58,6 +58,6 @@ todo=0
 CLAUDE_CONFIG_DIR=~/.claude-aw claude auth status 2>/dev/null | grep -q '"loggedIn": true' || { todo=1; echo "TODO: CLAUDE_CONFIG_DIR=~/.claude-aw claude   # then /login"; }
 [ -s ~/.claude-aw/oauth-token ] || { todo=1; echo "TODO: claude setup-token, then save the token to ~/.claude-aw/oauth-token (chmod 600)"; }
 CODEX_HOME=~/.codex-aw codex login status >/dev/null 2>&1 || { todo=1; echo "TODO: CODEX_HOME=~/.codex-aw codex login"; }
-echo "Linear sources: create labels agent and host:$host in the team."
+echo "Linear sources: create labels agent, needs-human and host:$host in the team."
 [ "$todo" = 0 ] && echo "Setup done. Next: scripts/run.sh"
 exit 0

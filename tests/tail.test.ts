@@ -181,6 +181,21 @@ test("follow prints appends and survives replacement, truncation and a vanished 
   expect(out.slice(1).map((l) => l.slice(16))).toEqual(["zero", "one", "two", "3", "4"]);
 });
 
+test("follow switches to a newer transcript (restart, /clear) and announces it", async () => {
+  const wt = join(root, "acme/web/PER-13");
+  const old = claudeFile(wt, "a.jsonl", say("first"));
+  utimesSync(old, 1000, 1000);
+  let fresh = "";
+  const steps = [() => (fresh = claudeFile(wt, "b.jsonl", say("second"))), () => appendFileSync(fresh, `${say("third")}\n`)];
+  const wait = async () => {
+    const step = steps.shift();
+    step?.();
+    return !!step;
+  };
+  const out = await run("PER-13", 20, true, wait);
+  expect(out.map((l) => (l.startsWith("#") ? l : l.slice(16)))).toEqual([`# ${old}`, "first", `# ${fresh}`, "second", "third"]);
+});
+
 test("the initial view reads only the trailing chunk and drops its partial first line", async () => {
   const wt = join(root, "acme/web/PER-12");
   claudeFile(wt, "s.jsonl", say("too old"), say("x".repeat(300 * 1024)), say("recent"));

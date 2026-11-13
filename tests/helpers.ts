@@ -1,9 +1,9 @@
 import type { Row } from "../src/status";
 import { afterEach, beforeEach } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { claudeDir } from "../src/agents";
+import { CLAUDE_TOKEN, claudeDir } from "../src/agents";
 import { parseConfig } from "../src/config";
 import { canonCache } from "../src/github";
 import type { Config, Io, Ticket, Tracker } from "../src/types";
@@ -11,9 +11,19 @@ import { AW_DIR, GIT } from "../src/util";
 
 export let root: string;
 // Called per test file: bun shares this module across files, so top-level hooks would only bind to the first.
+/** A Claude session record for this test process, as Claude writes it under `<dir>/sessions`. */
+export function session(dir: string, o: object) {
+  const stat = readFileSync("/proc/self/stat", "utf8");
+  const procStart = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+  mkdirSync(join(dir, "sessions"), { recursive: true });
+  writeFileSync(join(dir, "sessions", `${process.pid}.json`), JSON.stringify({ pid: process.pid, procStart, kind: "interactive", startedAt: 1, ...o }));
+}
+
 export function useTempRoot() {
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "aw-test-"));
+    mkdirSync(join(root, ".claude-aw"));
+    writeFileSync(join(root, CLAUDE_TOKEN), "tok");
     canonCache.clear();
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
@@ -99,7 +109,7 @@ export const worktree = (id: string, source = "web", repo = "acme/web") => {
   writeFileSync(join(root, repo, `${id}.source`), source);
 };
 export const claudeFile = (wt: string, name: string, ...lines: string[]) => {
-  const cd = claudeDir(root, wt);
+  const cd = claudeDir(wt);
   mkdirSync(cd, { recursive: true });
   writeFileSync(join(cd, name), [JSON.stringify({ type: "user", cwd: wt }), ...lines, ""].join("\n"));
   return join(cd, name);

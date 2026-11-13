@@ -4,14 +4,13 @@ import { join } from "node:path";
 import { AGENTS, codexState } from "../src/agents";
 import { resolve, STALE_MS, UNKNOWN } from "../src/state";
 import { snapshot, table } from "../src/status";
-import { config, fakeIo, root, useTempRoot, windowsOut, worktree } from "./helpers";
+import { config, fakeIo, root, session, useTempRoot, windowsOut, worktree } from "./helpers";
 
 useTempRoot();
 
 const T = 1_000_000;
 const NOW = T * 1000;
 const wt = (id: string) => join(root, "acme/web", id);
-const agent = (o: object) => ({ pid: 1, cwd: "/w/a", kind: "interactive", startedAt: 1, sessionId: "s", name: "n", status: "busy", ...o });
 const codex = () => config({ defaults: { agent: "codex", sandbox: "nono", testCmd: "bun test" } });
 const launched = (id: string) => (worktree(id), writeFileSync(join(root, "acme/web", `${id}.sh`), ""), utimesSync(join(root, "acme/web", `${id}.sh`), T - 60, T - 60));
 const stateAt = (id: string) => join(wt(id), ".aw", "codex-state.json");
@@ -32,23 +31,14 @@ test("resolve: ended/orphan first, then the feed, stale working is unknown", () 
   expect(resolve("running", { ...working, since: null }, null, NOW).state).toBe("working");
 });
 
-test("snapshot runs claude agents once with aw's config dir, maps rows by exact cwd, and shows state in table and JSON", async () => {
+test("snapshot reads each running ticket's own session records, maps rows by exact cwd, and shows state in table and JSON", async () => {
   for (const id of ["PER-1", "PER-2", "PER-3"]) worktree(id);
-  const bin = join(root, "bin");
-  mkdirSync(bin);
-  writeFileSync(join(root, "out.json"), JSON.stringify([agent({ cwd: wt("PER-1"), status: "waiting", waitingFor: "permission" }), agent({ cwd: `${wt("PER-2")}/sub`, status: "busy" })]));
-  writeFileSync(join(bin, "claude"), `#!/bin/sh\necho "$CLAUDE_CONFIG_DIR $*" >> '${root}/calls'\ncat '${root}/out.json'\n`, { mode: 0o755 });
-  const path = process.env.PATH;
-  process.env.PATH = `${bin}:${path}`;
+  session(`${wt("PER-1")}.claude`, { cwd: wt("PER-1"), status: "waiting", waitingFor: "permission" });
+  session(`${wt("PER-2")}.claude`, { cwd: `${wt("PER-2")}/sub`, status: "busy" });
+  session(`${wt("PER-3")}.claude`, { cwd: wt("PER-3"), status: "busy" });
   const { io } = fakeIo((argv) => (argv[0] === "tmux" ? windowsOut(["acme/web/PER-1", "acme/web/PER-2"]) : undefined));
-  let rs, none;
-  try {
-    rs = await snapshot(config(), io, root, NOW);
-    none = await snapshot(config(), fakeIo().io, root, NOW);
-  } finally {
-    process.env.PATH = path;
-  }
-  expect(readFileSync(join(root, "calls"), "utf8")).toBe(`${root}/.claude-aw agents --json\n`);
+  const rs = await snapshot(config(), io, root, NOW);
+  const none = await snapshot(config(), fakeIo().io, root, NOW);
   expect(rs.map((r) => [r.id, r.session, r.state, r.waitingFor])).toEqual([["PER-1", "running", "waiting", "permission"], ["PER-2", "running", "unknown", null], ["PER-3", "orphan", "ended", null]]);
   expect(JSON.parse(JSON.stringify(rs))[0]).toMatchObject({ state: "waiting", waitingFor: "permission", stateSince: null });
   expect(table(rs).split("\n")[1]).toMatch(/^PER-1\s+acme\/web\s+claude\s+running\s+waiting: permission\s+/);
@@ -64,7 +54,7 @@ test("codex rows read the hook file; one from before the launch is ignored", asy
   hookFile("PER-4", { state: "idle", ts: NOW - 10_000 });
   hookFile("PER-5", { state: "working", ts: (T - 120) * 1000 });
   const { io } = fakeIo((argv) => (argv[0] === "tmux" ? windowsOut(["acme/web/PER-4", "acme/web/PER-5"]) : undefined));
-  const rs = await snapshot(codex(), io, root, NOW, (a) => (a === "claude" ? Promise.reject(new Error("not for codex")) : AGENTS[a].live(root)));
+  const rs = await snapshot(codex(), io, root, NOW, (a) => (a === "claude" ? Promise.reject(new Error("not for codex")) : AGENTS[a].live(root, [])));
   expect(rs.map((r) => [r.state, r.stateSince])).toEqual([["idle", NOW - 10_000], ["unknown", null]]);
 });
 

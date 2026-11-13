@@ -88,11 +88,16 @@ export function rows(cfg: Config, wins: Map<string, string>, home = homedir(), n
   });
 }
 
-/** Rows with live state; prepares an agent's feed (once) only while one of its repos has a tmux window. */
-export async function snapshot(cfg: Config, io: Io, home = homedir(), now = Date.now(), prepare = (a: Repo["agent"]) => AGENTS[a].live(home)) {
+/** Rows with live state; prepares an agent's feed (once) for the worktrees of its repos that have a tmux window. */
+export async function snapshot(cfg: Config, io: Io, home = homedir(), now = Date.now(), prepare = (a: Repo["agent"], wts: string[]) => AGENTS[a].live(home, wts)) {
   const wins = await windows(cfg, io);
-  const up = new Set([...wins.keys()].flatMap((w) => cfg.repos[w.slice(0, w.lastIndexOf("/"))]?.agent ?? []));
-  return rows(cfg, wins, home, now, Object.fromEntries(await Promise.all([...up].map(async (a) => [a, await prepare(a)]))));
+  const up = new Map<Repo["agent"], string[]>();
+  for (const w of wins.keys()) {
+    const key = w.slice(0, w.lastIndexOf("/"));
+    const r = cfg.repos[key];
+    if (r) up.set(r.agent, [...(up.get(r.agent) ?? []), join(repoDir(cfg, key), w.slice(key.length + 1))]);
+  }
+  return rows(cfg, wins, home, now, Object.fromEntries(await Promise.all([...up].map(async ([a, wts]) => [a, await prepare(a, wts)]))));
 }
 
 export const dur = (ms: number | null) => {

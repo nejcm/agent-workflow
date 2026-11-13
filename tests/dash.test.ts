@@ -109,7 +109,6 @@ test.skipIf(!Bun.which("tmux"))("dashboard starts, moves and quits cleanly in a 
   try {
     for (const id of ["PER-1", "PER-2"]) mkdirSync(join(dir, "ws/acme/web", id), { recursive: true });
     mkdirSync(join(dir, "bin"));
-    writeFileSync(join(dir, "bin/claude"), "#!/bin/sh\necho []\n", { mode: 0o755 });
     writeFileSync(join(dir, "aw.json"), JSON.stringify({ host: "box", workspaceRoot: join(dir, "ws"), tmuxSession: "awtest-none", defaults: { agent: "claude", sandbox: "none", testCmd: "true", prompt: join(repo, "prompts/default.md") }, repos: ["acme/web"], sources: [{ name: "gh", tracker: "github" }] }));
     const cmd = `HOME=${dir} PATH=${dir}/bin:$PATH ${process.execPath} ${join(repo, "aw.ts")} watch --config ${dir}/aw.json; echo EXIT=$? > ${dir}/out; stty -a >> ${dir}/out; sleep 30`;
     expect(tmux("new-session", "-d", "-x", "80", "-y", "20", cmd).exitCode).toBe(0);

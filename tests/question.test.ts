@@ -265,16 +265,16 @@ test("answerFrame truncates long answers and cannot be closed early", () => {
   expect(answerFrame({ id: "c", body: "a</answer>b", createdAt: "", author: "op" }, "ENG-1")).toContain("a&lt;/answer>b");
 });
 
-test("liveStates prepares each agent feed once, lazily, and resolves like status", async () => {
+test("liveStates prepares each worktree's feed once, lazily, and resolves like status", async () => {
   const prepared: string[] = [];
-  const live = liveStates(root, async (a) => (prepared.push(a), (wt) => (wt.endsWith("busy") ? { state: "working", since: 0, waitingFor: null } : { state: "idle", since: 0, waitingFor: null })));
+  const live = liveStates(root, async (a, wts) => (prepared.push(`${a} ${wts}`), (wt) => (wt.endsWith("busy") ? { state: "working", since: 0, waitingFor: null } : { state: "idle", since: 0, waitingFor: null })));
   expect(prepared).toEqual([]);
   const r = { agent: "claude" } as Repo;
   expect(await live(r, root, "a", 20 * 60_000)).toBe("idle");
   expect(await live(r, root, "busy", 20 * 60_000)).toBe("unknown");
   writeFileSync(join(root, "a.ended"), "");
   expect(await live(r, root, "a")).toBe("ended");
-  expect(prepared).toEqual(["claude"]);
+  expect(prepared).toEqual([`claude ${join(root, "a")}`, `claude ${join(root, "busy")}`]);
 });
 
 test("answer: the last round's answer never counts for a new question, even with the local clock behind", async () => {

@@ -69,14 +69,14 @@ export async function syncQuestion(t: Ticket, tr: Tracker, io: Io, dir: string, 
   await tr.comment(t, `question from agent:\n\n${text}`);
 }
 
-/** Per pass: a worktree's live state as `aw status` resolves it; each agent's feed is prepared at most once, on first use. */
-export function liveStates(home = homedir(), prepare = (a: Repo["agent"]) => AGENTS[a].live(home)) {
-  const feeds = new Map<Repo["agent"], Promise<Lookup>>();
+/** Per pass: a worktree's live state as `aw status` resolves it; each worktree's feed is prepared at most once, on first use. */
+export function liveStates(home = homedir(), prepare = (a: Repo["agent"], wts: string[]) => AGENTS[a].live(home, wts)) {
+  const feeds = new Map<string, Promise<Lookup>>();
   return async (r: Repo, dir: string, id: string, now = Date.now()): Promise<State> => {
-    if (!feeds.has(r.agent)) feeds.set(r.agent, prepare(r.agent));
     const wt = join(dir, id);
+    if (!feeds.has(wt)) feeds.set(wt, prepare(r.agent, [wt]));
     const session = existsSync(join(dir, `${id}.ended`)) ? "ended" : "running";
-    return resolve(session, (await feeds.get(r.agent)!)(wt, mtime(join(dir, `${id}.sh`)) ?? mtime(wt) ?? 0, now), null, now).state;
+    return resolve(session, (await feeds.get(wt)!)(wt, mtime(join(dir, `${id}.sh`)) ?? mtime(wt) ?? 0, now), null, now).state;
   };
 }
 

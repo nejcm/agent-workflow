@@ -3,7 +3,7 @@
   "meta": {
     "name": "aw-claude",
     "version": "0.1.0",
-    "description": "aw: Claude Code in one worktree, agent-owned config dir, read-only user instructions and skills"
+    "description": "aw: Claude Code in one worktree with its own config dir, read-only user instructions, skills and template"
   },
   "extends": "default",
   "groups": {
@@ -20,11 +20,10 @@
   },
   "filesystem": {
     "allow": [
-      "$HOME/.claude-aw",
-      "$HOME/.claude-aw.lock",
       "$HOME/.codex-aw"
     ],
     "read": [
+      "$HOME/.claude-aw/plugins",
       "$HOME/.claude/skills",
       "$HOME/.agents/skills",
       "/usr/share/omarchy/default/agents",
@@ -32,6 +31,7 @@
       "$HOME/.bun"
     ],
     "read_file": [
+      "$HOME/.claude-aw/settings.json",
       "$HOME/.claude/CLAUDE.md",
       "$HOME/.claude/AGENTS.md"
     ]
@@ -64,6 +64,7 @@
       "XDG_CACHE_HOME",
       "CLAUDE_CONFIG_DIR",
       "CLAUDE_CODE_TMPDIR",
+      "CLAUDE_CODE_OAUTH_TOKEN",
       "CODEX_HOME"
     ]
   },

@@ -176,7 +176,8 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
           if (dirty.trim()) throw new Error(`${wt} has uncommitted or untracked files; left in place`);
         }
         await write(x.io, [...deadline, ...GIT, "-C", r.path, "worktree", "remove", ...(r.sandbox === "nono" ? ["--force"] : []), wt]);
-        for (const ext of [".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".source"]) remove(x.io, join(dir, id + ext));
+        // After the worktree, so a remove that fails (dirty without nono) keeps the transcripts too.
+        for (const ext of [".claude", ".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".source"]) remove(x.io, join(dir, id + ext));
       });
     }
   }

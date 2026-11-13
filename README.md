@@ -2,10 +2,10 @@
 
 Move a GitHub issue or Linear ticket to **ready**, and `aw` starts a Claude Code or Codex session for it: in its own git worktree, inside the [nono](https://github.com/nolabs-ai/nono) sandbox, in a tmux window you can attach to. The agent implements the ticket, runs the tests, pushes `agent/<ID>` and opens a PR; `aw` then moves the ticket to **In Review**.
 
-- **Watch and steer from anywhere.** Claude sessions run with Remote Control, so they show up on claude.ai/code and the Claude mobile app. Codex sessions are interactive, so they land in the ChatGPT/Codex app history. Locally: `tmux attach -t aw`, or open the worktree in your editor.
+- **Watch and steer locally.** `tmux attach -t aw`, or open the worktree in your editor. Codex sessions are interactive, so they also land in the ChatGPT/Codex app history. Claude sessions run without Remote Control: it needs a full login, and a shared login does not survive token refresh across sessions.
 - **Runs where you are.** Directly on your machine (sandboxed by nono), or on a VM (`sandbox: "none"`, the VM is the boundary). Same code, same config.
 - **No moving parts to babysit.** A small Bun + TypeScript program, no database: state is the tracker, the tmux windows and the worktrees. Polls instead of webhooks, so nothing listens on a port.
-- **Your setup, read-only.** Agents use your `CLAUDE.md`, `AGENTS.md` and skills, but log in through their own config dirs (`~/.claude-aw`, `~/.codex-aw`) and cannot modify yours.
+- **Your setup, read-only.** Agents use your `CLAUDE.md`, `AGENTS.md` and skills, but run from their own config dirs (a fresh `<ID>.claude` per Claude ticket, `~/.codex-aw`) and cannot modify yours.
 
 ## How it works
 
@@ -15,7 +15,7 @@ Move a GitHub issue or Linear ticket to **ready**, and `aw` starts a Claude Code
 ready ticket ──► resolve its repo; not in `repos`, or GitHub redirects it ──► one comment, skipped
              ──► gh repo clone <owner>/<name> ~/agent-repos/<owner>/<name>.tmp-…, then rename   (first time only)
              ──► git worktree add ~/agent-ws/<owner>/<name>/<ID> -b agent/<ID> origin/<base>
-             ──► tmux window <owner>/<name>/<ID>: nono run … -- claude --remote-control … "<prompt>"
+             ──► tmux window <owner>/<name>/<ID>: nono run … -- claude … "<prompt>"
              ──► In Progress + comment "aw: picked up on <host>"   (fails ──► window killed, retried next poll)
 .aw/phases.json changed  ──► create / update phase sub-tickets
 .aw/question.md changed  ──► comment "aw: question from agent: …"; first reply by a feedbackAuthor ──► .aw/answer.md + one pasted line, once idle
@@ -104,13 +104,20 @@ Idempotent, never overwrites real files. It creates `~/.claude-aw` and `~/.codex
 CLAUDE_CONFIG_DIR=~/.claude-aw claude
 ```
 
-Run `/login` inside, then exit.
+Run `/login` inside, then exit. Sessions do not use that login (only its onboarding and account keys, see below); they authenticate with a long-lived token:
+
+```bash
+claude setup-token   # prints the token; save it with:
+install -m 600 /dev/stdin ~/.claude-aw/oauth-token   # paste, then Ctrl-D
+```
+
+The launch script reads it on the host and passes it to the sandbox as `CLAUDE_CODE_OAUTH_TOKEN`, so it never lands in the script, the prompt or the logs, and the session cannot read the file. A Claude start fails while the file is missing. Copying `.credentials.json` per ticket would not work: Claude rotates refresh tokens, so the copies would log each other out.
 
 ```bash
 CODEX_HOME=~/.codex-aw codex login
 ```
 
-No trust step: Claude keys folder trust on the git repository root, and a worktree uses its main clone's ([docs](https://code.claude.com/docs/en/permissions#project-allow-rules-and-workspace-trust)), so trusting `~/agent-ws` or your home does not cover the clones. Before starting a Claude session `aw` sets `projects["<clone>"].hasTrustDialogAccepted` in `~/.claude-aw/.claude.json` (the documented way to trust a folder by hand) if it is missing, so the first ticket on a repo does not stall on the dialog. It holds Claude's own lock on that file (`.claude.json.lock`) while it rewrites the file atomically with only that key changed, and refuses anything there but a regular file (that fails the start). If Claude holds the lock for more than 2 s, `aw` logs `skip trust` and starts without trusting the clone, and that session may stall on the dialog.
+No trust step: Claude keys folder trust on the git repository root, and a worktree uses its main clone's ([docs](https://code.claude.com/docs/en/permissions#project-allow-rules-and-workspace-trust)), so trusting `~/agent-ws` or your home does not cover the clones. Each Claude ticket gets its own config dir, `<workspaceRoot>/<owner>/<name>/<ID>.claude`, which `aw` recreates at every start: symlinks to the template's `settings.json`, `CLAUDE.md`, `AGENTS.md`, `skills` and `plugins` (resolved, so they point at the real files), and a `.claude.json` holding only the template's onboarding and account keys plus `projects["<clone>"].hasTrustDialogAccepted` (the documented way to trust a folder by hand), so the session starts without the dialog. `~/.claude-aw` is the template: sessions can write only their own dir and read only the template's `settings.json` and `plugins/`, so a session cannot plant hooks, instructions, MCP servers or plugins for other tickets. Anything it leaves in its own dir is gone at the next start and at cleanup.
 
 Check the sandbox profiles parse:
 
@@ -193,7 +200,7 @@ Claude Code and Codex can't import a session while it runs, so observe it instea
 - `tmux attach -t aw`: the live terminals, one window per ticket (`owner/name/ID`). Detach with `Ctrl-b d`; typing there steers the agent.
 - `bun aw.ts status [--json]`: per worktree its agent, session (`running`: tmux window and no `<ID>.ended`; `ended`; `orphan`: neither), live state (see [Live state](#live-state)), runtime (since `<ID>.sh` was written; JSON `startedAt`, ms epoch), idle (since the transcript was last written), phases `done/total` (`.aw/phases.json`, else the `<ID>.phases.json` sidecar; JSON also lists up to 20 as `phases.items` with `key`, `title` and `status`, titled by key from the sidecar) and PR (from `<ID>.pr`, which `aw` writes whenever a poll finds the ticket's PR: in progress, and in review via the auto-merge lookup, or with `autoMerge` `off` every poll while the window exists, else once; must be a `https://github.com/<owner>/<name>/pull/<n>` URL in a regular file under 512 bytes; `held` when `<ID>.merge` records a "not auto-merged" decision). No network calls.
 - `bun aw.ts watch [--interval 2] [--plain]`: a terminal dashboard (OpenTUI), refreshed every `--interval` seconds (default 2, min 1); see below. `--plain`, or stdin/stdout not a TTY, redraws the `status` output instead until `Ctrl-C`; if OpenTUI cannot start, or `@opentui/core` is not in a `node_modules` above `src/`, it prints one line to stderr and does the same (that check assumes Bun's default auto-install, which only downloads when no `node_modules` exists; `install.auto = "force"` in a bunfig still fetches).
-- `bun aw.ts tail <ID | owner/repo/ID> [-n 20] [--no-follow]`: read-only, one line per assistant message, tool call (name, cut to 6 columns with `…`, and a short argument) or tool error from the newest transcript (last 256 KiB), then follows it. Claude's are `~/.claude-aw/projects/<cwd, non-alphanumerics as ->/*.jsonl`; Codex's are `~/.codex-aw/sessions/**/*.jsonl`; both are matched by the `cwd` they record, and symlinks and non-regular files are skipped. An ID with transcripts in several repos is refused; name the repo. Tool output is never printed; text is capped and stripped of control and escape characters. Works for a finished ticket whose worktree is gone, as long as its transcript is.
+- `bun aw.ts tail <ID | owner/repo/ID> [-n 20] [--no-follow]`: read-only, one line per assistant message, tool call (name, cut to 6 columns with `…`, and a short argument) or tool error from the newest transcript (last 256 KiB), then follows it. Claude's are `<ID>.claude/projects/<cwd, non-alphanumerics as ->/*.jsonl`; Codex's are `~/.codex-aw/sessions/**/*.jsonl`; both are matched by the `cwd` they record, and symlinks and non-regular files are skipped. An ID with transcripts in several repos is refused; name the repo. Tool output is never printed; text is capped and stripped of control and escape characters. Works for a finished ticket whose worktree is gone, as long as its transcript is (a Claude ticket's goes with its `<ID>.claude` at cleanup or restart).
 
 The dashboard has a header (host, a count per state: `◆ waiting` highlighted since it needs you, `◇ question` when any, `● working`, `○ idle`, `◌ orphan`, `✕ ended`, plus `? unknown` when any; last refresh), a footer with the keys that apply right now and transient messages, and between them:
 
@@ -221,7 +228,7 @@ Everything shown is stripped of control, escape, bidi and invisible characters (
 
 `state` (`working`, `waiting`, `idle`, `question`, `ended`, `unknown`; JSON also has `waitingFor` and `stateSince`, ms epoch or `null`). An `ended` or `orphan` session is `ended` in JSON; the table and dashboard show an `orphan` session (no tmux window, no `<ID>.ended`) as `orphan`. Otherwise:
 
-- Claude: `CLAUDE_CONFIG_DIR=~/.claude-aw claude agents --json`, run once per refresh (3 s timeout) and only while a Claude ticket has a tmux window; `busy` is `working`, `waiting` carries `waitingFor`. The session must report the worktree path as its exact `cwd`. That command is a research preview: if it fails, times out or changes shape, Claude rows show `unknown`.
+- Claude: the session records `claude agents` reads, `<ID>.claude/sessions/<pid>.json`, once per refresh for each Claude ticket with a tmux window. `aw` reads them itself, never running `claude` against a dir the session can write: no symlinks, regular files under 64 KiB, and only records whose pid is still running with the recorded start time. `busy` is `working`, `waiting` carries `waitingFor`. The session must report the worktree path as its exact `cwd`. The format is undocumented (checked on 2.1.323): if it changes, Claude rows show `unknown`.
 - Codex: hooks installed by `scripts/setup.sh` (via `scripts/codex-hooks.sh`, a marked block in `~/.codex-aw/config.toml`; the rest of the file is left alone, and the script refuses damaged markers or a result that is not valid TOML) write `{state, ts}` to `<worktree>/.aw/codex-state.json` on `SessionStart`/`Stop` (idle), `UserPromptSubmit`/`PostToolUse` (working), `PermissionRequest` (waiting) and `SessionEnd` (ended), only when `.aw` is a real directory. The sandbox only lets an agent write its own worktree, so it can at most misreport its own state. The hook runs with the agent's own privileges, so a race on `.aw` or the temp file reaches nothing the agent could not write anyway. It assumes the session starts at the worktree root, as the launcher does. Codex skips hooks until they are trusted: run `CODEX_HOME=~/.codex-aw codex` once, open `/hooks` and trust them (again whenever the block changes). `aw` reads the file like `phases.json` (no symlinks, regular file under 4 KiB) and only if it is newer than the launcher; a `working` older than 10 minutes with no transcript write since is `unknown`.
 
 ### On a VM
@@ -276,7 +283,7 @@ CLI: `bun aw.ts <run|once|status|watch|tail> [--dry-run] [--json] [--interval s]
 - `src/phases.ts`: `.aw/phases.json` validation and sub-ticket sync.
 - `src/feedback.ts`: PR reviews, comments, failed checks and conflicts fed back into an idle In Review session.
 - `src/merge.ts`: `.aw/merge.json`, critical paths, the merge decision and auto-merge.
-- `src/agents.ts`: the Claude and Codex adapters: launch env and command, config dirs and transcript files, live state (`claude agents --json`, bounded run and parse; the Codex hook state file).
+- `src/agents.ts`: the Claude and Codex adapters: launch env and command, config dirs and transcript files, live state (Claude's session records, read as untrusted files; the Codex hook state file).
 - `src/launcher.ts`: clone, worktree, prompt and launcher script, tmux window.
 - `src/pass.ts`: one poll: cleanup, start ready tickets by priority, reconcile.
 - `src/status.ts`: per-worktree status rows, the live-state snapshot and the table.
@@ -293,11 +300,11 @@ CLI: `bun aw.ts <run|once|status|watch|tail> [--dry-run] [--json] [--interval s]
 Prove the sandbox boundaries on a throwaway repo first.
 
 - [ ] Inside a sandboxed session, `cat ~/.ssh/id_*`, `ls ~/Work/<other-repo>`, `ls ~/.config` fail.
-- [ ] Writing `~/.claude/CLAUDE.md` or `~/.claude/settings.json` fails; your CLAUDE.md, AGENTS.md and skills load.
+- [ ] Writing `~/.claude/CLAUDE.md`, `~/.claude/settings.json` or anything in `~/.claude-aw` fails; your CLAUDE.md, AGENTS.md and skills load.
 - [ ] `env | grep -iE 'token|key'` shows only phantom values; `LINEAR_API_KEY` is absent.
 - [ ] `git push origin agent/<ID>` and `gh pr create` work, also with an SSH `origin`.
 - [ ] Sandboxed Codex reaches its backend (`chatgpt.com`, `auth.openai.com`).
-- [ ] Claude session is visible and steerable on claude.ai/code / mobile; Codex session is in the app history.
+- [ ] Codex session is in the app history.
 - [ ] Inside a sandboxed session, writing another clone's `.git` under `~/agent-repos` fails, and so does writing this clone's `.git/config`, `.git/hooks/x` or `.git/info/attributes` (and `git config core.fsmonitor x`); commit, fetch, rebase and push still work.
 - [ ] A Linear ticket for a repo not in `repos` gets one comment and no worktree, also after restarting `aw`.
 - [ ] Issue → PR → `in-review`; closing the issue removes the window and the worktree.

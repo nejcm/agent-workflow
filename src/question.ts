@@ -81,7 +81,7 @@ export function liveStates(home = homedir(), prepare = (a: Repo["agent"], wts: s
   };
 }
 
-/** The pane started by the ticket's launcher script, wherever splits or swaps moved it; none while in copy mode, where keys would run as bindings. */
+/** The pane in `win` started by the ticket's launcher script, not pane order; none while in copy mode, where keys would run as bindings. */
 export async function agentPane(io: Io, win: string, script: string) {
   const panes = (await read(io, ["tmux", "list-panes", "-t", win, "-F", "#{pane_id} #{pane_in_mode} #{pane_start_command}"])).split("\n").map((l) => /^(%\d+) (\d) (.*)$/.exec(l)).filter((m) => m?.[3] === script);
   return panes.length === 1 && panes[0]![2] === "0" ? panes[0]![1] : undefined;

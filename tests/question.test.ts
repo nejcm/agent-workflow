@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pass } from "../src/pass";
-import { answerFrame, liveStates, pickAnswer, POINTER } from "../src/question";
+import { agentPane, answerFrame, liveStates, pickAnswer, POINTER } from "../src/question";
 import type { State } from "../src/state";
 import type { Repo, TicketComment } from "../src/types";
 import { config, fakeIo, fakeTracker, linkWorktree, noPr, root, ticket, useTempRoot, windowsOut, worktree } from "./helpers";
@@ -347,4 +347,12 @@ test("answer: a reply from an unlisted author is never delivered", async () => {
   expect(d.states).toEqual([]);
   expect(d.keys()).toEqual([]);
   expect(d.sidecar().answerId).toBeUndefined();
+});
+
+test("agentPane: exactly one pane started by the launcher, else none", async () => {
+  const pick = (out: string) => agentPane(fakeIo(() => ({ out })).io, "@1", "/r/gh-1.sh");
+  expect(await pick("%7 0 bash\n%5 0 /r/gh-1.sh\n")).toBe("%5");
+  expect(await pick("%5 0 /r/gh-1.sh\n%6 0 /r/gh-1.sh\n")).toBeUndefined();
+  expect(await pick("%5 0 '/r/gh-1.sh'\n%7 0 /r/gh-1.shx\n%8 0 /r/gh-1.sh bash\n")).toBeUndefined();
+  expect(await pick("%5 1 /r/gh-1.sh\n%6 10 /r/gh-1.sh\n")).toBeUndefined();
 });

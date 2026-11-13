@@ -1,29 +1,35 @@
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { AGENTS, CLAUDE_TOKEN, claudeHome, codexHome } from "./agents";
 import { repoDir } from "./config";
 import type { Config, Io, Repo, Source, Ticket, Tracker } from "./types";
-import { AW_DIR, GIT, inAw, put, remove, write } from "./util";
+import { AW_DIR, GIT, inAw, put, read, remove, write } from "./util";
 
 export const render = (tpl: string, vars: Record<string, string>) => tpl.replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? m);
 
 // Clone, fetch and checkout scale with repo size; everything else gets the runner's 60s default.
-const SLOW_SECS = 900;
+export const SLOW_SECS = 900;
 const q = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 
 export const nonoRun = (l: Repo, awDir: string, grants: [string, string][], quote = (s: string) => s) =>
   ["nono", "run", "--no-rollback-prompt", "--profile", quote(join(awDir, "nono", `aw-${l.agent}.json`)), ...grants.flatMap(([flag, path]) => [flag, quote(path)]), "--"];
 
-export function launcher(l: Repo, wt: string, promptFile: string, awDir = AW_DIR, admin = join(l.path, ".git", "worktrees", basename(wt))) {
+// `admin` only for a legacy worktree, which writes the shared clone; a session clone only reads its objects (alternates).
+export function launcher(l: Repo, wt: string, promptFile: string, awDir = AW_DIR, admin?: string) {
   const prompt = `"$(cat ${q(promptFile)})"`;
   const nono = l.sandbox === "nono";
   const git = join(l.path, ".git");
-  // Read-only .git: config, hooks and info stay out of reach; only what commits and pushes write is granted.
-  const rw = [join(git, "objects"), join(git, "refs"), join(git, "logs"), admin].map((p): [string, string] => ["--allow", p]);
+  const rw = admin ? [join(git, "objects"), join(git, "refs"), join(git, "logs"), admin].map((p): [string, string] => ["--allow", p]) : [];
   const own = [...(l.agent === "claude" ? [claudeHome(wt)] : []), codexHome(wt)].map((p): [string, string] => ["--allow", p]);
-  const wrap = nono ? nonoRun(l, awDir, [["--allow", wt], ...own, ["--read", git], ...rw], q) : [];
+  const wrap = nono ? nonoRun(l, awDir, [["--allow", wt], ...own, ["--read", admin ? git : join(git, "objects")], ...rw], q) : [];
   const [env, cmd] = AGENTS[l.agent].launch(q(wt), prompt, nono);
   return `#!/usr/bin/env bash\ncd ${q(wt)} || exit 1\nunset LINEAR_API_KEY\n${env}\nexec ${[...wrap, ...cmd].join(" ")}\n`;
+}
+
+/** `worktree` for a session started before per-session clones (its `.git` is a file), `clone` for its own `.git` dir. */
+export function sessionKind(wt: string) {
+  const s = lstatSync(join(wt, ".git"), { throwIfNoEntry: false });
+  return s?.isFile() ? "worktree" : s?.isDirectory() ? "clone" : undefined;
 }
 
 const gitFile = (p: string) => {
@@ -68,7 +74,7 @@ async function ensureClone(cfg: Config, io: Io, r: Repo) {
 const TEMPLATE = ["settings.json", "CLAUDE.md", "AGENTS.md", "skills", "plugins"];
 const ACCOUNT = ["hasCompletedOnboarding", "lastOnboardingVersion", "oauthAccount", "userID"];
 
-// Fresh per start, so nothing a session left there carries over. Trust goes on the clone root, which covers its worktrees.
+// Fresh per start, so nothing a session left there carries over. Trust goes on the git root: the session clone, or a worktree's main clone.
 export function seedClaude(io: Io, dir: string, root: string) {
   const tpl = join(io.home, ".claude-aw");
   io.log(`${io.dry ? "dry: " : ""}seed ${dir} from ${tpl}`);
@@ -145,6 +151,29 @@ export function seedCodex(io: Io, dir: string, login: string | undefined) {
   if (login) writeFileSync(join(dir, "auth.json"), login, { mode: 0o600, flag: "wx" });
 }
 
+// Shares the base clone's objects (--shared): the session never writes the base, and aw never prunes it (maintenance.auto=false, gc.pruneExpire=never).
+async function cloneSession(io: Io, r: Repo, wt: string, branch: string) {
+  const old = await io.run([...GIT, "-C", r.path, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]);
+  const url = (await read(io, [...GIT, "-C", r.path, "remote", "get-url", "origin"])).trim();
+  const base = `refs/remotes/origin/${r.baseBranch}`;
+  await write(io, [...GIT, "-C", r.path, "config", "gc.pruneExpire", "never"]);
+  // Built beside wt and renamed, so a failed step never leaves a half-made clone to reuse; nothing else writes <ID>.tmp.
+  const tmp = `${wt}.tmp`;
+  if (!io.dry) rmSync(tmp, { recursive: true, force: true });
+  try {
+    // file:// only for this copy of aw's own clone; the session clone then pushes to the real origin.
+    await write(io, [...GIT, "-c", "protocol.file.allow=always", "-c", "advice.detachedHead=false", "clone", "-q", "--shared", "--revision", base, "--", r.path, tmp], undefined, SLOW_SECS);
+    for (const a of [["remote", "set-url", "origin", url], ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"], ["update-ref", base, "HEAD"]]) await write(io, [...GIT, "-C", tmp, ...a]);
+    // A branch left in the base by a legacy worktree keeps its commits.
+    await write(io, [...GIT, "-C", tmp, "switch", "-q", "-c", branch, ...(old.code === 0 && old.out.trim() ? [old.out.trim()] : [])], undefined, SLOW_SECS);
+  } catch (e) {
+    if (!io.dry) rmSync(tmp, { recursive: true, force: true });
+    throw e;
+  }
+  io.log(`${io.dry ? "dry: " : ""}mv ${tmp} ${wt}`);
+  if (!io.dry) renameSync(tmp, wt);
+}
+
 export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Tracker, io: Io, awDir: string) {
   const dir = repoDir(cfg, r.key);
   const wt = join(dir, t.id);
@@ -156,16 +185,15 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   // Claude sessions run Codex only as a helper, so a missing Codex login does not stop them.
   const login = r.agent === "codex" ? await codexLogin(io) : await codexLogin(io).catch(() => undefined);
   await ensureClone(cfg, io, r);
-  if (r.agent === "claude") seedClaude(io, claudeHome(wt), existsSync(r.path) ? realpathSync(r.path) : r.path);
   seedCodex(io, codexHome(wt), login);
   put(io, join(dir, `${t.id}.source`), s.name);
   remove(io, join(dir, `${t.id}.ended`));
   await write(io, [...GIT, "-C", r.path, "fetch", "origin", r.baseBranch], undefined, SLOW_SECS);
   if (existsSync(wt)) io.log(`reuse ${wt}`);
-  else {
-    const hasBranch = (await io.run([...GIT, "-C", r.path, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`])).code === 0;
-    await write(io, [...GIT, "-C", r.path, "worktree", "add", wt, ...(hasBranch ? [branch] : ["-b", branch, `origin/${r.baseBranch}`])], undefined, SLOW_SECS);
-  }
+  else await cloneSession(io, r, wt, branch);
+  const legacy = sessionKind(wt) === "worktree";
+  const gitRoot = legacy ? r.path : wt;
+  if (r.agent === "claude") seedClaude(io, claudeHome(wt), existsSync(gitRoot) ? realpathSync(gitRoot) : gitRoot);
   const vars = { id: t.id, title: t.title, body: t.body, url: t.url, branch, base: r.baseBranch, testCmd: r.testCmd, repo: r.key };
   io.log(`${io.dry ? "dry: " : ""}write ${join(wt, ".aw", ".gitignore")}`);
   if (!io.dry) {
@@ -174,7 +202,7 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
     inAw(wt, (d) => (rmSync(`${d}/.gitignore`, { force: true }), writeFileSync(`${d}/.gitignore`, "*\n", { flag: "wx" })));
   }
   put(io, promptFile, render(readFileSync(r.prompt, "utf8"), vars));
-  put(io, script, launcher(r, wt, promptFile, awDir, io.dry || r.sandbox !== "nono" ? undefined : adminDir(r, wt)), 0o755);
+  put(io, script, launcher(r, wt, promptFile, awDir, legacy && !io.dry && r.sandbox === "nono" ? adminDir(r, wt) : undefined), 0o755);
   await write(io, ["tmux", "new-window", "-d", "-t", `=${cfg.tmuxSession}:`, "-n", winName(r.key, t.id), script]);
   // Claimed last so a failed start leaves the ticket ready for the next poll; the open window stops a double start.
   try {

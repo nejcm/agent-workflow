@@ -4,7 +4,7 @@ import { allowedRepo, repoDir, validRepo } from "./config";
 import { deliverFeedback } from "./feedback";
 import { fileFindings } from "./findings";
 import { byPriority, canonical, findPr, github, sameRepo } from "./github";
-import { nonoRun, start, windows, winName } from "./launcher";
+import { nonoRun, sessionKind, SLOW_SECS, start, windows, winName } from "./launcher";
 import { linear } from "./linear";
 import { autoMerge } from "./merge";
 import { syncPhases } from "./phases";
@@ -217,15 +217,19 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
         if (w) await write(x.io, ["tmux", "kill-window", "-t", w]);
         wins.delete(winName(r.key, id));
         const wt = join(dir, id);
-        // git's own dirty check runs status through the agent-writable admin dir, so run it in the sandbox and force the remove.
+        const kind = sessionKind(wt);
+        if (!kind) throw new Error(`${wt}/.git is neither a file nor a directory; left in place`);
+        // The session controls its .git (config, filters, commondir), so git checks it inside the sandbox, read-only; aw then deletes without git.
         // A planted filter can block git; the runner's deadline kills its whole process group.
-        if (r.sandbox === "nono") {
-          const dirty = await write(x.io, [...nonoRun(r, awDir, [["--read", wt], ["--read", join(r.path, ".git")]]), ...GIT, "-C", wt, "status", "--porcelain", "--ignore-submodules=none"]);
-          if (dirty.trim()) throw new Error(`${wt} has uncommitted or untracked files; left in place`);
+        if (r.sandbox === "nono" || kind === "clone") {
+          const box = r.sandbox === "nono" ? nonoRun(r, awDir, [["--read", wt], ["--read", join(r.path, ".git", ...(kind === "clone" ? ["objects"] : []))]]) : [];
+          const checks = [["status", "--porcelain", "--ignore-submodules=none"], ...(kind === "clone" ? [["log", "--format=%h", "--branches", "--not", "--remotes"]] : [])];
+          for (const c of checks) if ((await write(x.io, [...box, ...GIT, "-C", wt, ...c])).trim()) throw new Error(`${wt} has uncommitted, untracked or unpushed work; left in place`);
         }
-        // A double force never reads the agent-writable `locked` file, so a planted lock cannot block a done ticket.
-        await write(x.io, [...GIT, "-C", r.path, "worktree", "remove", ...(r.sandbox === "nono" ? ["--force", "--force"] : []), wt]);
-        // After the worktree, so a remove that fails (dirty without nono) keeps the transcripts too.
+        // rm never follows symlinks; a double force never reads the agent-writable `locked` file of a legacy worktree.
+        if (kind === "clone") await write(x.io, ["rm", "-rf", "--one-file-system", "--", wt], undefined, SLOW_SECS);
+        else await write(x.io, [...GIT, "-C", r.path, "worktree", "remove", ...(r.sandbox === "nono" ? ["--force", "--force"] : []), wt]);
+        // After the clone or worktree, so a delete that fails keeps the transcripts too.
         for (const ext of [".claude", ".codex", ".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".stall", ".findings", ".source"]) remove(x.io, join(dir, id + ext));
       });
     }

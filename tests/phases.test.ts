@@ -107,9 +107,8 @@ test("phases: bad or symlinked file is logged and the parent still moves to revi
 test("phases: start git-ignores .aw; cleanup removes the sidecar", async () => {
   const c = config();
   const { tr } = fakeTracker({ ready: [ticket(1)], done: ["gh-2"] });
-  mkdirSync(join(root, "acme/web/gh-2"), { recursive: true });
+  worktree("gh-2");
   writeFileSync(join(root, "acme/web/gh-2.phases.json"), "{}");
-  writeFileSync(join(root, "acme/web/gh-2.source"), "web");
   const { io } = fakeIo(noPr);
   await pass(c, io, () => tr, "/aw");
   expect(readFileSync(join(root, "acme/web/gh-1/.aw/.gitignore"), "utf8")).toBe("*\n");

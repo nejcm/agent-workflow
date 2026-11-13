@@ -3,7 +3,7 @@
   "meta": {
     "name": "aw-claude",
     "version": "0.1.0",
-    "description": "aw: Claude Code in one worktree with its own config dir, read-only user instructions, skills and template"
+    "description": "aw: Claude Code in its own session clone with its own config dir, read-only user instructions, skills and template"
   },
   "extends": "default",
   "groups": {

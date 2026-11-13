@@ -1,8 +1,8 @@
 import type { Row } from "../src/status";
 import { afterEach, beforeEach } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { CLAUDE_TOKEN, claudeDir } from "../src/agents";
 import { parseConfig } from "../src/config";
 import { canonCache } from "../src/github";
@@ -82,20 +82,13 @@ export function fakeIo(respond: (argv: string[]) => { code?: number; out?: strin
       cmds.push(argv.join(" "));
       const r =
         respond(argv) ??
-        (argv[1] === "repo" && argv[2] === "view" ? { out: JSON.stringify({ nameWithOwner: argv[3] }) } : argv[5] === "--git-common-dir" ? { out: join(realpathSync(argv[2]!), ".git") + "\n" } : {});
+        (argv[1] === "repo" && argv[2] === "view" ? { out: JSON.stringify({ nameWithOwner: argv[3] }) } : argv[5] === "--git-common-dir" ? { out: join(realpathSync(argv[2]!), ".git") + "\n" } : argv[4] === "get-url" ? { out: "https://github.com/acme/web.git\n" } : {});
       if (argv[1] === "repo" && argv[2] === "clone" && !r.code) mkdirSync(argv[4]!, { recursive: true });
-      if (argv[3] === "worktree" && argv[4] === "add" && !r.code) linkWorktree(argv[2]!, argv[5]!);
+      if (argv[0] === "git" && argv[5] === "clone" && !r.code) mkdirSync(join(argv.at(-1)!, ".git"), { recursive: true });
       return { code: r.code ?? 0, out: r.out ?? "", err: r.code ? "boom" : "" };
     },
   };
   return { io, cmds, logs };
-}
-
-export function linkWorktree(clone: string, wt: string, admin = join(clone, ".git/worktrees", basename(wt))) {
-  mkdirSync(admin, { recursive: true });
-  mkdirSync(wt, { recursive: true });
-  writeFileSync(join(wt, ".git"), `gitdir: ${admin}\n`);
-  writeFileSync(join(admin, "gitdir"), join(wt, ".git"));
 }
 
 export async function withLinearKey<T>(fn: () => Promise<T>) {
@@ -111,6 +104,7 @@ export async function withLinearKey<T>(fn: () => Promise<T>) {
 
 export const worktree = (id: string, source = "web", repo = "acme/web") => {
   mkdirSync(join(root, repo, id), { recursive: true });
+  if (!existsSync(join(root, repo, id, ".git"))) mkdirSync(join(root, repo, id, ".git"));
   writeFileSync(join(root, repo, `${id}.source`), source);
 };
 export const claudeFile = (wt: string, name: string, ...lines: string[]) => {

@@ -3,7 +3,7 @@
   "meta": {
     "name": "aw-codex",
     "version": "0.1.0",
-    "description": "aw: Codex in one worktree with its own CODEX_HOME, read-only user instructions and skills"
+    "description": "aw: Codex in its own session clone with its own CODEX_HOME, read-only user instructions and skills"
   },
   "extends": "default",
   "groups": {

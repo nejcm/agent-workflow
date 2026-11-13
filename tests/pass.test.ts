@@ -17,13 +17,14 @@ test("render is single-pass so ticket text cannot expand placeholders", () => {
   expect(render("{{title}} / {{body}} / {{nope}}", { title: "{{body}}", body: "b" })).toBe("{{body}} / b / {{nope}}");
 });
 
-test("launcher: claude under nono, token read on the host, never written", () => {
+test("launcher: claude under nono, token read on the host, never written; only a legacy worktree writes the shared clone", () => {
   const c = config();
-  const s = launcher(web(c), "/ws/web/gh-1", "/ws/web/gh-1.prompt.md", "/aw");
+  const s = launcher(web(c), "/ws/web/gh-1", "/ws/web/gh-1.prompt.md", "/aw", `${root}/src-web/.git/worktrees/gh-1`);
   expect(s).toContain(`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-aw/oauth-token")" || exit 1\nexport CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/web/gh-1'.claude CODEX_HOME='/ws/web/gh-1'.codex CLAUDE_CODE_TMPDIR='/ws/web/gh-1'.claude/tmp`);
   expect(s).toContain("--no-rollback-prompt");
   expect(s).toContain(`exec nono run --no-rollback-prompt --profile '/aw/nono/aw-claude.json' --allow '/ws/web/gh-1' --allow '/ws/web/gh-1.claude' --allow '/ws/web/gh-1.codex' --read '${root}/src-web/.git' --allow '${root}/src-web/.git/objects' --allow '${root}/src-web/.git/refs' --allow '${root}/src-web/.git/logs' --allow '${root}/src-web/.git/worktrees/gh-1' -- claude --permission-mode`);
   expect(s).toContain(`--permission-mode bypassPermissions "$(cat '/ws/web/gh-1.prompt.md')"`);
+  expect(launcher(web(c), "/ws/web/gh-1", "/p", "/aw")).toContain(`--allow '/ws/web/gh-1.codex' --read '${root}/src-web/.git/objects' -- claude`);
 });
 
 test("launcher: codex without sandbox keeps the daemon", () => {
@@ -42,7 +43,7 @@ unset LINEAR_API_KEY
   const claudeEnv = String.raw`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-aw/oauth-token")" || exit 1
 export CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CODEX_HOME='/ws/it'\''s'.codex CLAUDE_CODE_TMPDIR='/ws/it'\''s'.claude/tmp; mkdir -p "$CLAUDE_CODE_TMPDIR"
 `;
-  const nono = (a: string, own = "") => String.raw`nono run --no-rollback-prompt --profile '/aw/nono/aw-${a}.json' --allow '/ws/it'\''s' ${own}--read '/src/web/.git' --allow '/src/web/.git/objects' --allow '/src/web/.git/refs' --allow '/src/web/.git/logs' --allow '/src/web/.git/worktrees/it'\''s' -- `;
+  const nono = (a: string, own = "") => String.raw`nono run --no-rollback-prompt --profile '/aw/nono/aw-${a}.json' --allow '/ws/it'\''s' ${own}--read '/src/web/.git/objects' -- `;
   const claude = String.raw`claude --permission-mode bypassPermissions "$(cat '/ws/p.md')"
 `;
   const codex = (d: string) => String.raw`codex ${d}--dangerously-bypass-hook-trust --sandbox danger-full-access --ask-for-approval never -C '/ws/it'\''s' "$(cat '/ws/p.md')"
@@ -62,15 +63,28 @@ test("starts ready tickets up to maxConcurrent", async () => {
   const { io, cmds } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(["acme/web/gh-9"]) : a[4] === "--verify" ? { code: 1 } : noPr(a)));
   await pass(c, io, () => tr, "/aw");
   expect(calls).toEqual(["claim gh-1"]);
-  expect(cmds).toContain(`git -C ${root}/src-web worktree add ${root}/acme/web/gh-1 -b agent/gh-1 origin/main`);
+  const wt = `${root}/acme/web/gh-1`;
+  expect(cmds.slice(cmds.indexOf(`git -C ${root}/src-web fetch origin main`))).toEqual(expect.arrayContaining([
+    `git -C ${root}/src-web config gc.pruneExpire never`,
+    cloneCmd(`${root}/src-web`, `${wt}.tmp`),
+    `git -C ${wt}.tmp remote set-url origin https://github.com/acme/web.git`,
+    `git -C ${wt}.tmp config remote.origin.fetch +refs/heads/*:refs/remotes/origin/*`,
+    `git -C ${wt}.tmp update-ref refs/remotes/origin/main HEAD`,
+    `git -C ${wt}.tmp switch -q -c agent/gh-1`,
+  ]));
+  expect(existsSync(`${wt}.tmp`)).toBe(false);
+  expect(cmds.some((c) => c.includes("worktree add"))).toBe(false);
   expect(cmds).toContain(`tmux new-window -d -t =aw: -n acme/web/gh-1 ${root}/acme/web/gh-1.sh`);
   const prompt = readFileSync(join(root, "acme/web/gh-1.prompt.md"), "utf8");
   expect(prompt).toContain("body; rm -rf ~ $(whoami)");
   expect(prompt).toContain("git push origin agent/gh-1");
   const seeded = JSON.parse(readFileSync(join(root, "acme/web/gh-1.claude/.claude.json"), "utf8"));
-  expect(seeded.projects).toEqual({ [realpathSync(join(root, "src-web"))]: { hasTrustDialogAccepted: true } });
+  expect(seeded.projects).toEqual({ [realpathSync(wt)]: { hasTrustDialogAccepted: true } });
+  expect(readFileSync(join(root, "acme/web/gh-1.sh"), "utf8")).toContain(`--read '${root}/src-web/.git/objects' --`);
   expect(existsSync(join(root, "acme/web/gh-1.codex"))).toBe(true);
 });
+
+const cloneCmd = (base: string, wt: string) => `git -c protocol.file.allow=always -c advice.detachedHead=false clone -q --shared --revision refs/remotes/origin/main -- ${base} ${wt}`;
 
 const jwt = (exp: number) => `h.${Buffer.from(JSON.stringify({ exp: Math.floor(exp / 1000) })).toString("base64url")}.s`;
 const login = (exp: number) => {
@@ -218,14 +232,15 @@ test("seedClaude: a fresh dir with template links, account keys and trust only; 
   expect(logs).toEqual([`dry: seed ${dir} from ${tpl}`, `seed ${dir} from ${tpl}`]);
 });
 
-test("reuses existing worktree dir and existing branch", async () => {
+test("reuses an existing session dir; a branch a legacy worktree left in the base clone carries over", async () => {
   const c = config();
   mkdirSync(join(root, "acme/web/gh-1"), { recursive: true });
   const { tr } = fakeTracker({ ready: [ticket(1), ticket(2)] });
-  const { io, cmds, logs } = fakeIo(noPr);
+  const { io, cmds, logs } = fakeIo((a) => (a[4] === "--verify" ? { out: "abc123\n" } : noPr(a)));
   await pass(c, io, () => tr, "/aw");
   expect(logs.some((l) => l.includes(`reuse ${root}/acme/web/gh-1`))).toBe(true);
-  expect(cmds).toContain(`git -C ${root}/src-web worktree add ${root}/acme/web/gh-2 agent/gh-2`);
+  expect(cmds.filter((x) => x.includes(`${root}/acme/web/gh-1 `) || x.endsWith(`${root}/acme/web/gh-1`)).filter((x) => x.startsWith("git"))).toEqual([]);
+  expect(cmds).toContain(`git -C ${root}/acme/web/gh-2.tmp switch -q -c agent/gh-2 abc123`);
 });
 
 test("in-progress: PR moves to review; missing window comments once", async () => {
@@ -255,14 +270,14 @@ test("parked: no ended-without-PR comment, and a done parked ticket is still cle
   expect(calls).toEqual([]);
   expect(existsSync(join(root, "acme/web/gh-1.ended"))).toBe(false);
   expect(cmds).toContain("tmux kill-window -t @0");
-  expect(cmds.some((x) => x.includes("worktree remove") && x.endsWith("gh-2"))).toBe(true);
+  expect(cmds).toContain(`rm -rf --one-file-system -- ${root}/acme/web/gh-2`);
   expect(existsSync(join(root, "acme/web/gh-2.source"))).toBe(false);
 });
 
-test("done: kills window, removes worktree, files and config dir; keeps them all when the worktree remove fails", async () => {
+test("done: kills window, removes the session clone, files and config dir; keeps them all when the delete fails", async () => {
   const c = config();
   for (const id of ["gh-1", "gh-2", "gh-3"]) {
-    mkdirSync(join(root, "acme/web", id), { recursive: true });
+    mkdirSync(join(root, "acme/web", id, ".git"), { recursive: true });
     for (const ext of [".prompt.md", ".sh", ".ended", ".pr", ".question", ".findings"]) writeFileSync(join(root, "acme/web", id + ext), "");
     writeFileSync(join(root, "acme/web", `${id}.source`), "web\n");
     mkdirSync(join(root, "acme/web", `${id}.claude/projects/p`), { recursive: true });
@@ -273,7 +288,7 @@ test("done: kills window, removes worktree, files and config dir; keeps them all
   const { tr } = fakeTracker({ done: ["gh-1", "gh-2"] });
   const { io, cmds, logs } = fakeIo((a) => {
     if (a[1] === "list-windows") return windowsOut(["acme/web/gh-1"]);
-    if (a[3] === "worktree" && a.at(-1)?.endsWith("gh-2")) return { code: 1 };
+    if (a[0] === "rm" && a.at(-1)?.endsWith("gh-2")) return { code: 1 };
   });
   await pass(c, io, () => tr, "/aw");
   expect(cmds).toContain("tmux kill-window -t @0");
@@ -328,15 +343,15 @@ test("one ticket or source failing does not stop the rest", async () => {
 
 test("dry-run logs side effects and executes none", async () => {
   const c = config();
-  mkdirSync(join(root, "acme/web/gh-5"), { recursive: true });
-  writeFileSync(join(root, "acme/web/gh-5.source"), "web");
+  worktree("gh-5");
   const { tr } = fakeTracker({ ready: [ticket(1)], inProgress: [ticket(2)], done: ["gh-5"] });
   const { io, cmds, logs } = fakeIo((a) => (a[1] === "has-session" ? { code: 1 } : a[1] === "pr" && a.includes("agent/gh-2") ? { out: '[{"url":"https://pr/2","state":"OPEN"}]' } : noPr(a)), true);
   await pass(c, io, () => tr, "/aw");
-  expect(cmds.every((x) => /has-session|list-windows|rev-parse|gh pr list|gh repo view/.test(x))).toBe(true);
+  expect(cmds.every((x) => /has-session|list-windows|rev-parse|remote get-url|gh pr list|gh repo view/.test(x))).toBe(true);
   expect(logs.some((l) => l.includes("dry: tmux new-session -d -s aw"))).toBe(true);
   expect(logs.some((l) => l.startsWith("[web] dry: nono run ") && l.endsWith(`-C ${root}/acme/web/gh-5 status --porcelain --ignore-submodules=none`))).toBe(true);
-  expect(logs.some((l) => l.includes(`dry: ${GIT.join(" ")} -C ${root}/src-web worktree remove --force --force ${root}/acme/web/gh-5`))).toBe(true);
+  expect(logs.some((l) => l.startsWith("[web] dry: nono run ") && l.endsWith(`-C ${root}/acme/web/gh-5 log --format=%h --branches --not --remotes`))).toBe(true);
+  expect(logs).toContain(`[web] dry: rm -rf --one-file-system -- ${root}/acme/web/gh-5`);
   expect(logs.some((l) => l.includes("dry: tmux new-window"))).toBe(true);
   expect(existsSync(join(root, "acme/web/gh-1.prompt.md"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.source"))).toBe(false);
@@ -423,8 +438,8 @@ test("same ticket number in two repos does not collide", async () => {
   const { io, cmds } = fakeIo((a) => (a[4] === "--verify" ? { code: 1 } : noPr(a)));
   await pass(c, io, (s) => (s.name === "gh" ? tr : fakeTracker({}).tr), "/aw");
   expect(calls).toEqual(["claim gh-12", "claim gh-12"]);
-  expect(cmds).toContain(`git -C ${root}/src-web worktree add ${root}/acme/web/gh-12 -b agent/gh-12 origin/main`);
-  expect(cmds).toContain(`git -C ${root}/src-api worktree add ${root}/acme/api/gh-12 -b agent/gh-12 origin/main`);
+  expect(cmds).toContain(cloneCmd(`${root}/src-web`, `${root}/acme/web/gh-12.tmp`));
+  expect(cmds).toContain(cloneCmd(`${root}/src-api`, `${root}/acme/api/gh-12.tmp`));
   expect(cmds.filter((x) => x.includes("new-window")).map((x) => x.split(" ")[6])).toEqual(["acme/web/gh-12", "acme/api/gh-12"]);
   expect(readFileSync(join(root, "acme/api/gh-12.prompt.md"), "utf8")).toContain("acme/api");
   expect(readFileSync(join(root, "acme/web/gh-12.prompt.md"), "utf8")).toContain("acme/web");
@@ -456,7 +471,7 @@ test("priority: ready tickets from all sources start most urgent first, before t
 test("after a restart cleanup and findPr use the repo and source recorded next to the worktree", async () => {
   const c = two();
   for (const [dir, id, source] of [["acme/web", "gh-5", "gh"], ["acme/api", "gh-5", "gh"], ["acme/api", "ENG-7", "lin"], ["acme/web", "gh-6", "gone"]]) {
-    mkdirSync(join(root, dir!, id!), { recursive: true });
+    mkdirSync(join(root, dir!, id!, ".git"), { recursive: true });
     writeFileSync(join(root, dir!, `${id}.source`), source!);
   }
   const gh = fakeTracker({ done: ["acme/api#gh-5"], inProgress: [ticket(5, "acme/api")] });
@@ -465,11 +480,11 @@ test("after a restart cleanup and findPr use the repo and source recorded next t
   const { io, cmds, logs } = fakeIo((a) => {
     if (a[1] === "list-windows") return windowsOut(names);
     if (a[1] === "kill-window") names = names.filter((_, i) => `@${i}` !== a.at(-1));
-    if (a[4] === "remove") rmSync(a.at(-1)!, { recursive: true });
+    if (a[0] === "rm") rmSync(a.at(-1)!, { recursive: true });
     return noPr(a);
   });
   await pass(c, io, (s) => (s.name === "gh" ? gh.tr : lin.tr), "/aw");
-  expect(cmds.filter((x) => /worktree remove|kill-window/.test(x))).toEqual(["tmux kill-window -t @1", `git -C ${root}/src-api worktree remove --force --force ${root}/acme/api/gh-5`]);
+  expect(cmds.filter((x) => /^rm |kill-window/.test(x))).toEqual(["tmux kill-window -t @1", `rm -rf --one-file-system -- ${root}/acme/api/gh-5`]);
   expect(existsSync(join(root, "acme/web/gh-5.source"))).toBe(true);
   expect(logs.some((l) => l.includes(`acme/web/gh-6: source "gone" in gh-6.source is not configured; left alone`))).toBe(true);
   expect(cmds).toContain("gh pr list --repo acme/api --head agent/gh-5 --state all --json url,state");
@@ -711,7 +726,7 @@ test("cleanup never runs git's own dirty check, which follows a planted commondi
     await pass(config({ repos: [{ name: "acme/web", path: clone }] }), io, () => tr, "/aw");
     return logs;
   };
-  expect((await run("?? f\n")).filter((l) => l.includes("has uncommitted or untracked files"))).toHaveLength(2);
+  expect((await run("?? f\n")).filter((l) => l.includes("has uncommitted, untracked or unpushed work"))).toHaveLength(2);
   expect([existsSync(a), existsSync(b), existsSync(marker), existsSync(`${a}.claude`)]).toEqual([true, true, false, true]);
   for (const wt of [a, b]) {
     expect(sh("git", "-C", clone, "worktree", "remove", wt).exitCode).not.toBe(0);
@@ -746,7 +761,7 @@ test("cleanup removes a done worktree despite a planted lock file, dir, FIFO or 
   await pass(config({ repos: [{ name: "acme/web", path: clone }] }), io, () => tr, "/aw");
   expect(Object.keys(kinds).filter((id) => existsSync(join(root, "acme/web", id)))).toEqual(["gh-5"]);
   expect(readdirSync(join(clone, ".git/worktrees"))).toEqual(["gh-5"]);
-  expect(logs.filter((l) => l.includes("failed"))).toEqual([expect.stringContaining("gh-5 has uncommitted or untracked files")]);
+  expect(logs.filter((l) => l.includes("failed"))).toEqual([expect.stringContaining("gh-5 has uncommitted, untracked or unpushed work")]);
   expect(readFileSync(target, "utf8")).toBe("keep");
 });
 
@@ -878,4 +893,80 @@ test("liveStates raw keeps a stale working that the resolved state reports as un
   const r = { agent: "codex" } as Repo;
   expect(await live(r, root, "a", 20 * 60_000)).toBe("unknown");
   expect(await live(r, root, "a", 20 * 60_000, true)).toBe("working");
+});
+
+test("a session gets its own clone sharing the base's objects; cleanup deletes it without git or symlinks, unless work is unpushed", async () => {
+  const origin = join(root, "origin.git");
+  const base = join(root, "src-web");
+  const sh = (...a: string[]) => Bun.spawnSync(a, { stdout: "pipe", stderr: "pipe" });
+  const out = (...a: string[]) => sh(...a).stdout.toString().trim();
+  const commit = (dir: string, m: string) => expect(sh("git", "-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", m).exitCode).toBe(0);
+  expect(sh("git", "init", "-q", "--bare", "-b", "main", origin).exitCode).toBe(0);
+  expect(sh("git", "clone", "-q", origin, base).exitCode).toBe(0);
+  commit(base, "i");
+  expect(sh("git", "-C", base, "push", "-q", "origin", "HEAD:main").exitCode).toBe(0);
+  expect(sh("git", "-C", base, "branch", "agent/gh-2").exitCode).toBe(0);
+  expect(sh("git", "-C", base, "switch", "-q", "agent/gh-2").exitCode).toBe(0);
+  commit(base, "legacy");
+  const legacy = out("git", "-C", base, "rev-parse", "agent/gh-2");
+  const baseRefs = () => out("git", "-C", base, "for-each-ref");
+  const real = (x: string[]) => {
+    const argv = x[0] === "nono" ? x.slice(x.indexOf("--") + 1) : x[0] === "git" ? [...GIT, "-c", "protocol.file.allow=always", ...x.slice(1)] : x;
+    const r = sh(...argv);
+    return { code: r.exitCode, out: r.stdout.toString() };
+  };
+  const run = async (t: ReturnType<typeof fakeTracker>) => {
+    const { io, cmds, logs } = fakeIo((x) => (x[0] === "git" || x[0] === "nono" || x[0] === "rm" ? real(x) : noPr(x)));
+    await pass(config({ maxConcurrent: 4 }), io, () => t.tr, "/aw");
+    return { cmds, logs };
+  };
+  const refsBefore = baseRefs();
+  await run(fakeTracker({ ready: [ticket(1), ticket(2)] }));
+  const [wt1, wt2] = [1, 2].map((n) => join(root, `acme/web/gh-${n}`));
+  for (const wt of [wt1, wt2]) {
+    expect(lstatSync(join(wt, ".git")).isDirectory()).toBe(true);
+    expect(readFileSync(join(wt, ".git/objects/info/alternates"), "utf8").trim()).toBe(join(base, ".git/objects"));
+    expect(out("git", "-C", wt, "remote", "get-url", "origin")).toBe(origin);
+    expect(out("git", "-C", wt, "rev-parse", "origin/main")).toBe(out("git", "-C", base, "rev-parse", "origin/main"));
+  }
+  expect(out("git", "-C", wt1, "for-each-ref", "--format=%(refname)")).toBe("refs/heads/agent/gh-1\nrefs/remotes/origin/main");
+  expect(out("git", "-C", wt2, "rev-parse", "HEAD")).toBe(legacy);
+  expect(baseRefs()).toBe(refsBefore);
+  expect(out("git", "-C", base, "config", "gc.pruneExpire")).toBe("never");
+  writeFileSync(join(root, "target"), "keep");
+  symlinkSync(join(root, "target"), join(wt1, "link"));
+  writeFileSync(join(wt1, ".git/info/exclude"), "link\n");
+  worktree("gh-3");
+  rmSync(join(root, "acme/web/gh-3/.git"), { recursive: true });
+  const { logs } = await run(fakeTracker({ done: ["gh-1", "gh-2", "gh-3"] }));
+  expect([existsSync(wt1), existsSync(wt2), readFileSync(join(root, "target"), "utf8")]).toEqual([false, true, "keep"]);
+  expect(logs.filter((l) => l.includes("left in place"))).toEqual([expect.stringContaining("gh-3/.git is neither a file nor a directory"), expect.stringContaining(`${wt2} has uncommitted, untracked or unpushed work`)]);
+  expect(sh("git", "-C", wt2, "push", "-q", "origin", "agent/gh-2").exitCode).toBe(0);
+  await run(fakeTracker({ done: ["gh-2"] }));
+  expect(existsSync(wt2)).toBe(false);
+  expect(baseRefs()).toBe(refsBefore);
+});
+
+test("a legacy worktree still in progress restarts with its old grants and trust on the base clone", async () => {
+  const base = join(root, "src-web");
+  const wt = join(root, "acme/web/gh-1");
+  const sh = (...a: string[]) => Bun.spawnSync(a, { stdout: "pipe", stderr: "pipe" }).exitCode;
+  expect(sh("git", "init", "-q", base)).toBe(0);
+  expect(sh("git", "-C", base, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "i")).toBe(0);
+  expect(sh(...GIT, "-C", base, "worktree", "add", "-q", wt, "-b", "agent/gh-1")).toBe(0);
+  const { tr } = fakeTracker({ ready: [ticket(1)] });
+  const { io, cmds } = fakeIo(noPr);
+  await pass(config(), io, () => tr, "/aw");
+  expect(cmds.some((c) => / clone |switch/.test(c))).toBe(false);
+  expect(readFileSync(join(root, "acme/web/gh-1.sh"), "utf8")).toContain(`--read '${base}/.git' --allow '${base}/.git/objects' --allow '${base}/.git/refs' --allow '${base}/.git/logs' --allow '${base}/.git/worktrees/gh-1' --`);
+  expect(JSON.parse(readFileSync(join(root, "acme/web/gh-1.claude/.claude.json"), "utf8")).projects).toEqual({ [realpathSync(base)]: { hasTrustDialogAccepted: true } });
+});
+
+test("a session clone that fails half-way is removed, not reused next poll", async () => {
+  const { tr, calls } = fakeTracker({ ready: [ticket(1)] });
+  const { io, logs } = fakeIo((a) => (a.includes("switch") ? { code: 1 } : noPr(a)));
+  await pass(config(), io, () => tr, "/aw");
+  expect(calls).toEqual([]);
+  expect(logs.some((l) => l.includes("start gh-1 failed"))).toBe(true);
+  expect([existsSync(join(root, "acme/web/gh-1")), existsSync(join(root, "acme/web/gh-1.tmp"))]).toEqual([false, false]);
 });

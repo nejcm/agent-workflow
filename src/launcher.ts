@@ -36,9 +36,10 @@ const cgroupOf = (pid: string) => {
 
 /** Stops this workspace's scopes that hold no pane of its tmux session; must run before any start this pass. */
 export async function sweepScopes(cfg: Config, io: Io, cgroup = cgroupOf) {
+  // Units first: a scope listed already holds its pane's pid, so a session starting meanwhile is never taken for an orphan.
+  const out = await read(io, ["systemctl", "--user", "list-units", "--type=scope", "--plain", "--no-legend", `${scopePrefix(cfg)}:*`]);
   const pids = await read(io, ["tmux", "list-panes", "-s", "-t", `=${cfg.tmuxSession}`, "-F", "#{pane_pid}"]);
   const live = new Set(pids.split("\n").filter(Boolean).map((pid) => /\/(aw-[^/]+\.scope)$/m.exec(cgroup(pid))?.[1]));
-  const out = await read(io, ["systemctl", "--user", "list-units", "--type=scope", "--plain", "--no-legend", `${scopePrefix(cfg)}:*`]);
   for (const unit of out.split("\n").map((l) => l.trim().split(/\s+/)[0])) if (unit && !live.has(unit)) await write(io, ["systemctl", "--user", "kill", "--signal=KILL", unit]);
 }
 

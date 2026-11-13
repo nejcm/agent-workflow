@@ -13,6 +13,9 @@
       "mise_manager",
       "bun_runtime",
       "node_runtime"
+    ],
+    "exclude": [
+      "system_write_linux"
     ]
   },
   "linux": {
@@ -22,6 +25,17 @@
     "access": "none"
   },
   "filesystem": {
+    "write": [
+      "/dev/null",
+      "/dev/zero",
+      "/dev/full",
+      "/dev/tty",
+      "/dev/stdout",
+      "/dev/stderr",
+      "/dev/fd",
+      "/dev/pts",
+      "/proc/self/fd"
+    ],
     "read": [
       "$HOME/.claude-aw/plugins",
       "$HOME/.claude/skills",
@@ -58,6 +72,8 @@
       "LC_*",
       "TZ",
       "TMPDIR",
+      "TMP",
+      "TEMP",
       "XDG_RUNTIME_DIR",
       "XDG_CONFIG_HOME",
       "XDG_DATA_HOME",

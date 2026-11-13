@@ -20,9 +20,10 @@ test("render is single-pass so ticket text cannot expand placeholders", () => {
 test("launcher: claude under nono, token read on the host, never written; only a legacy worktree writes the shared clone", () => {
   const c = config();
   const s = launcher(web(c), "/ws/web/gh-1", "/ws/web/gh-1.prompt.md", "/aw", `${root}/src-web/.git/worktrees/gh-1`);
-  expect(s).toContain(`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-aw/oauth-token")" || exit 1\nexport CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/web/gh-1'.claude CODEX_HOME='/ws/web/gh-1'.codex CLAUDE_CODE_TMPDIR='/ws/web/gh-1'.claude/tmp`);
+  expect(s).toContain(`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-aw/oauth-token")" || exit 1\nexport CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/web/gh-1'.claude CODEX_HOME='/ws/web/gh-1'.codex CLAUDE_CODE_TMPDIR='/ws/web/gh-1'.tmpdir\n`);
+  expect(s).toContain(`unset LINEAR_API_KEY\nexport TMPDIR='/ws/web/gh-1.tmpdir' TMP='/ws/web/gh-1.tmpdir' TEMP='/ws/web/gh-1.tmpdir'\n`);
   expect(s).toContain("--no-rollback-prompt");
-  expect(s).toContain(`exec nono run --no-rollback-prompt --profile '/aw/nono/aw-claude.json' --allow '/ws/web/gh-1' --allow-unix-socket-subtree-bind '/ws/web/gh-1' --allow '/ws/web/gh-1.claude' --allow '/ws/web/gh-1.codex' --read '${root}/src-web/.git' --allow '${root}/src-web/.git/objects' --allow '${root}/src-web/.git/refs' --allow '${root}/src-web/.git/logs' --allow '${root}/src-web/.git/worktrees/gh-1' -- claude --permission-mode`);
+  expect(s).toContain(`exec nono run --no-rollback-prompt --profile '/aw/nono/aw-claude.json' --allow '/ws/web/gh-1' --allow-unix-socket-subtree-bind '/ws/web/gh-1' --allow '/ws/web/gh-1.tmpdir' --allow-unix-socket-subtree-bind '/ws/web/gh-1.tmpdir' --allow '/ws/web/gh-1.claude' --allow '/ws/web/gh-1.codex' --read '${root}/src-web/.git' --allow '${root}/src-web/.git/objects' --allow '${root}/src-web/.git/refs' --allow '${root}/src-web/.git/logs' --allow '${root}/src-web/.git/worktrees/gh-1' -- claude --permission-mode`);
   expect(s).toContain(`--permission-mode bypassPermissions "$(cat '/ws/web/gh-1.prompt.md')"`);
   expect(launcher(web(c), "/ws/web/gh-1", "/p", "/aw")).toContain(`--allow '/ws/web/gh-1.codex' --read '${root}/src-web/.git/objects' -- claude`);
 });
@@ -39,11 +40,12 @@ test("launcher scripts are byte-for-byte stable for each agent, with and without
   const head = String.raw`#!/usr/bin/env bash
 cd '/ws/it'\''s' || exit 1
 unset LINEAR_API_KEY
+export TMPDIR='/ws/it'\''s.tmpdir' TMP='/ws/it'\''s.tmpdir' TEMP='/ws/it'\''s.tmpdir'
 `;
   const claudeEnv = String.raw`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-aw/oauth-token")" || exit 1
-export CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CODEX_HOME='/ws/it'\''s'.codex CLAUDE_CODE_TMPDIR='/ws/it'\''s'.claude/tmp; mkdir -p "$CLAUDE_CODE_TMPDIR"
+export CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CODEX_HOME='/ws/it'\''s'.codex CLAUDE_CODE_TMPDIR='/ws/it'\''s'.tmpdir
 `;
-  const nono = (a: string, own = "") => String.raw`nono run --no-rollback-prompt --profile '/aw/nono/aw-${a}.json' --allow '/ws/it'\''s' --allow-unix-socket-subtree-bind '/ws/it'\''s' ${own}--read '/src/web/.git/objects' -- `;
+  const nono = (a: string, own = "") => String.raw`nono run --no-rollback-prompt --profile '/aw/nono/aw-${a}.json' --allow '/ws/it'\''s' --allow-unix-socket-subtree-bind '/ws/it'\''s' --allow '/ws/it'\''s.tmpdir' --allow-unix-socket-subtree-bind '/ws/it'\''s.tmpdir' ${own}--read '/src/web/.git/objects' -- `;
   const claude = String.raw`claude --permission-mode bypassPermissions "$(cat '/ws/p.md')"
 `;
   const codex = (d: string) => String.raw`codex ${d}--dangerously-bypass-hook-trust --sandbox danger-full-access --ask-for-approval never -C '/ws/it'\''s' "$(cat '/ws/p.md')"
@@ -62,6 +64,8 @@ export CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CODEX_HOME
 test("starts ready tickets up to maxConcurrent", async () => {
   const c = config({ maxConcurrent: 2 });
   const { tr, calls } = fakeTracker({ ready: [ticket(1), ticket(2), ticket(3)] });
+  mkdirSync(join(root, "acme/web/gh-1.tmpdir"), { recursive: true });
+  writeFileSync(join(root, "acme/web/gh-1.tmpdir/stale"), "");
   const { io, cmds } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(["acme/web/gh-9"]) : a[4] === "--verify" ? { code: 1 } : noPr(a)));
   await pass(c, io, () => tr, "/aw");
   expect(calls).toEqual(["claim gh-1"]);
@@ -84,6 +88,8 @@ test("starts ready tickets up to maxConcurrent", async () => {
   expect(seeded.projects).toEqual({ [realpathSync(wt)]: { hasTrustDialogAccepted: true } });
   expect(readFileSync(join(root, "acme/web/gh-1.sh"), "utf8")).toContain(`--read '${root}/src-web/.git/objects' --`);
   expect(existsSync(join(root, "acme/web/gh-1.codex"))).toBe(true);
+  expect(readdirSync(`${wt}.tmpdir`)).toEqual([]);
+  expect(statSync(`${wt}.tmpdir`).mode & 0o777).toBe(0o700);
 });
 
 const cloneCmd = (base: string, wt: string) => `git -c protocol.file.allow=always -c advice.detachedHead=false clone -q --shared --revision refs/remotes/origin/main -- ${base} ${wt}`;
@@ -309,6 +315,7 @@ test("done: kills window, removes the session clone, files and config dir; keeps
     writeFileSync(join(root, "acme/web", `${id}.source`), "web\n");
     mkdirSync(join(root, "acme/web", `${id}.claude/projects/p`), { recursive: true });
     mkdirSync(join(root, "acme/web", `${id}.codex/sessions`), { recursive: true });
+    mkdirSync(join(root, "acme/web", `${id}.tmpdir/s`), { recursive: true });
     symlinkSync(join(root, "src-web"), join(root, "acme/web", `${id}.claude/link`));
   }
   mkdirSync(join(root, "src-web"), { recursive: true });
@@ -327,7 +334,9 @@ test("done: kills window, removes the session clone, files and config dir; keeps
   expect(existsSync(join(root, "acme/web/gh-1.findings"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.claude"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.codex"))).toBe(false);
+  expect(existsSync(join(root, "acme/web/gh-1.tmpdir"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-2.codex"))).toBe(true);
+  expect(existsSync(join(root, "acme/web/gh-2.tmpdir"))).toBe(true);
   expect(existsSync(join(root, "src-web"))).toBe(true);
   expect(existsSync(join(root, "acme/web/gh-3.claude"))).toBe(true);
   expect(existsSync(join(root, "acme/web/gh-2.claude"))).toBe(true);

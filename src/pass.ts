@@ -218,7 +218,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
         if (w) await write(x.io, ["tmux", "kill-window", "-t", w]);
         wins.delete(winName(r.key, id));
         if (end === "canceled") {
-          if (!w) return;
+          if (existsSync(join(dir, `${id}.ended`))) return;
           put(x.io, join(dir, `${id}.ended`), new Date().toISOString());
           return x.io.log(`stopped ${r.key}/${id}: ticket canceled; clone and files kept`);
         }

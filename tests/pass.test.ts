@@ -351,13 +351,14 @@ test("canceled: kills the window once, keeps the clone and files, posts nothing;
   expect(cmds.filter((x) => x.includes("kill-window"))).toEqual(["tmux kill-window -t @0"]);
   expect(cmds.some((x) => x.startsWith("rm "))).toBe(false);
   for (const f of ["gh-1", "gh-1.claude", "gh-1.sh", "gh-1.source", "gh-1.ended", "gh-2", "gh-2.source"]) expect(existsSync(join(root, "acme/web", f))).toBe(true);
-  expect(existsSync(join(root, "acme/web/gh-2.ended"))).toBe(false);
-  expect(logs.filter((l) => l.includes("stopped"))).toEqual(["[web] stopped acme/web/gh-1: ticket canceled; clone and files kept"]);
+  // gh-2's session had already exited: still marked ended, so a reopen never reads as "ended without a PR".
+  expect(existsSync(join(root, "acme/web/gh-2.ended"))).toBe(true);
+  expect(logs.filter((l) => l.includes("stopped")).sort()).toEqual(["[web] stopped acme/web/gh-1: ticket canceled; clone and files kept", "[web] stopped acme/web/gh-2: ticket canceled; clone and files kept"]);
   expect(calls).toEqual([]);
   wins = [];
   await pass(c, io, () => tr, "/aw");
   expect(cmds.filter((x) => x.includes("kill-window"))).toHaveLength(1);
-  expect(logs.filter((l) => l.includes("stopped"))).toHaveLength(1);
+  expect(logs.filter((l) => l.includes("stopped"))).toHaveLength(2);
   expect(calls).toEqual([]);
   s.canceled = [];
   s.done = ["gh-1"];

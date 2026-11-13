@@ -77,7 +77,7 @@ export function linear(l: Source, host: string, io: Io, defaultHost = false): Tr
     listInReview: () => listMine(l.inReview, [l.readyLabel]),
     async closed(id) {
       const st = (await gql(`query($id: String!) { issue(id: $id) { state { name type } } }`, { id })).issue?.state;
-      return st?.type === "canceled" ? "canceled" : l.done.includes(st?.name) ? "done" : undefined;
+      return st?.type === "canceled" || st?.type === "duplicate" ? "canceled" : l.done.includes(st?.name) ? "done" : undefined;
     },
     async claim(t) {
       await move(t.ref, l.inProgress);

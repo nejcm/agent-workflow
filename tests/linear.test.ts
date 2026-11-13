@@ -228,6 +228,7 @@ test("linear adapter: a canceled-type state is canceled whatever its name, a don
   const cases: [object | null, string | undefined][] = [
     [{ name: "Canceled", type: "canceled" }, "canceled"],
     [{ name: "Won't do", type: "canceled" }, "canceled"],
+    [{ name: "Duplicate", type: "duplicate" }, "canceled"],
     [{ name: "Done", type: "completed" }, "done"],
     [{ name: "In Progress", type: "started" }, undefined],
     [null, undefined],

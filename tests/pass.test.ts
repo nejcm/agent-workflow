@@ -674,3 +674,8 @@ test("endedNotice caps to the tail, strips escapes and controls, and outfences a
   expect(pickAnswer([c(`aw: ${breakout}`)], 0, ["op"])).toBeUndefined();
   expect(pickAnswer([c(breakout)], 0, ["op"])).toBeDefined();
 });
+
+test("endedNotice keeps indentation and inner spacing but still strips escapes, controls and bidi", () => {
+  const say = "\n  \n  steps:\n    - a  b\n\tx\x1b[31m y\x07z \n  \u202eq\u2066r  \n\n";
+  expect(endedNotice(say)).toBe("session ended without a PR. Last message:\n\n```\n  steps:\n    - a  b\n x y z\n   q r\n```");
+});

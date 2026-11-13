@@ -134,8 +134,8 @@ export function lastSay(wt: string, since = 0) {
     const ls = b.toString("utf8", nl + 1).split("\n");
     for (let i = ls.length - 1; i >= 0; i--)
       try {
-        const t = sayText(JSON.parse(ls[i]!)).trim();
-        if (t) return t;
+        const t = sayText(JSON.parse(ls[i]!));
+        if (t.trim()) return t;
       } catch {}
   });
 }

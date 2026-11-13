@@ -10,7 +10,7 @@ import { syncPhases } from "./phases";
 import { deliverAnswer, liveStates, syncQuestion } from "./question";
 import { lastSay } from "./tail";
 import type { Config, Io, Repo, Source, Ticket, Tracker } from "./types";
-import { AW_DIR, clean, diskRepos, GIT, hasLabel, mtime, put, remove, SAFE_ID, subdirs, write } from "./util";
+import { AW_DIR, diskRepos, GIT, hasLabel, mtime, put, remove, SAFE_ID, strip, subdirs, write } from "./util";
 
 const sourceOf = (dir: string, id: string) => {
   const f = join(dir, `${id}.source`);
@@ -103,7 +103,7 @@ const MAX_SAY = 1500;
 
 /** The ended-without-PR comment; the session's last message is capped, sanitized and fenced so it cannot close the fence. */
 export function endedNotice(say: string | undefined) {
-  const cps = [...(say ?? "").split("\n").map((l) => clean(l, Infinity)).join("\n").trim()];
+  const cps = [...(say ?? "").split("\n").map((l) => strip(l).trimEnd()).join("\n").replace(/^\s*\n/, "").trimEnd()];
   if (!cps.length) return "session ended without a PR";
   const text = (cps.length > MAX_SAY ? "…" : "") + cps.slice(-MAX_SAY).join("");
   const fence = "`".repeat(Math.max(3, ...(text.match(/`+/g) ?? []).map((r) => r.length + 1)));

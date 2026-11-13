@@ -61,6 +61,7 @@ export function parseConfig(raw: any, base: string): Config {
       sandbox: v.sandbox,
       testCmd: v.testCmd,
       prompt: expand(str(v.prompt) ? v.prompt : join(AW_DIR, "prompts/default.md"), base),
+      planStep: v.planStep === undefined ? "Plan and implement the ticket." : v.planStep,
       maxConcurrent: v.maxConcurrent,
       autoMerge: v.autoMerge === undefined ? "off" : v.autoMerge,
       criticalPaths: v.criticalPaths === undefined ? [] : v.criticalPaths,
@@ -70,6 +71,7 @@ export function parseConfig(raw: any, base: string): Config {
     check(["claude", "codex"].includes(r.agent), `${at}.agent: "claude" | "codex" (here or in defaults)`);
     check(["nono", "none"].includes(r.sandbox), `${at}.sandbox: "nono" | "none" (here or in defaults)`);
     check(str(r.testCmd), `${at}.testCmd: required (here or in defaults)`);
+    check(str(r.planStep), `${at}.planStep: non-empty string`);
     check(r.maxConcurrent === undefined || posInt(r.maxConcurrent), `${at}.maxConcurrent: positive integer`);
     check(existsSync(r.prompt), `${at}.prompt: ${r.prompt} not found`);
     check(["off", "intelligent", "all"].includes(r.autoMerge), `${at}.autoMerge: "off" | "intelligent" | "all"`);

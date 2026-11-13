@@ -6,6 +6,7 @@ export interface Repo {
   sandbox: "nono" | "none";
   testCmd: string;
   prompt: string;
+  planStep: string;
   maxConcurrent?: number;
   autoMerge: AutoMerge;
   criticalPaths: string[];

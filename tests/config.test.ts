@@ -81,3 +81,9 @@ test("config: feedbackAuthors defaults to [], from defaults or per repo, validat
   expect(c.repos["acme/api"]!.feedbackAuthors).toEqual(["octocat", "a@b.c"]);
   for (const v of ["octocat", [1], [""], {}]) expect(() => config({ repos: [{ name: "acme/web", feedbackAuthors: v }] })).toThrow(`repos[0] (acme/web).feedbackAuthors: array of non-empty strings`);
 });
+
+test("config: planStep defaults to a plain instruction and must be non-empty", () => {
+  expect(config({}).repos["acme/web"].planStep).toBe("Plan and implement the ticket.");
+  expect(config({ defaults: { agent: "claude", sandbox: "nono", testCmd: "t", planStep: "Use X." } }).repos["acme/web"].planStep).toBe("Use X.");
+  expect(() => config({ repos: [{ name: "acme/web", planStep: "" }] })).toThrow(".planStep: non-empty string");
+});

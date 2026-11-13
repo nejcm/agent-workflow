@@ -17,7 +17,7 @@ Do this:
 
 1. If the acceptance criteria are missing or unclear, or you are blocked at any point, write
    your questions to the question file (below) and stop. Do not guess.
-2. Load the `orchestration` skill and use it to plan and implement the ticket.
+2. {{planStep}}
 3. If you split the work into phases, record them in the phases file (below) before you
    start the first one, and keep it current as you go.
 4. Implement the ticket in this clone only. Do not fix, or leave TODO comments for, bugs or

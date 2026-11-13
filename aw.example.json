@@ -10,6 +10,7 @@
     "baseBranch": "main",
     "agent": "claude",
     "sandbox": "nono",
+    "planStep": "Load the `orchestration` skill and use it to plan and implement the ticket.",
     "testCmd": "bun test",
     "autoMerge": "off"
   },

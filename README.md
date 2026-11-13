@@ -51,7 +51,7 @@ ticket canceled          ──► kill session, keep the session clone and its 
 
 ### Phases
 
-The default prompt has the agent plan with the `orchestration` skill. It forbids any attribution (`Co-Authored-By`, "Generated with ...", emoji signatures) in commits, PR titles/bodies and ticket comments. When it splits the work into phases it writes them to `.aw/phases.json` in its worktree (git-ignored via `.aw/.gitignore`): an array of `{ key, title, body, status }`, status `todo` → `in-progress` → `done`. The agent never talks to the tracker; on every poll, for each of its in-progress and in-review tickets, `aw` mirrors the file:
+The default prompt has the agent plan as instructed by `planStep` (default: "Plan and implement the ticket."). It forbids any attribution (`Co-Authored-By`, "Generated with ...", emoji signatures) in commits, PR titles/bodies and ticket comments. When it splits the work into phases it writes them to `.aw/phases.json` in its worktree (git-ignored via `.aw/.gitignore`): an array of `{ key, title, body, status }`, status `todo` → `in-progress` → `done`. The agent never talks to the tracker; on every poll, for each of its in-progress and in-review tickets, `aw` mirrors the file:
 
 - a new `key` → a sub-ticket of the parent titled `<ID>: <title>`, with no labels (GitHub: `gh issue create --parent`; Linear: child issue in `Todo`, same team);
 - `in-progress` → the `in-progress` label / `In Progress` state;
@@ -98,7 +98,7 @@ The same are available as `bun run setup owner/repo`, `bun run start`, `bun run 
 
 ### 1. Requirements
 
-Linux. On `PATH`: `bun`, `git`, `gh` (logged in: `gh auth status`), `tmux`, GNU `timeout` (coreutils; bounds every command `aw` runs), a systemd user manager (`systemd-run --user`, `systemctl --user`; each session runs in its own scope), and `claude` and/or `codex`. The default prompt needs the `orchestration` skill installed globally in `~/.claude/skills` (`scripts/setup.sh` links that dir into both agent config dirs). For sandboxed repos, install nono:
+Linux. On `PATH`: `bun`, `git`, `gh` (logged in: `gh auth status`), `tmux`, GNU `timeout` (coreutils; bounds every command `aw` runs), a systemd user manager (`systemd-run --user`, `systemctl --user`; each session runs in its own scope), and `claude` and/or `codex`. A skill named in `planStep` must be installed globally in `~/.claude/skills` (`scripts/setup.sh` links that dir into both agent config dirs). For sandboxed repos, install nono:
 
 ```bash
 curl -fsSL https://nono.sh/install.sh | sh
@@ -286,6 +286,7 @@ Same steps on the VM (Tailscale for access), with `"sandbox": "none"` in `defaul
 | `defaults` / `repos[].baseBranch` | `main` | |
 | `defaults` / `repos[].agent` | required in one of them | `claude` \| `codex` |
 | `defaults` / `repos[].sandbox` | required in one of them | `nono` \| `none` |
+| `defaults` / `repos[].planStep` | `Plan and implement the ticket.` | step 2 of the default prompt, e.g. ``Load the `orchestration` skill and use it to plan and implement the ticket.`` |
 | `defaults` / `repos[].testCmd` | required in one of them | the agent must pass it before opening a PR |
 | `defaults` / `repos[].maxConcurrent` | unlimited | sessions per repo, within the global `maxConcurrent` |
 | `defaults` / `repos[].prompt` | `prompts/default.md` | template, relative to the config file |
@@ -301,7 +302,7 @@ Same steps on the VM (Tailscale for access), with `"sandbox": "none"` in `defaul
 
 A source key its tracker does not use (e.g. `team` on a GitHub source, `inProgressLabel` on a Linear one) is rejected at startup.
 
-Prompt placeholders: `{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{testCmd}} {{repo}}`; `base`, `testCmd` and `repo` come from the ticket's repo settings.
+Prompt placeholders: `{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{testCmd}} {{repo}} {{planStep}}`; `base`, `testCmd` and `repo` come from the ticket's repo settings.
 
 ### Upgrading from the `repos` map
 

@@ -1,5 +1,4 @@
 #!/usr/bin/env bun
-import { dlopen } from "bun:ffi";
 import { mkdirSync, openSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -48,10 +47,9 @@ export const spawnRun: Run = async (argv, cwd, secs = 60) => {
 
 /** Takes a kernel flock on `file` for the process lifetime; false if another process holds it. Released on any exit, SIGKILL included. */
 export function holdLock(file: string) {
-  const { flock } = dlopen("libc.so.6", { flock: { args: ["i32", "i32"], returns: "i32" } }).symbols;
   mkdirSync(dirname(file), { recursive: true });
-  const LOCK_EX_NB = 2 | 4;
-  return flock(openSync(file, "a"), LOCK_EX_NB) === 0;
+  // flock locks the open file description, which this process keeps open (close-on-exec) after the child exits.
+  return Bun.spawnSync(["flock", "-n", "3"], { stdio: ["ignore", "ignore", "ignore", openSync(file, "a")] }).exitCode === 0;
 }
 
 const USAGE = `usage: bun aw.ts <command> [--config aw.json]

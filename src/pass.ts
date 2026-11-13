@@ -208,7 +208,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
     }),
   );
   const wins = await windows(cfg, io);
-  await step(io, "sweep scopes", () => sweepScopes(cfg, io, wins));
+  await step(io, "sweep scopes", () => sweepScopes(cfg, io));
 
   for (const r of Object.values(cfg.repos)) {
     const dir = repoDir(cfg, r.key);
@@ -224,7 +224,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
         if (!end) return;
         const w = wins.get(winName(r.key, id));
         if (end === "canceled" && !w && existsSync(join(dir, `${id}.ended`))) return;
-        await stopScope(x.io, r.key, id);
+        await stopScope(cfg, x.io, r.key, id);
         if (w) await write(x.io, ["tmux", "kill-window", "-t", w]);
         wins.delete(winName(r.key, id));
         if (end === "canceled") {

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { AGENTS, CLAUDE_TOKEN, claudeHome, codexHome, tmpHome } from "./agents";
@@ -14,26 +15,34 @@ const q = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 export const nonoRun = (profile: string, awDir: string, grants: [string, string][], quote = (s: string) => s) =>
   ["nono", "run", "--no-rollback-prompt", "--profile", quote(join(awDir, "nono", `${profile}.json`)), ...grants.flatMap(([flag, path]) => [flag, quote(path)]), "--"];
 
-/** The session's systemd user scope; ':' is in no repo key or ticket id, so names never collide. */
-export const scopeUnit = (key: string, id: string) => `aw-${key.replace("/", ":")}:${id}.scope`;
+const scopePrefix = (cfg: Config) => `aw-${createHash("sha256").update(cfg.workspaceRoot).digest("hex").slice(0, 8)}`;
+
+/** The session's systemd user scope, prefixed per workspace; ':' is in no repo key or ticket id, so names never collide. */
+export const scopeUnit = (cfg: Config, key: string, id: string) => `${scopePrefix(cfg)}:${key.replace("/", ":")}:${id}.scope`;
 
 /** SIGKILLs the session's scope, setsid'd children included (kill-window leaves them); throws if systemd --user is unreachable. */
-export const stopScope = (io: Io, key: string, id: string) =>
-  write(io, ["systemctl", "--user", "kill", "--signal=KILL", scopeUnit(key, id)]).catch((e) => {
+export const stopScope = (cfg: Config, io: Io, key: string, id: string) =>
+  write(io, ["systemctl", "--user", "kill", "--signal=KILL", scopeUnit(cfg, key, id)]).catch((e) => {
     if (!/ not loaded\.$/.test(e.message)) throw e;
   });
 
-/** Stops every live scope of a configured repo whose window is gone, whatever its ticket's state; `wins` must predate any start this pass. */
-export async function sweepScopes(cfg: Config, io: Io, wins: Map<string, string>) {
-  const out = await read(io, ["systemctl", "--user", "list-units", "--type=scope", "--plain", "--no-legend", "aw-*"]);
-  for (const unit of out.split("\n").map((l) => l.trim().split(/\s+/)[0])) {
-    const m = /^aw-([^:]+):([^:]+):([^:]+)\.scope$/.exec(unit ?? "");
-    if (m && cfg.repos[`${m[1]}/${m[2]}`] && !wins.has(winName(`${m[1]}/${m[2]}`, m[3]!))) await stopScope(io, `${m[1]}/${m[2]}`, m[3]!);
+const cgroupOf = (pid: string) => {
+  try {
+    return readFileSync(`/proc/${pid}/cgroup`, "utf8");
+  } catch {
+    return "";
   }
+};
+
+/** Stops this workspace's scopes that hold no pane of its tmux session; must run before any start this pass. */
+export async function sweepScopes(cfg: Config, io: Io, cgroup = cgroupOf) {
+  const pids = await read(io, ["tmux", "list-panes", "-s", "-t", `=${cfg.tmuxSession}`, "-F", "#{pane_pid}"]);
+  const live = new Set(pids.split("\n").filter(Boolean).map((pid) => /\/(aw-[^/]+\.scope)$/m.exec(cgroup(pid))?.[1]));
+  const out = await read(io, ["systemctl", "--user", "list-units", "--type=scope", "--plain", "--no-legend", `${scopePrefix(cfg)}:*`]);
+  for (const unit of out.split("\n").map((l) => l.trim().split(/\s+/)[0])) if (unit && !live.has(unit)) await write(io, ["systemctl", "--user", "kill", "--signal=KILL", unit]);
 }
 
-// A session clone only reads the base's objects (alternates).
-export function launcher(l: Repo, wt: string, promptFile: string, awDir = AW_DIR) {
+export function launcher(l: Repo, wt: string, promptFile: string, unit: string, awDir = AW_DIR) {
   const prompt = `"$(cat ${q(promptFile)})"`;
   const nono = l.sandbox === "nono";
   const git = join(l.path, ".git");
@@ -45,7 +54,7 @@ export function launcher(l: Repo, wt: string, promptFile: string, awDir = AW_DIR
   // gh exits if it cannot read its config dir; <ID>.gh is never created, so gh runs on defaults plus nono's GH_TOKEN.
   // A private XDG cache: the host's ~/.cache (Claude's claude-cli-nodejs included) stays out of the sandbox.
   const gh = nono ? `export GH_CONFIG_DIR=${q(wt)}.gh XDG_CACHE_HOME=${q(join(tmp, "cache"))}\n` : "";
-  const scope = ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--unit", q(scopeUnit(l.key, basename(wt))), "--"];
+  const scope = ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--unit", q(unit), "--"];
   return `#!/usr/bin/env bash\ncd ${q(wt)} || exit 1\nunset LINEAR_API_KEY\nexport TMPDIR=${q(tmp)} TMP=${q(tmp)} TEMP=${q(tmp)}\n${gh}${env}\nexec ${[...scope, ...wrap, ...cmd].join(" ")}\n`;
 }
 
@@ -196,7 +205,7 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   const token = join(io.home, CLAUDE_TOKEN);
   if (r.agent === "claude" && !existsSync(token)) throw new Error(`${token} is missing: run \`claude setup-token\` and save the token it prints there (chmod 600)`);
   // No window means any scope left under this name is a stale session, still writing the clone it is about to share.
-  await stopScope(io, r.key, t.id);
+  await stopScope(cfg, io, r.key, t.id);
   // Claude sessions run Codex only as a helper, so a missing Codex login does not stop them.
   const login = r.agent === "codex" ? await codexLogin(io) : await codexLogin(io).catch(() => undefined);
   await ensureClone(cfg, io, r);
@@ -220,7 +229,7 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
     inAw(wt, (d) => (rmSync(`${d}/.gitignore`, { force: true }), writeFileSync(`${d}/.gitignore`, "*\n", { flag: "wx" })));
   }
   put(io, promptFile, render(readFileSync(r.prompt, "utf8"), vars));
-  put(io, script, launcher(r, wt, promptFile, awDir), 0o755);
+  put(io, script, launcher(r, wt, promptFile, scopeUnit(cfg, r.key, t.id), awDir), 0o755);
   await write(io, ["tmux", "new-window", "-d", "-t", `=${cfg.tmuxSession}:`, "-n", winName(r.key, t.id), script]);
   // Claimed last so a failed start leaves the ticket ready for the next poll; the open window stops a double start.
   // claim throws only when the label or state change failed, so the ticket is still ready then.
@@ -228,7 +237,7 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
     await tr.claim(t);
   } catch (e) {
     await write(io, ["tmux", "kill-window", "-t", `=${cfg.tmuxSession}:=${winName(r.key, t.id)}`]).catch((k) => io.log(`${t.id}: claim failed and kill-window failed (${k.message}); kill window ${winName(r.key, t.id)} by hand`));
-    await stopScope(io, r.key, t.id).catch((k) => io.log(`${t.id}: claim failed and stopping its scope failed (${k.message}); run systemctl --user kill --signal=KILL ${scopeUnit(r.key, t.id)}`));
+    await stopScope(cfg, io, r.key, t.id).catch((k) => io.log(`${t.id}: claim failed and stopping its scope failed (${k.message}); run systemctl --user kill --signal=KILL ${scopeUnit(cfg, r.key, t.id)}`));
     throw e;
   }
 }

@@ -872,7 +872,7 @@ test("liveStates raw keeps a stale working that the resolved state reports as un
   expect(await live(r, root, "a", 20 * 60_000, true)).toBe("working");
 });
 
-test("a session gets its own clone sharing the base's objects; cleanup deletes it without git or symlinks, unless work, a stash or a tag is unpushed", async () => {
+test("a session gets its own clone sharing the base's objects; cleanup deletes it without git or symlinks, unless work, a stash, a tag or a note is unpushed", async () => {
   const origin = join(root, "origin.git");
   const base = join(root, "src-web");
   const sh = (...a: string[]) => Bun.spawnSync(a, { stdout: "pipe", stderr: "pipe" });
@@ -894,12 +894,12 @@ test("a session gets its own clone sharing the base's objects; cleanup deletes i
   };
   const run = async (t: ReturnType<typeof fakeTracker>) => {
     const { io, cmds, logs } = fakeIo((x) => (x[0] === "git" || x[0] === "nono" || x[0] === "rm" ? real(x) : noPr(x)));
-    await pass(config({ maxConcurrent: 6 }), io, () => t.tr, "/aw");
+    await pass(config({ maxConcurrent: 7 }), io, () => t.tr, "/aw");
     return { cmds, logs };
   };
   const refsBefore = baseRefs();
-  await run(fakeTracker({ ready: [ticket(1), ticket(2), ticket(4), ticket(5), ticket(6)] }));
-  const [wt1, wt2, wt4, wt5, wt6] = [1, 2, 4, 5, 6].map((n) => join(root, `acme/web/gh-${n}`));
+  await run(fakeTracker({ ready: [ticket(1), ticket(2), ticket(4), ticket(5), ticket(6), ticket(7)] }));
+  const [wt1, wt2, wt4, wt5, wt6, wt7] = [1, 2, 4, 5, 6, 7].map((n) => join(root, `acme/web/gh-${n}`));
   for (const wt of [wt1, wt2]) {
     expect(lstatSync(join(wt, ".git")).isDirectory()).toBe(true);
     expect(readFileSync(join(wt, ".git/objects/info/alternates"), "utf8").trim()).toBe(join(base, ".git/objects"));
@@ -907,6 +907,7 @@ test("a session gets its own clone sharing the base's objects; cleanup deletes i
     expect(out("git", "-C", wt, "rev-parse", "origin/main")).toBe(out("git", "-C", base, "rev-parse", "origin/main"));
   }
   expect(out("git", "-C", wt1, "for-each-ref", "--format=%(refname)")).toBe("refs/heads/agent/gh-1\nrefs/remotes/origin/main");
+  expect(out("git", "-C", wt1, "config", "remote.origin.tagOpt")).toBe("--no-tags");
   expect(out("git", "-C", wt2, "rev-parse", "HEAD")).toBe(legacy);
   expect(baseRefs()).toBe(refsBefore);
   expect(out("git", "-C", base, "config", "gc.pruneExpire")).toBe("never");
@@ -918,11 +919,12 @@ test("a session gets its own clone sharing the base's objects; cleanup deletes i
   expect(sh("git", "-C", wt5, "-c", "user.name=t", "-c", "user.email=t@t", "stash", "-q").exitCode).toBe(0);
   expect(out("git", "-C", wt5, "status", "--porcelain")).toBe("");
   expect(sh("git", "-C", wt6, "tag", "v1").exitCode).toBe(0);
+  expect(sh("git", "-C", wt7, "-c", "user.name=t", "-c", "user.email=t@t", "notes", "add", "-m", "n").exitCode).toBe(0);
   worktree("gh-3");
   rmSync(join(root, "acme/web/gh-3/.git"), { recursive: true });
-  const { logs } = await run(fakeTracker({ done: ["gh-1", "gh-2", "gh-3", "gh-4", "gh-5", "gh-6"] }));
-  expect([existsSync(wt1), existsSync(wt2), existsSync(wt4), existsSync(wt5), existsSync(wt6), readFileSync(join(root, "target"), "utf8")]).toEqual([false, true, false, true, true, "keep"]);
-  expect(logs.filter((l) => l.includes("left in place")).sort()).toEqual([expect.stringContaining("gh-2 has uncommitted, untracked or unpushed work"), expect.stringContaining("gh-3/.git is not a directory"), expect.stringContaining("gh-5 has uncommitted"), expect.stringContaining("gh-6 has uncommitted")]);
+  const { logs } = await run(fakeTracker({ done: ["gh-1", "gh-2", "gh-3", "gh-4", "gh-5", "gh-6", "gh-7"] }));
+  expect([existsSync(wt1), existsSync(wt2), existsSync(wt4), existsSync(wt5), existsSync(wt6), existsSync(wt7), readFileSync(join(root, "target"), "utf8")]).toEqual([false, true, false, true, true, true, "keep"]);
+  expect(logs.filter((l) => l.includes("left in place")).sort()).toEqual([expect.stringContaining("gh-2 has uncommitted, untracked or unpushed work"), expect.stringContaining("gh-3/.git is not a directory"), expect.stringContaining("gh-5 has uncommitted"), expect.stringContaining("gh-6 has uncommitted"), expect.stringContaining("gh-7 has uncommitted")]);
   expect(sh("git", "-C", wt2, "push", "-q", "origin", "agent/gh-2").exitCode).toBe(0);
   await run(fakeTracker({ done: ["gh-2"] }));
   expect(existsSync(wt2)).toBe(false);

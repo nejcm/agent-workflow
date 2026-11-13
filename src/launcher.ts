@@ -57,7 +57,7 @@ async function ensureClone(cfg: Config, io: Io, r: Repo) {
 const TEMPLATE = ["settings.json", "CLAUDE.md", "AGENTS.md", "skills", "plugins"];
 const ACCOUNT = ["hasCompletedOnboarding", "lastOnboardingVersion", "oauthAccount", "userID"];
 
-// Fresh per start, so nothing a session left there carries over. Trust goes on the git root: the session clone, or a worktree's main clone.
+// Fresh per start, so nothing a session left there carries over. Trust goes on the session clone.
 export function seedClaude(io: Io, dir: string, root: string) {
   const tpl = join(io.home, ".claude-aw");
   io.log(`${io.dry ? "dry: " : ""}seed ${dir} from ${tpl}`);

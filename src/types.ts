@@ -14,19 +14,29 @@ export interface Repo {
 
 export type AutoMerge = "off" | "intelligent" | "all";
 
-export interface Source {
+interface SourceBase {
   name: string;
-  tracker: "github" | "linear";
   readyLabel: string;
+  needsHumanLabel: string;
+}
+
+export interface GitHubSource extends SourceBase {
+  tracker: "github";
   inProgressLabel: string;
   inReviewLabel: string;
-  needsHumanLabel: string;
+}
+
+export interface LinearSource extends SourceBase {
+  tracker: "linear";
   team: string;
   todo: string;
   inProgress: string;
   inReview: string;
   done: string[];
 }
+
+export type Source = GitHubSource | LinearSource;
+export type Check = (ok: unknown, msg: string) => unknown;
 
 export interface Config {
   host: string;

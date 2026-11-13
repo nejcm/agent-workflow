@@ -15,7 +15,8 @@ test("config: defaults applied and errors listed", () => {
   expect(c.stallMinutes).toBe(30);
   for (const v of [0, 1.5, "30"]) expect(() => config({ stallMinutes: v })).toThrow("stallMinutes: positive integer");
   expect(c.reposRoot).toMatch(/\/agent-repos$/);
-  expect(c.sources[0]).toMatchObject({ readyLabel: "agent", done: ["Done"] });
+  expect(c.sources[0]).toEqual({ name: "web", tracker: "github", readyLabel: "agent", needsHumanLabel: "needs-human", inProgressLabel: "in-progress", inReviewLabel: "in-review" });
+  expect(config({ sources: [src({ tracker: "linear", team: "ENG" })] }).sources[0]).toEqual({ name: "web", tracker: "linear", readyLabel: "agent", needsHumanLabel: "needs-human", team: "ENG", todo: "Todo", inProgress: "In Progress", inReview: "In Review", done: ["Done"] });
   expect(web(c)).toMatchObject({ key: "acme/web", path: join(root, "src-web"), baseBranch: "main", agent: "claude", maxConcurrent: undefined });
   const c2 = config({ reposRoot: "/r", repos: ["acme/web", { name: "acme/api", agent: "codex", testCmd: "make test", maxConcurrent: 1, baseBranch: "dev" }] });
   expect(web(c2).path).toBe("/r/acme/web");
@@ -40,6 +41,10 @@ test("config: defaults applied and errors listed", () => {
   expect(err(raw({ sources: [src({ repos: ["acme/web"] })] }))).toContain(".repos: removed; a GitHub source polls every repo in repos");
   expect(err(raw({ lanes: [] }))).toContain("lanes: replaced by sources");
   expect(err(raw({ sources: [src({ tracker: "linear" })] }))).toMatch(/team/);
+  for (const tracker of ["jira", ["github"], { toString: null }, "toString"]) expect(err(raw({ host: "a b", sources: [src({ tracker })] }))).toContain(`sources[0] (web).tracker: "github" | "linear"`);
+  const e3 = err(raw({ sources: [src({ name: "gh", team: "ENG", done: ["Done"], bogus: 1 }), src({ name: "lin", tracker: "linear", team: "ENG", inProgressLabel: "x" })] }));
+  for (const k of ["sources[0] (gh).team: not a github source key", "sources[0] (gh).done: not a github source key", "sources[0] (gh).bogus: not a github source key", "sources[1] (lin).inProgressLabel: not a linear source key"]) expect(e3).toContain(k);
+  expect(err(raw({ sources: [src({ repos: ["acme/web"] })] }))).not.toContain("not a github source key");
   expect(err(raw({ defaultHost: "yes" }))).toMatch(/defaultHost/);
 });
 

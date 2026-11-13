@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { CLAUDE_TOKEN, claudeDir } from "../src/agents";
 import { parseConfig } from "../src/config";
 import { canonCache } from "../src/github";
-import type { Config, Io, Ticket, Tracker } from "../src/types";
+import type { Config, GitHubSource, Io, LinearSource, Ticket, Tracker } from "../src/types";
 import { AW_DIR, GIT, hasLabel } from "../src/util";
 
 export let root: string;
@@ -29,6 +29,8 @@ export function useTempRoot() {
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 }
 
+export const gh = (c: Config = config()) => c.sources[0] as GitHubSource;
+export const lin = (c: Config, i = 0) => c.sources[i] as LinearSource;
 export const src = (over: object = {}) => ({ name: "web", tracker: "github", ...over });
 export const raw = (over: object = {}) => ({
   host: "box",

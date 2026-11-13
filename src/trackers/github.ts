@@ -1,8 +1,14 @@
 import { canonical, sameRepo } from "../github";
-import type { Io, Source, Ticket, Tracker } from "../types";
-import { hasLabel, labelPriority, ours, read, write } from "../util";
+import type { Check, GitHubSource, Io, Ticket, Tracker } from "../types";
+import { hasLabel, labelPriority, nonEmpty, ours, read, write } from "../util";
 
-export function github(l: Source, host: string, io: Io, defaultHost: boolean, repos: string[]): Tracker {
+export function parseGitHub(r: Record<string, any>, at: string, check: Check) {
+  const s = { inProgressLabel: r.inProgressLabel ?? "in-progress", inReviewLabel: r.inReviewLabel ?? "in-review" };
+  for (const [k, v] of Object.entries(s)) check(nonEmpty(v), `${at}.${k}: non-empty string`);
+  return s;
+}
+
+export function github(l: GitHubSource, host: string, io: Io, defaultHost: boolean, repos: string[]): Tracker {
   const hostLabel = `host:${host}`;
   const listMine = (labels: string[], search?: string) =>
     defaultHost ? list(labels, search).then((r) => r.filter((t) => ours(t, host, true))) : list([...labels, hostLabel], search);

@@ -9,7 +9,7 @@ import { autoMerge } from "./merge";
 import { syncPhases } from "./phases";
 import { agentPane, deliverAnswer, liveStates, syncQuestion } from "./question";
 import { lastSay, transcript } from "./tail";
-import { TRACKERS } from "./trackers";
+import { type Adapter, TRACKERS } from "./trackers";
 import type { Config, Io, Repo, Source, Ticket, Tracker } from "./types";
 import { AW_DIR, byPriority, diskRepos, GIT, hasLabel, mtime, put, read, remove, SAFE_ID, strip, subdirs, write } from "./util";
 
@@ -193,7 +193,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
 export const worktreeIds = (dir: string) => subdirs(dir).filter((d) => SAFE_ID.test(d));
 
 export function makeTracker(s: Source, host: string, io: Io, defaultHost: boolean, repos: string[]) {
-  return TRACKERS[s.tracker].make(s, host, io, defaultHost, repos);
+  return (TRACKERS[s.tracker] as Adapter<Source>).make(s, host, io, defaultHost, repos);
 }
 
 const warned = new Set<string>();

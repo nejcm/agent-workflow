@@ -248,3 +248,46 @@ test("linear adapter: a canceled-type state is canceled whatever its name, a don
   });
   expect(queries[0]).toContain("state { name type }");
 });
+
+test("linear adapter: claim survives a failed pickup comment; a move Linear reports as not successful throws", async () => {
+  const l = config({ sources: [src({ tracker: "linear", team: "ENG" })] }).sources[0]!;
+  let moved = true;
+  const bodies: any[] = [];
+  const respond = (async (_url: string, init: any) => {
+    const b = JSON.parse(init.body);
+    bodies.push(b);
+    if (b.query.includes("workflowStates")) return Response.json({ data: { workflowStates: { nodes: [{ id: "s-ip", name: "In Progress", team: { id: "team" } }] } } });
+    if (b.query.includes("issueUpdate")) return Response.json({ data: { issueUpdate: { success: moved } } });
+    return Response.json({ data: { commentCreate: { success: false } } });
+  }) as any;
+  const { io, logs } = fakeIo();
+  io.fetch = respond;
+  const t = { id: "ENG-1", ref: "u-1", title: "t", body: "", url: "u" };
+  await withLinearKey(async () => {
+    await linear(l, "box", io).claim(t);
+    expect(bodies.map((b) => b.query.match(/\{\s*(\w+)/)[1])).toEqual(["workflowStates", "issueUpdate", "commentCreate"]);
+    expect(logs).toContain("ENG-1: picked-up comment failed: linear commentCreate: not successful for ENG-1");
+    moved = false;
+    await expect(linear(l, "box", io).claim(t)).rejects.toThrow("linear issueUpdate: not successful for u-1");
+    const dry = fakeIo(undefined, true).io;
+    dry.fetch = respond;
+    await linear(l, "box", dry).claim(t);
+  });
+});
+
+test("linear adapter: a trashed issue, or one missing from the response, is canceled", async () => {
+  const l = config({ sources: [src({ tracker: "linear", team: "ENG" })] }).sources[0]!;
+  let issue: object | null = null;
+  const queries: string[] = [];
+  const { io } = fakeIo();
+  io.fetch = (async (_url: string, init: any) => (queries.push(JSON.parse(init.body).query), Response.json({ data: { issue } }))) as any;
+  const tr = linear(l, "box", io);
+  await withLinearKey(async () => {
+    expect(await tr.closed("ENG-1", "acme/web")).toBe("canceled");
+    issue = { trashed: true, state: { name: "In Progress", type: "started" } };
+    expect(await tr.closed("ENG-1", "acme/web")).toBe("canceled");
+    issue = { trashed: false, state: { name: "In Progress", type: "started" } };
+    expect(await tr.closed("ENG-1", "acme/web")).toBeUndefined();
+  });
+  expect(queries[0]).toContain("trashed state { name type }");
+});

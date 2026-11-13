@@ -41,6 +41,29 @@ test("github adapter: closed as not planned or duplicate is canceled, as complet
   }
 });
 
+test("github adapter: a deleted issue is canceled; any other view failure throws", async () => {
+  const l = config().sources[0]!;
+  let err = "GraphQL: Could not resolve to an issue or pull request with the number of 7. (repository.issue)";
+  const { io } = fakeIo();
+  io.run = async () => ({ code: 1, out: "", err });
+  const tr = github(l, "box", io, false, ["acme/web"]);
+  expect(await tr.closed("gh-7", "acme/web")).toBe("canceled");
+  err = "GraphQL: Could not resolve to a Repository with the name 'acme/web'. (repository)";
+  await expect(tr.closed("gh-7", "acme/web")).rejects.toThrow("gh issue view: GraphQL: Could not resolve to a Repository");
+});
+
+test("github adapter: claim survives a failed pickup comment, not a failed label edit", async () => {
+  const l = config().sources[0]!;
+  let failEdit = false;
+  const { io, cmds, logs } = fakeIo((a) => (a[2] === "comment" || (failEdit && a[2] === "edit") ? { code: 1 } : undefined));
+  const tr = github(l, "box", io, false, ["acme/web"]);
+  await tr.claim({ ...ticket(7), repo: "acme/web" });
+  expect(cmds).toEqual(["gh issue edit 7 --repo acme/web --add-label in-progress", "gh issue comment 7 --repo acme/web --body aw: picked up on box"]);
+  expect(logs).toContain("gh-7: picked-up comment failed: gh issue comment: boom");
+  failEdit = true;
+  await expect(tr.claim({ ...ticket(7), repo: "acme/web" })).rejects.toThrow("gh issue edit: boom");
+});
+
 test("github adapter: polls every repo of the source and tags tickets with it", async () => {
   const c = config({ repos: [{ name: "acme/web", path: "/a" }, { name: "acme/api", path: "/b" }] });
   const { io, cmds } = fakeIo((a) => (a[2] === "list" ? { out: JSON.stringify([{ number: 12, title: "t", body: "", url: "u", labels: [] }]) } : undefined));

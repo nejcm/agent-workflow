@@ -60,7 +60,8 @@ export function linear(l: Source, host: string, io: Io, defaultHost = false): Tr
     if (!io.dry && !d.commentCreate?.success) throw new Error(`linear commentCreate: not successful for ${t.id}`);
   };
   const move = async (ref: string, state: string) => {
-    await gql(`mutation($id: String!, $s: String!) { issueUpdate(id: $id, input: { stateId: $s }) { success } }`, { id: ref, s: await stateId(state) }, true);
+    const d = await gql(`mutation($id: String!, $s: String!) { issueUpdate(id: $id, input: { stateId: $s }) { success } }`, { id: ref, s: await stateId(state) }, true);
+    if (!io.dry && !d.issueUpdate?.success) throw new Error(`linear issueUpdate: not successful for ${ref}`);
   };
   const create = async (input: object): Promise<{ id: string; url: string }> => {
     const todo = await stateId(l.todo);
@@ -68,7 +69,7 @@ export function linear(l: Source, host: string, io: Io, defaultHost = false): Tr
     if (io.dry) return { id: "", url: "" };
     const i = d.issueCreate?.issue;
     if (typeof i?.id !== "string" || !i.id) throw new Error("linear issueCreate: no id returned");
-    return { id: i.id, url: typeof i.url === "string" ? i.url : i.id };
+    return { id: i.id, url: i.url };
   };
   const hostLabel = `host:${host}`;
   const listMine = (state: string, labels: string[]) => defaultHost ? list(state, labels).then((r) => r.filter((t) => ours(t, host, true))) : list(state, [...labels, hostLabel]);
@@ -77,12 +78,15 @@ export function linear(l: Source, host: string, io: Io, defaultHost = false): Tr
     listInProgress: () => listMine(l.inProgress, [l.readyLabel]),
     listInReview: () => listMine(l.inReview, [l.readyLabel]),
     async closed(id) {
-      const st = (await gql(`query($id: String!) { issue(id: $id) { state { name type } } }`, { id })).issue?.state;
+      const i = (await gql(`query($id: String!) { issue(id: $id) { trashed state { name type } } }`, { id })).issue;
+      if (!i || i.trashed) return "canceled";
+      const st = i.state;
       return st?.type === "canceled" || st?.type === "duplicate" ? "canceled" : l.done.includes(st?.name) ? "done" : undefined;
     },
     async claim(t) {
       await move(t.ref, l.inProgress);
-      await comment(t, `picked up on ${host}`);
+      // Best-effort: once the ticket is in progress, a throw here would strand it with its session killed.
+      await comment(t, `picked up on ${host}`).catch((e) => io.log(`${t.id}: picked-up comment failed: ${e.message}`));
     },
     async toReview(t, prUrl) {
       await move(t.ref, l.inReview);

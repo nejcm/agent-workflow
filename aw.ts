@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
-import { readFileSync } from "node:fs";
+import { mkdirSync, openSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { parseConfig } from "./src/config";
 import { dashboard, watch } from "./src/dash";
 import { pass } from "./src/pass";
@@ -44,6 +44,13 @@ export const spawnRun: Run = async (argv, cwd, secs = 60) => {
   const [out, err] = drained;
   return { code, out, err: timedOut ? `${cmd} timed out after ${secs}s ${err.trim()}`.trim() : err };
 };
+
+/** Takes a kernel flock on `file` for the process lifetime; false if another process holds it. Released on any exit, SIGKILL included. */
+export function holdLock(file: string) {
+  mkdirSync(dirname(file), { recursive: true });
+  // flock locks the open file description, which this process keeps open (close-on-exec) after the child exits.
+  return Bun.spawnSync(["flock", "-n", "3"], { stdio: ["ignore", "ignore", "ignore", openSync(file, "a")] }).exitCode === 0;
+}
 
 const USAGE = `usage: bun aw.ts <command> [--config aw.json]
   run | once [--dry-run]
@@ -107,6 +114,12 @@ async function main(argv: string[]) {
       console.error(e.message);
       process.exit(1);
     });
+  // Dry runs change nothing, so the preflight in scripts/run.sh still works while the service runs.
+  const lock = join(cfg.workspaceRoot, ".lock");
+  if (!io.dry && !holdLock(lock)) {
+    console.error(`another aw run or once holds ${lock}; stop it first`);
+    process.exit(1);
+  }
   if (cmd === "once") return pass(cfg, io);
   for (;;) {
     await pass(cfg, io);

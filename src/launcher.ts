@@ -197,6 +197,7 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   put(io, script, launcher(r, wt, promptFile, awDir), 0o755);
   await write(io, ["tmux", "new-window", "-d", "-t", `=${cfg.tmuxSession}:`, "-n", winName(r.key, t.id), script]);
   // Claimed last so a failed start leaves the ticket ready for the next poll; the open window stops a double start.
+  // claim throws only when the label or state change failed, so the ticket is still ready then.
   try {
     await tr.claim(t);
   } catch (e) {

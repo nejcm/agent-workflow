@@ -74,6 +74,14 @@ test("github adapter: polls every repo of the source and tags tickets with it", 
   expect(cmds.at(-1)).toBe("gh issue comment 12 --repo acme/api --body aw: hi");
 });
 
+test("github adapter: a repo whose listing fails is skipped and logged, the others still listed", async () => {
+  const c = config({ repos: [{ name: "acme/web", path: "/a" }, { name: "acme/api", path: "/b" }] });
+  const { io, logs } = fakeIo((a) => (a[2] === "list" ? (a[4] === "acme/web" ? { code: 1 } : { out: JSON.stringify([{ number: 12, title: "t", body: "", url: "u", labels: [] }]) }) : undefined));
+  const tickets = await github(c.sources[0]!, "box", io, false, Object.keys(c.repos)).listInProgress();
+  expect(tickets.map((t) => `${t.repo}#${t.id}`)).toEqual(["acme/api#gh-12"]);
+  expect(logs).toContain("repo acme/web: issue list failed, skipped: gh issue list: boom");
+});
+
 test("github adapter: defaultHost takes unlabelled tickets, not other hosts'", async () => {
   const l = config().sources[0]!;
   const lbl = (...n: string[]) => n.map((name) => ({ name }));

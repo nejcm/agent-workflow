@@ -48,13 +48,13 @@ async function failedLog(io: Io, repo: string, run: string) {
 }
 
 // The cursor is recorded first: a crash or failure after it loses the paste, never repeats it. Text never goes through keys.
-export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, dir: string, win: string, state: () => Promise<State>) {
+export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, dir: string, win: string | undefined, state: () => Promise<State>, warned: Set<string>) {
   const prFile = join(dir, `${t.id}.pr`);
   const url = existsSync(prFile) ? readFileSync(prFile, "utf8") : "";
   const n = /\/pull\/(\d+)$/.exec(url)?.[1];
   const file = join(dir, `${t.id}.feedback`);
   const saved: FeedbackCursor = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : { seenAt: 0, rounds: 0 };
-  if (!n || !/^@\d+$/.test(win)) return;
+  if (!n || (win && !/^@\d+$/.test(win))) return;
   // A capped cursor on an unparked ticket means a human removed the label; confirm fresh (a failed read throws) before the rounds restart.
   if (saved.capped && (await tr.parked(t))) return;
   const cur: FeedbackCursor = saved.capped ? { ...saved, rounds: 0, capped: undefined } : saved;
@@ -73,6 +73,11 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
   const failed = !cur.ciShas?.includes(pr.headRefOid) && !checks.some((c) => checkState(c) === "pending") ? checks.filter((c) => checkState(c) === "failed") : [];
   const dirty = pr.mergeStateStatus === "DIRTY" && !cur.dirtyShas?.includes(pr.headRefOid);
   if (!items.length && !failed.length && !dirty) return;
+  if (!win) {
+    const seen = `${file}@${newest ?? cur.seenAt}@${pr.headRefOid}`;
+    if (!warned.has(seen)) io.log(`${t.id}: PR feedback pending but the session's window is gone; restart it or act on ${url} by hand`);
+    return void warned.add(seen);
+  }
   if (cur.rounds >= MAX_ROUNDS) {
     // Label first: if adding it fails, this retries next poll instead of leaving a capped cursor that reads as resumed.
     await tr.park(t);

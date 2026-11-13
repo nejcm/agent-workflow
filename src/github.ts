@@ -36,6 +36,7 @@ export function github(l: Source, host: string, io: Io, defaultHost: boolean, re
   const hostLabel = `host:${host}`;
   const listMine = (labels: string[], search?: string) =>
     defaultHost ? list(labels, search).then((r) => r.filter((t) => ours(t, host, true))) : list([...labels, hostLabel], search);
+  // A failed repo is left out; nothing treats a missing ticket as gone (cleanup asks `closed`, limits count windows).
   const list = async (labels: string[], search?: string): Promise<Ticket[]> => {
     const all: Ticket[] = [];
     for (const repo of repos) {
@@ -44,7 +45,13 @@ export function github(l: Source, host: string, io: Io, defaultHost: boolean, re
       const argv = ["gh", "issue", "list", "--repo", repo, "--state", "open", "--limit", "100"];
       for (const x of labels) argv.push("--label", x);
       if (search) argv.push("--search", search);
-      const issues: any[] = JSON.parse(await read(io, [...argv, "--json", "number,title,body,url,labels"]));
+      let issues: any[];
+      try {
+        issues = JSON.parse(await read(io, [...argv, "--json", "number,title,body,url,labels"]));
+      } catch (e) {
+        io.log(`repo ${repo}: issue list failed, skipped: ${(e as Error).message}`);
+        continue;
+      }
       for (const i of issues)
         if (Number.isInteger(i.number)) {
           const labels: string[] = (i.labels ?? []).map((x: any) => x.name);

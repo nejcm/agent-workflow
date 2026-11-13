@@ -185,7 +185,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
       if (r.autoMerge !== "off") await step(io, `merge ${t.id}`, () => autoMerge(cfg, r, w, tr, io, parked));
       // autoMerge looks the PR up anyway; otherwise every poll too, so a replaced PR reaches `<ID>.pr` (and feedback).
       else await step(io, `pr ${t.id}`, () => findPr(key, t.id, io, dir));
-      if (win && !parked) await step(io, `feedback ${t.id}`, () => deliverFeedback(r, w, tr, io, dir, win, () => state(r, dir, t.id)));
+      if (!parked) await step(io, `feedback ${t.id}`, () => deliverFeedback(r, w, tr, io, dir, win, () => state(r, dir, t.id), warned));
     }
   });
 }

@@ -96,7 +96,7 @@ export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Re
 const PR_FIELDS = "number,url,state,isDraft,isCrossRepository,baseRefName,mergeable,additions,deletions,changedFiles,files,statusCheckRollup,labels,headRefOid,reviewDecision";
 
 // aw merges, pinned to the head it judged (the agent's token could too; see README). "Not merged" is commented once per head SHA.
-export async function autoMerge(cfg: Config, r: Repo, t: Ticket, tr: Tracker, io: Io) {
+export async function autoMerge(cfg: Config, r: Repo, t: Ticket, tr: Tracker, io: Io, parked = false) {
   const dir = repoDir(cfg, r.key);
   const url = await findPr(r.key, t.id, io, dir);
   const n = url && /\/pull\/(\d+)$/.exec(url)?.[1];
@@ -111,6 +111,7 @@ export async function autoMerge(cfg: Config, r: Repo, t: Ticket, tr: Tracker, io
   const held = existsSync(f) && readFileSync(f, "utf8") === pr.headRefOid;
   if (!held) remove(io, f);
   if (pr.state === "MERGED" && !pr.isCrossRepository && pr.baseRefName === r.baseBranch && (await ours())) return tr.done(t);
+  if (parked) return;
   let a: Assessment | undefined;
   try {
     const raw = readAw(join(dir, t.id), "merge.json", MAX_MERGE_BYTES);
@@ -125,6 +126,8 @@ export async function autoMerge(cfg: Config, r: Repo, t: Ticket, tr: Tracker, io
     // gh pr merge can pin the head but not the base, so a retarget after this fresh view still races.
     const now = await view();
     if (now.headRefOid !== pr.headRefOid || mergeDecision(now, a, r, t.labels).merge !== true) return;
+    // The listing may predate a human parking it; a failed read throws, so no merge.
+    if (await tr.parked(t)) return;
     await write(io, ["gh", "pr", "merge", n, "--repo", r.key, "--squash", "--delete-branch", "--match-head-commit", pr.headRefOid]);
     const state = io.dry ? "MERGED" : (await view("state")).state;
     if (state !== "MERGED") return io.log(`merge ${t.id}: ${pr.url} is ${state} after gh pr merge, rechecking next poll`);

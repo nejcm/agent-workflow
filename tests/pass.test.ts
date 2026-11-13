@@ -128,6 +128,21 @@ test("in-progress: PR moves to review; missing window comments once", async () =
   expect(existsSync(join(root, "acme/web/gh-2.pr"))).toBe(false);
 });
 
+test("parked: no ended-without-PR comment, and a done parked ticket is still cleaned up", async () => {
+  const c = config();
+  const parked = (n: number) => ({ ...ticket(n), labels: ["Needs-Human"] });
+  worktree("gh-2");
+  mkdirSync(join(root, "src-web"), { recursive: true });
+  const { tr, calls } = fakeTracker({ inProgress: [parked(1)], inReview: [parked(2)], done: ["gh-2"] });
+  const { io, cmds } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(["acme/web/gh-2"]) : noPr(a)));
+  await pass(c, io, () => tr, "/aw");
+  expect(calls).toEqual([]);
+  expect(existsSync(join(root, "acme/web/gh-1.ended"))).toBe(false);
+  expect(cmds).toContain("tmux kill-window -t @0");
+  expect(cmds.some((x) => x.includes("worktree remove") && x.endsWith("gh-2"))).toBe(true);
+  expect(existsSync(join(root, "acme/web/gh-2.source"))).toBe(false);
+});
+
 test("done: kills window, removes worktree, files and config dir; keeps them all when the worktree remove fails", async () => {
   const c = config();
   for (const id of ["gh-1", "gh-2", "gh-3"]) {

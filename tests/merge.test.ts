@@ -119,6 +119,24 @@ test("auto-merge pass: merges only when enabled, pinned to the head; not-merged 
   expect((await run("intelligent")).calls).toEqual(["done gh-1"]);
 });
 
+test("auto-merge pass: parked tickets only get the merged-by-hand recovery; a fresh parked read gates the merge", async () => {
+  let facts: any = { ...prFacts(), number: 7, url: "https://github.com/acme/web/pull/7", headRefOid: "a".repeat(40) };
+  const run = async (labels: string[], parked?: () => Promise<boolean>) => {
+    const f = fakeTracker({ inReview: [{ ...ticket(1), labels }] });
+    if (parked) f.tr.parked = parked;
+    const { io, cmds } = fakeIo((a) => (a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"OPEN"}]' } : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(facts) } : undefined));
+    worktree("gh-1");
+    await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "all" }] }), io, () => f.tr, "/aw");
+    return { calls: f.calls, merges: cmds.filter((x) => x.startsWith("gh pr merge")) };
+  };
+  expect(await run(["Needs-Human"])).toEqual({ calls: [], merges: [] });
+  expect(await run(["agent"], async () => true)).toEqual({ calls: [], merges: [] });
+  expect(await run(["agent"], () => Promise.reject(new Error("gh down")))).toEqual({ calls: [], merges: [] });
+  expect((await run(["agent"])).merges).toHaveLength(1);
+  facts = { ...facts, state: "MERGED" };
+  expect(await run(["needs-human"])).toEqual({ calls: ["done gh-1"], merges: [] });
+});
+
 test("auto-merge pass: a held marker for an older head is cleared while the new head waits", async () => {
   const facts = { ...prFacts({ statusCheckRollup: [{ status: "IN_PROGRESS" }] }), number: 7, url: "https://github.com/acme/web/pull/7", headRefOid: "b".repeat(40) };
   const respond = (a: string[]) => (a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"OPEN"}]' } : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(facts) } : undefined);

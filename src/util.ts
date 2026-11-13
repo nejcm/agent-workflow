@@ -68,6 +68,9 @@ export function remove(io: Io, path: string) {
   if (!io.dry) rmSync(path, { recursive: true, maxRetries: 3 });
 }
 
+/** Labels compare case-insensitively, as GitHub resolves them. */
+export const hasLabel = (labels: string[] | undefined, name: string) => !!labels?.some((x) => x.toLowerCase() === name.toLowerCase());
+
 // Ours if labelled host:<host>, or (defaultHost) if no host: label at all. Case-insensitive like GitHub's label filter.
 export const ours = (t: Ticket, host: string, defaultHost: boolean) => {
   const hosts = (t.labels ?? []).map((x) => x.toLowerCase()).filter((x) => x.startsWith("host:"));

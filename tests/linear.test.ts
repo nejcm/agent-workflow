@@ -160,3 +160,37 @@ test("linear adapter: comments parsed, author is the user email, none for a null
   expect(bodies[0].variables).toEqual({ id: "u-1", since: "2026-01-01T09:00:00.000Z" });
   expect(bodies[0].query).toContain("comments(filter: { createdAt: { gt: $since } }, last: 100) { nodes { id body createdAt user { email } } }");
 });
+
+test("linear adapter: park adds an ungrouped team or workspace label, fails clearly otherwise; parked reads fresh labels", async () => {
+  const l = config({ sources: [src({ tracker: "linear", team: "ENG" })] }).sources[0]!;
+  let labels: any[] = [{ id: "l-eng", parent: null }];
+  let success = true;
+  const bodies: any[] = [];
+  const { io } = fakeIo();
+  io.fetch = (async (_url: string, init: any) => {
+    const b = JSON.parse(init.body);
+    bodies.push(b);
+    if (b.query.includes("issueLabels")) return Response.json({ data: { issueLabels: { nodes: labels } } });
+    if (b.query.includes("issueAddLabel")) return Response.json({ data: { issueAddLabel: { success } } });
+    if (b.query.includes("issue(id")) return Response.json({ data: { issue: { labels: { nodes: [{ name: "Needs-Human" }] } } } });
+    const node = (identifier: string, ...ls: string[]) => ({ id: identifier, identifier, title: "t", description: null, url: "u", labels: { nodes: ls.map((name) => ({ name })) } });
+    return Response.json({ data: { issues: { nodes: [node("ENG-1", "agent", "host:box"), node("ENG-2", "agent", "host:box", "NEEDS-HUMAN")] } } });
+  }) as any;
+  const t = { id: "ENG-1", ref: "u-1", title: "t", body: "", url: "u" };
+  await withLinearKey(async () => {
+    const tr = linear(l, "box", io);
+    expect((await tr.listReady()).map((x) => x.id)).toEqual(["ENG-1"]);
+    await tr.park(t);
+    expect(bodies.at(-2).query).toContain("or: [{ team: { key: { eq: $t } } }, { team: { null: true } }]");
+    expect(bodies.at(-2).variables).toEqual({ n: "needs-human", t: "ENG" });
+    expect(bodies.at(-1).variables).toEqual({ id: "u-1", l: "l-eng" });
+    labels = [];
+    await expect(tr.park(t)).rejects.toThrow('linear label "needs-human" not found in team ENG or the workspace');
+    labels = [{ id: "g", parent: { name: "triage" } }];
+    await expect(tr.park(t)).rejects.toThrow('linear label "needs-human" is inside a label group; use an ungrouped label');
+    labels = [{ id: "l-eng", parent: null }];
+    success = false;
+    await expect(tr.park(t)).rejects.toThrow("linear issueAddLabel: not successful for ENG-1");
+    expect(await tr.parked(t)).toBe(true);
+  });
+});

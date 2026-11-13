@@ -12,15 +12,22 @@ test("github adapter: ready requires host label, skips claimed, edits labels", a
     { number: 7, title: "t", body: null, url: "u", labels: [{ name: "agent" }, { name: "priority:High" }] },
     { number: 8, title: "t", body: "", url: "u", labels: [{ name: "agent" }, { name: "in-progress" }] },
     { number: 9, title: "t", body: "", url: "u", labels: [{ name: "agent" }, { name: "in-review" }] },
+    { number: 10, title: "t", body: "", url: "u", labels: [{ name: "agent" }, { name: "Needs-Human" }] },
   ];
   const { io, cmds } = fakeIo((a) => (a[2] === "list" ? { out: JSON.stringify(issues) } : a[1] === "issue" && a[2] === "view" ? { out: '{"state":"CLOSED"}' } : undefined));
   const tr = github(l, "box", io, false, ["acme/web"]);
   expect((await tr.listReady()).map((t) => [t.id, t.priority])).toEqual([["gh-7", 2]]);
   expect(cmds[0]).toBe("gh repo view acme/web --json nameWithOwner");
   expect(cmds[1]).toContain("--label agent --label host:box");
+  expect(cmds[1]).toContain('-label:"needs-human"');
   await tr.claim((await tr.listReady())[0]!);
   expect(cmds).toContain("gh issue edit 7 --repo acme/web --add-label in-progress");
   expect(cmds).toContain("gh issue comment 7 --repo acme/web --body aw: picked up on box");
+  await tr.park({ ...ticket(7), repo: "acme/web" });
+  expect(cmds.at(-1)).toBe("gh issue edit 7 --repo acme/web --add-label needs-human");
+  const { io: io2, cmds: cmds2 } = fakeIo(() => ({ out: JSON.stringify({ labels: [{ name: "NEEDS-HUMAN" }] }) }));
+  expect(await github(l, "box", io2, false, ["acme/web"]).parked({ ...ticket(7), repo: "acme/web" })).toBe(true);
+  expect(cmds2).toEqual(["gh issue view 7 --repo acme/web --json labels"]);
   expect(await tr.isDone("gh-7", "acme/web")).toBe(true);
   expect(cmds).toContain("gh issue view 7 --repo acme/web --json state");
   await expect(tr.isDone("ENG-1", "acme/web")).rejects.toThrow();

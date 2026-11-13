@@ -16,7 +16,8 @@ const okCheck = { __typename: "CheckRun", name: "lint", status: "COMPLETED", con
 function setup(o: { authors?: string[]; open?: string[] } = {}) {
   worktree("gh-1");
   mkdirSync(join(root, "acme/web/gh-1/.aw"), { recursive: true });
-  const f = fakeTracker({ inReview: [ticket(1)] });
+  const t = ticket(1);
+  const f = fakeTracker({ inReview: [t] });
   const pr: any = { state: "OPEN", baseRefName: "main", headRefOid: "a", mergeStateStatus: "CLEAN", statusCheckRollup: [okCheck], reviews: [], comments: [] };
   let lines: any[] = [];
   const log = Array.from({ length: 100 }, (_, i) => `line ${i}`).join("\n");
@@ -30,7 +31,7 @@ function setup(o: { authors?: string[]; open?: string[] } = {}) {
   const cfg = config({ repos: [{ name: "acme/web", path: join(root, "src-web"), feedbackAuthors: o.authors ?? ["op"] }] });
   let state: State = "idle";
   return {
-    ...f, pr, cmds, logs,
+    ...f, t, pr, cmds, logs,
     lines: (l: any[]) => void (lines = l),
     setState: (s: State) => void (state = s),
     run: () => pass(cfg, io, () => f.tr, "/aw", async () => state),
@@ -119,15 +120,65 @@ test("feedback: nothing while the session is busy or the window is gone", async 
   expect(gone.cmds.some((c) => c.startsWith("gh pr view"))).toBe(false);
 });
 
-test("feedback: after the round limit, one human-needed comment and no more feeding", async () => {
+test("feedback: the round limit parks the ticket with one comment; removing the label restarts the rounds", async () => {
   const d = setup({ authors: [] });
   d.pr.statusCheckRollup = [fail];
   writeFileSync(join(root, "acme/web/gh-1.feedback"), JSON.stringify({ seenAt: 0, rounds: 3 }));
   await d.run();
   await d.run();
-  expect(d.calls).toEqual([`comment gh-1 PR feedback stopped after 3 rounds on ${URL}: a human is needed`]);
+  expect(d.calls).toEqual(["park gh-1", `comment gh-1 PR feedback stopped after 3 rounds on ${URL}: a human is needed`]);
+  expect(d.t.labels).toEqual(["needs-human"]);
+  expect(d.cmds.filter((c) => c.startsWith("gh pr view"))).toHaveLength(1);
   expect(d.keys()).toEqual([]);
   expect(d.cursor().capped).toBe(true);
+  d.t.labels = [];
+  await d.run();
+  expect(d.keys()).toHaveLength(3);
+  expect(d.file()).toContain('<failed-check name="test"');
+  expect(d.cursor()).toEqual({ seenAt: 0, ciShas: ["a"], rounds: 1 });
+});
+
+test("feedback: a failed park leaves the cursor uncapped and retries next poll", async () => {
+  const d = setup({ authors: [] });
+  d.pr.statusCheckRollup = [fail];
+  writeFileSync(join(root, "acme/web/gh-1.feedback"), JSON.stringify({ seenAt: 0, rounds: 3 }));
+  const park = d.tr.park;
+  d.tr.park = () => Promise.reject(new Error("label not found"));
+  await d.run();
+  expect(d.calls).toEqual([]);
+  expect(d.cursor()).toEqual({ seenAt: 0, rounds: 3 });
+  d.tr.park = park;
+  await d.run();
+  expect(d.calls).toEqual(["park gh-1", `comment gh-1 PR feedback stopped after 3 rounds on ${URL}: a human is needed`]);
+});
+
+test("feedback: a capped cursor restarts only after a fresh read confirms the label is gone; a failed read keeps it capped", async () => {
+  const d = setup({ authors: [] });
+  d.pr.statusCheckRollup = [fail];
+  writeFileSync(join(root, "acme/web/gh-1.feedback"), JSON.stringify({ seenAt: 0, rounds: 3, capped: true }));
+  d.tr.parked = async () => true;
+  await d.run();
+  d.tr.parked = () => Promise.reject(new Error("gh down"));
+  await d.run();
+  expect(d.keys()).toEqual([]);
+  expect(d.cursor()).toEqual({ seenAt: 0, rounds: 3, capped: true });
+  // Also the upgrade path: a cursor capped before the label existed resumes with 3 more rounds.
+  d.tr.parked = async () => false;
+  await d.run();
+  expect(d.keys()).toHaveLength(3);
+  expect(d.cursor()).toEqual({ seenAt: 0, ciShas: ["a"], rounds: 1 });
+});
+
+test("feedback: nothing is read or pasted while a human has the ticket parked, whatever the label's case", async () => {
+  const d = setup({ authors: [] });
+  d.pr.statusCheckRollup = [fail];
+  d.t.labels = ["Needs-Human"];
+  await d.run();
+  expect(d.cmds.some((c) => c.startsWith("gh pr view"))).toBe(false);
+  expect(d.keys()).toEqual([]);
+  d.t.labels = [];
+  await d.run();
+  expect(d.keys()).toHaveLength(3);
 });
 
 test("feedback: with autoMerge off, .pr follows a replaced PR while the session lives", async () => {

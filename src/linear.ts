@@ -1,5 +1,5 @@
 import type { Io, Source, Ticket, Tracker } from "./types";
-import { ours } from "./util";
+import { hasLabel, ours } from "./util";
 
 const REPO_LINE = /^repo:[ \t]*([^\r\n]*?)[ \t\r]*$/im;
 
@@ -64,7 +64,7 @@ export function linear(l: Source, host: string, io: Io, defaultHost = false): Tr
   const hostLabel = `host:${host}`;
   const listMine = (state: string, labels: string[]) => defaultHost ? list(state, labels).then((r) => r.filter((t) => ours(t, host, true))) : list(state, [...labels, hostLabel]);
   return {
-    listReady: () => listMine(l.todo, [l.readyLabel]),
+    listReady: async () => (await listMine(l.todo, [l.readyLabel])).filter((t) => !hasLabel(t.labels, l.needsHumanLabel)),
     listInProgress: () => listMine(l.inProgress, [l.readyLabel]),
     listInReview: () => listMine(l.inReview, [l.readyLabel]),
     async isDone(id) {
@@ -80,6 +80,17 @@ export function linear(l: Source, host: string, io: Io, defaultHost = false): Tr
       await comment(t, `PR: ${prUrl}`);
     },
     done: (t) => move(t.ref, l.done[0]!),
+    async park(t) {
+      const q = `query($n: String!, $t: String!) { issueLabels(filter: { name: { eqIgnoreCase: $n }, or: [{ team: { key: { eq: $t } } }, { team: { null: true } }] }) { nodes { id parent { name } } } }`;
+      const nodes: any[] = (await gql(q, { n: l.needsHumanLabel, t: l.team })).issueLabels.nodes;
+      // A grouped label lists as `<group>:<name>`, which the parked checks would not match.
+      const id = nodes.find((x) => !x.parent)?.id;
+      if (!id) throw new Error(`linear label "${l.needsHumanLabel}" ${nodes.length ? "is inside a label group; use an ungrouped label" : `not found in team ${l.team} or the workspace`}`);
+      const d = await gql(`mutation($id: String!, $l: String!) { issueAddLabel(id: $id, labelId: $l) { success } }`, { id: t.ref, l: id }, true);
+      if (!io.dry && !d.issueAddLabel?.success) throw new Error(`linear issueAddLabel: not successful for ${t.id}`);
+    },
+    parked: async (t) =>
+      hasLabel(labelNames((await gql(`query($id: String!) { issue(id: $id) { labels { nodes { name parent { name } } } } }`, { id: t.ref })).issue?.labels), l.needsHumanLabel),
     comment,
     // `last` returns oldest first (`first` is newest first). shortcut: the 100 oldest after `since`, paginate if 100 non-answers pile up.
     async comments(t, since) {

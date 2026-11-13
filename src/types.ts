@@ -20,6 +20,7 @@ export interface Source {
   readyLabel: string;
   inProgressLabel: string;
   inReviewLabel: string;
+  needsHumanLabel: string;
   team: string;
   todo: string;
   inProgress: string;
@@ -67,6 +68,10 @@ export interface Tracker {
   claim(t: Ticket): Promise<void>;
   toReview(t: Ticket, prUrl: string): Promise<void>;
   done(t: Ticket): Promise<void>;
+  /** Adds the needs-human label, which pauses start, feedback, auto-merge and the ended comment until a human removes it. */
+  park(t: Ticket): Promise<void>;
+  /** Whether the ticket has the needs-human label now, read fresh rather than from a listing. */
+  parked(t: Ticket): Promise<boolean>;
   comment(t: Ticket, body: string): Promise<void>;
   /** Comments created after `since` (ms epoch); a tracker may return older ones too. */
   comments(t: Ticket, since: number): Promise<TicketComment[]>;

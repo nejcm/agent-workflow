@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Io, Source, Ticket, Tracker } from "./types";
-import { ours, put, read, write } from "./util";
+import { hasLabel, ours, put, read, write } from "./util";
 
 export const PR_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/;
 
@@ -53,12 +53,12 @@ export function github(l: Source, host: string, io: Io, defaultHost: boolean, re
     }
     return all;
   };
-  const skip = [l.inProgressLabel, l.inReviewLabel];
+  const skip = [l.inProgressLabel, l.inReviewLabel, l.needsHumanLabel];
   const edit = (t: Ticket, add: string, rm?: string) => write(io, ["gh", "issue", "edit", t.ref, "--repo", t.repo!, "--add-label", add, ...(rm ? ["--remove-label", rm] : [])]);
   const comment = async (t: Ticket, body: string) => { await write(io, ["gh", "issue", "comment", t.ref, "--repo", t.repo!, "--body", `aw: ${body}`]); };
   return {
     // Excluded server-side too: claimed tickets keep the ready label and would otherwise fill the 100 limit.
-    listReady: async () => (await listMine([l.readyLabel], skip.map((x) => `-label:${JSON.stringify(x)}`).join(" "))).filter((t) => !skip.some((x) => t.labels?.includes(x))),
+    listReady: async () => (await listMine([l.readyLabel], skip.map((x) => `-label:${JSON.stringify(x)}`).join(" "))).filter((t) => !skip.some((x) => hasLabel(t.labels, x))),
     listInProgress: () => listMine([l.readyLabel, l.inProgressLabel]),
     listInReview: () => listMine([l.readyLabel, l.inReviewLabel]),
     async isDone(id, repo) {
@@ -75,6 +75,8 @@ export function github(l: Source, host: string, io: Io, defaultHost: boolean, re
       await comment(t, `PR: ${prUrl}`);
     },
     done: (t) => write(io, ["gh", "issue", "close", t.ref, "--repo", t.repo!]).then(() => {}),
+    park: (t) => edit(t, l.needsHumanLabel).then(() => {}),
+    parked: async (t) => hasLabel((JSON.parse(await read(io, ["gh", "issue", "view", t.ref, "--repo", t.repo!, "--json", "labels"])).labels ?? []).map((x: any) => x.name), l.needsHumanLabel),
     comment,
     async comments(t) {
       const cs: any[] = JSON.parse(await read(io, ["gh", "issue", "view", t.ref, "--repo", t.repo!, "--json", "comments"])).comments ?? [];

@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { AGENTS, CLAUDE_TOKEN, claudeHome, codexHome } from "./agents";
 import { repoDir } from "./config";
@@ -97,15 +97,17 @@ export const CODEX_AUTH = ".codex-aw/auth.json";
 const REFRESH_MARGIN = 24 * 3600_000;
 // Codex has no refresh command; app-server's `account/read` with `refreshToken` forces one. Stdin closes only after the reply.
 // flock on the template dir: two aw processes refreshing the same rotating token at once would invalidate the login.
+// A login replaced while waiting ($2 is the inode and mtime aw read) was already refreshed; app-server never holds the lock.
 const REFRESH = [
   'export CODEX_HOME="$1"',
   'exec {L}<"$CODEX_HOME" && flock -w 30 "$L" || exit 1',
-  "coproc APP { exec codex app-server 2>/dev/null; }",
+  `[[ $(stat -c '%i %Y' "$CODEX_HOME/auth.json") == "$2" ]] || exit 0`,
+  'coproc APP { exec {L}<&- codex app-server 2>/dev/null; }',
   `printf '%s\\n' '{"method":"initialize","id":0,"params":{"clientInfo":{"name":"aw","version":"1"}}}' '{"method":"initialized"}' '{"method":"account/read","id":1,"params":{"refreshToken":true}}' >&"\${APP[1]}"`,
   `while IFS= read -r l <&"\${APP[0]}"; do [[ $l == '{"id":1,'* ]] && { exec {APP[1]}>&-; wait; exit 0; }; done`,
   "exit 1",
 ].join("\n");
-export const codexRefresh = (home: string) => ["bash", "-c", REFRESH, "aw-codex-refresh", join(home, ".codex-aw")];
+export const codexRefresh = (home: string, seen: string) => ["bash", "-c", REFRESH, "aw-codex-refresh", join(home, ".codex-aw"), seen];
 
 const expiresAt = (o: any) => {
   try {
@@ -130,9 +132,10 @@ export async function codexLogin(io: Io, now = Date.now()) {
     if (typeof o?.tokens?.access_token !== "string" || typeof o.tokens.refresh_token !== "string") throw new Error(`${file} is not a ChatGPT login: ${fix}`);
     return o;
   };
+  const st = statSync(file, { throwIfNoEntry: false });
   let o = load();
   if (expiresAt(o) - now < REFRESH_MARGIN) {
-    await write(io, codexRefresh(io.home)).catch(() => undefined);
+    await write(io, codexRefresh(io.home, `${st?.ino} ${Math.floor((st?.mtimeMs ?? 0) / 1000)}`)).catch(() => undefined);
     if (!io.dry && expiresAt((o = load())) - now < REFRESH_MARGIN) throw new Error(`could not refresh the Codex login in ${file}: ${fix}`);
   }
   return JSON.stringify({ ...o, tokens: { ...o.tokens, refresh_token: "" } });

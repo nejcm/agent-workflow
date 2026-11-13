@@ -103,14 +103,20 @@ test("codexLogin copies a fresh template login with the refresh token emptied an
   expect(readFileSync(join(root, CODEX_AUTH), "utf8")).toContain("secret-rt");
 });
 
+const stamp = () => {
+  const s = statSync(join(root, CODEX_AUTH));
+  return `${s.ino} ${Math.floor(s.mtimeMs / 1000)}`;
+};
+
 test("codexLogin refreshes a login expiring within a day on the host first, and fails when that does not help", async () => {
   login(Date.now() + 3600_000);
+  const seen = stamp();
   const { io, cmds } = fakeIo((a) => {
     if (a[0] === "bash") login(Date.now() + 10 * DAY);
   });
   expect(JSON.parse(await codexLogin(io)).tokens.access_token).toBe(jwt(Date.now() + 10 * DAY));
-  expect(cmds).toEqual([codexRefresh(root).join(" ")]);
-  expect(codexRefresh(root).slice(-2)).toEqual(["aw-codex-refresh", join(root, ".codex-aw")]);
+  expect(cmds).toEqual([codexRefresh(root, seen).join(" ")]);
+  expect(codexRefresh(root, seen).slice(-3)).toEqual(["aw-codex-refresh", join(root, ".codex-aw"), seen]);
   login(Date.now() + 3600_000);
   await expect(codexLogin(fakeIo(() => ({ code: 1 })).io)).rejects.toThrow("could not refresh the Codex login");
   await expect(codexLogin(fakeIo().io)).rejects.toThrow("could not refresh the Codex login");
@@ -138,12 +144,16 @@ test("the refresh script asks app-server to refresh and closes stdin only after 
   mkdirSync(bin);
   // Fake app-server: answers account/read, then exits only on EOF, so a script that never closes stdin hangs.
   writeFileSync(join(bin, "codex"), `#!/usr/bin/env bash\nwhile IFS= read -r l; do case $l in *account/read*refreshToken*true*) echo "$CODEX_HOME" > "$CODEX_HOME/called"; echo '{"method":"note","params":{"id":1}}'; echo '{"id":1,"result":{}}';; esac; done\n`, { mode: 0o755 });
-  mkdirSync(join(root, ".codex-aw"));
-  const run = (env: Record<string, string>) => Bun.spawnSync(["timeout", "10", ...codexRefresh(root)], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, ...env } });
-  expect(run({}).exitCode).toBe(0);
+  login(Date.now() + 3600_000);
+  const run = (seen = stamp()) => Bun.spawnSync(["timeout", "10", ...codexRefresh(root, seen)], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
+  expect(run().exitCode).toBe(0);
   expect(readFileSync(join(root, ".codex-aw/called"), "utf8").trim()).toBe(join(root, ".codex-aw"));
+  rmSync(join(root, ".codex-aw/called"));
+  // Replaced since aw read it: another process refreshed while this one waited for the lock.
+  expect(run("0 0").exitCode).toBe(0);
+  expect(existsSync(join(root, ".codex-aw/called"))).toBe(false);
   writeFileSync(join(bin, "codex"), "#!/usr/bin/env bash\nexit 0\n", { mode: 0o755 });
-  expect(run({}).exitCode).toBe(1);
+  expect(run().exitCode).toBe(1);
 });
 
 test("concurrent refresh scripts run app-server one at a time", async () => {
@@ -151,11 +161,26 @@ test("concurrent refresh scripts run app-server one at a time", async () => {
   mkdirSync(bin);
   const home = join(root, ".codex-aw");
   writeFileSync(join(bin, "codex"), `#!/usr/bin/env bash\nwhile IFS= read -r l; do case $l in *account/read*) mkdir "$CODEX_HOME/busy" || touch "$CODEX_HOME/overlap"; sleep 0.5; rmdir "$CODEX_HOME/busy"; echo '{"id":1,"result":{}}';; esac; done\n`, { mode: 0o755 });
-  mkdirSync(home);
+  login(Date.now() + 3600_000);
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
-  const codes = await Promise.all([1, 2].map(() => Bun.spawn(["timeout", "10", ...codexRefresh(root)], { env, stderr: "ignore" }).exited));
+  const codes = await Promise.all([1, 2].map(() => Bun.spawn(["timeout", "10", ...codexRefresh(root, stamp())], { env, stderr: "ignore" }).exited));
   expect(codes).toEqual([0, 0]);
   expect(existsSync(join(home, "overlap"))).toBe(false);
+});
+
+test("app-server does not inherit the refresh lock", async () => {
+  const bin = join(root, "bin");
+  mkdirSync(bin);
+  // A fake app-server that leaves a child running after it answers.
+  writeFileSync(join(bin, "codex"), `#!/usr/bin/env bash\nsetsid sleep 30 </dev/null >/dev/null 2>&1 & echo '{"id":1,"result":{}}'\n`, { mode: 0o755 });
+  login(Date.now() + 3600_000);
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+  try {
+    await Bun.spawn(["timeout", "10", ...codexRefresh(root, stamp())], { env }).exited;
+    expect(Bun.spawnSync(["flock", "-n", join(root, ".codex-aw"), "true"]).exitCode).toBe(0);
+  } finally {
+    Bun.spawnSync(["pkill", "-fx", "sleep 30"]);
+  }
 });
 
 test("a codex start without a usable template login fails before cloning", async () => {

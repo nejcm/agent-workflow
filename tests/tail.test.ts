@@ -203,6 +203,8 @@ test("lastSay: the last non-empty claude assistant text, an unterminated final r
   expect(lastSay(wt)).toBe("why I stopped");
   appendFileSync(join(claudeDir(wt), "a.jsonl"), say("unterminated"));
   expect(lastSay(wt)).toBe("unterminated");
+  appendFileSync(join(claudeDir(wt), "a.jsonl"), "\n" + say("  indented\n    more"));
+  expect(lastSay(wt)).toBe("  indented\n    more");
   claudeFile(wt, "b.jsonl", claudeTool);
   expect(lastSay(wt)).toBeUndefined();
 });

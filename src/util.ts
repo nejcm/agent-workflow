@@ -13,14 +13,13 @@ export const diskRepos = (cfg: Config) => subdirs(cfg.workspaceRoot).filter((o) 
 export const GIT = ["git", ...["core.hooksPath=/dev/null", "core.fsmonitor=false", "core.alternateRefsCommand=", "maintenance.auto=false", "protocol.ext.allow=never", "protocol.file.allow=never", "protocol.git.allow=never"].flatMap((c) => ["-c", c])];
 
 // Untrusted text: drop ESC sequences and invisible chars, blank controls and bidi; ZWJ/ZWNJ stay (emoji, Persian, Indic).
-export const clean = (s: string, max = 200) =>
+export const strip = (s: string) =>
   s
     .replace(/\x1b(\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(\x07|\x1b\\)?|[@-_])?/g, "")
     .replace(/[\u00ad\u200b\u2060\ufeff\ufff9-\ufffb\u{e0000}-\u{e007f}]/gu, "")
-    .replace(/[\p{Cc}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, max);
+    .replace(/[\p{Cc}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, " ");
+
+export const clean = (s: string, max = 200) => strip(s).replace(/\s+/g, " ").trim().slice(0, max);
 
 export async function read(io: Io, argv: string[], cwd?: string, secs?: number) {
   const r = await io.run(argv, cwd, secs);

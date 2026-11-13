@@ -1,4 +1,4 @@
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { lstatSync, opendirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Live, State } from "./state";
 import type { Repo } from "./types";
@@ -67,7 +67,17 @@ export function claudeSessions(dir: string): unknown[] {
   const sessions = join(dir, "sessions");
   let names: string[];
   try {
-    names = inDir(sessions, (d) => readdirSync(d));
+    names = inDir(sessions, (d) => {
+      const it = opendirSync(d);
+      try {
+        const out: string[] = [];
+        // The session can flood its own dir; inspect a bounded number of entries.
+        for (let e, n = 0; n < 1000 && (e = it.readSync()); n++) out.push(e.name);
+        return out;
+      } finally {
+        it.closeSync();
+      }
+    });
   } catch {
     return [];
   }

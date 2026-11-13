@@ -71,6 +71,7 @@ async function ensureClone(cfg: Config, io: Io, r: Repo) {
 
 const TEMPLATE = ["settings.json", "CLAUDE.md", "AGENTS.md", "skills", "plugins"];
 const ACCOUNT = ["hasCompletedOnboarding", "lastOnboardingVersion", "oauthAccount", "userID"];
+const pick = (o: any, keys: string[]) => Object.fromEntries(keys.filter((k) => o?.[k] !== undefined).map((k) => [k, o[k]]));
 
 // Fresh per start, so nothing a session left there carries over. Trust goes on the session clone.
 export function seedClaude(io: Io, dir: string, root: string) {
@@ -86,13 +87,15 @@ export function seedClaude(io: Io, dir: string, root: string) {
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
-  const seed = Object.fromEntries(ACCOUNT.filter((k) => o?.[k] !== undefined).map((k) => [k, o[k]]));
-  writeFileSync(join(dir, ".claude.json"), JSON.stringify({ ...seed, projects: { [root]: { hasTrustDialogAccepted: true } } }, null, 2), { mode: 0o600, flag: "wx" });
+  writeFileSync(join(dir, ".claude.json"), JSON.stringify({ ...pick(o, ACCOUNT), projects: { [root]: { hasTrustDialogAccepted: true } } }, null, 2), { mode: 0o600, flag: "wx" });
 }
 
 /** The ChatGPT login sessions copy, relative to home; only the host holds and uses its refresh token. */
 export const CODEX_AUTH = ".codex-aw/auth.json";
 const REFRESH_MARGIN = 24 * 3600_000;
+// What an access-token ChatGPT login needs; API keys, PATs, Bedrock keys and anything newer stay on the host.
+const LOGIN = ["auth_mode", "last_refresh"];
+const TOKENS = ["id_token", "access_token", "account_id", "login_owner_id", "oauth_provenance"];
 // app-server's `account/read` with `refreshToken` forces a refresh. flock: two concurrent refreshes of a rotating token invalidate the login.
 // A login changed while waiting ($2 is the stamp aw read) was already refreshed; app-server never holds the lock.
 const REFRESH = [
@@ -119,7 +122,7 @@ const expiresAt = (o: any) => {
   }
 };
 
-/** The template's ChatGPT login with an empty refresh token (Codex rejects a missing one); refreshed on the host first when it expires within a day. */
+/** The template's ChatGPT login, allowlisted, with an empty refresh token (Codex rejects a missing one); refreshed on the host first when it expires within a day. */
 export async function codexLogin(io: Io, now = Date.now()) {
   const file = join(io.home, CODEX_AUTH);
   const fix = `run \`CODEX_HOME=~/.codex-aw codex login\``;
@@ -139,7 +142,7 @@ export async function codexLogin(io: Io, now = Date.now()) {
     await write(io, codexRefresh(io.home, seen)).catch(() => undefined);
     if (!io.dry && expiresAt((o = load())) - now < REFRESH_MARGIN) throw new Error(`could not refresh the Codex login in ${file}: ${fix}`);
   }
-  return JSON.stringify({ ...o, tokens: { ...o.tokens, refresh_token: "" } });
+  return JSON.stringify({ ...pick(o, LOGIN), tokens: { ...pick(o.tokens, TOKENS), refresh_token: "" } });
 }
 
 // Same as seedClaude; `login` is codexLogin's copy, the session's own credential.

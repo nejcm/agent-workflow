@@ -98,16 +98,19 @@ const cloneCmd = (base: string, wt: string) => `git -c protocol.file.allow=alway
 const jwt = (exp: number) => `h.${Buffer.from(JSON.stringify({ exp: Math.floor(exp / 1000) })).toString("base64url")}.s`;
 const login = (exp: number) => {
   mkdirSync(join(root, ".codex-aw"), { recursive: true });
-  writeFileSync(join(root, CODEX_AUTH), JSON.stringify({ auth_mode: "chatgpt", OPENAI_API_KEY: null, tokens: { id_token: "i", access_token: jwt(exp), refresh_token: "secret-rt", account_id: "a" }, last_refresh: "x" }));
+  const tokens = { id_token: "i", access_token: jwt(exp), refresh_token: "secret-rt", account_id: "a", login_owner_id: "u", oauth_provenance: { issuer: "https://auth", client_id: "c" }, extra: "secret-x" };
+  writeFileSync(join(root, CODEX_AUTH), JSON.stringify({ auth_mode: "chatgpt", OPENAI_API_KEY: "secret-k", personal_access_token: "secret-pat", tokens, last_refresh: "x" }));
 };
 const DAY = 24 * 3600_000;
 
-test("codexLogin copies a fresh template login with the refresh token emptied and runs nothing", async () => {
+test("codexLogin copies only the allowlisted fields of a fresh template login, refresh token emptied, and runs nothing", async () => {
   login(Date.now() + 5 * DAY);
   const { io, cmds } = fakeIo();
-  const o = JSON.parse(await codexLogin(io));
-  expect(o.tokens).toEqual({ id_token: "i", access_token: jwt(Date.now() + 5 * DAY), refresh_token: "", account_id: "a" });
-  expect(o.auth_mode).toBe("chatgpt");
+  const s = await codexLogin(io);
+  const o = JSON.parse(s);
+  expect(o.tokens).toEqual({ id_token: "i", access_token: jwt(Date.now() + 5 * DAY), refresh_token: "", account_id: "a", login_owner_id: "u", oauth_provenance: { issuer: "https://auth", client_id: "c" } });
+  expect(o).toEqual({ auth_mode: "chatgpt", last_refresh: "x", tokens: o.tokens });
+  expect(s).not.toContain("secret");
   expect(cmds).toEqual([]);
   expect(readFileSync(join(root, CODEX_AUTH), "utf8")).toContain("secret-rt");
 });

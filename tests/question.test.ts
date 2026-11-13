@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pass } from "../src/pass";
-import { answerFrame, liveStates, pickAnswer, POINTER } from "../src/question";
+import { agentPane, answerFrame, liveStates, pickAnswer, POINTER } from "../src/question";
 import type { State } from "../src/state";
 import type { Repo, TicketComment } from "../src/types";
 import { config, fakeIo, fakeTracker, linkWorktree, noPr, root, ticket, useTempRoot, windowsOut, worktree } from "./helpers";
@@ -128,7 +128,8 @@ function deliver(opts: { authors?: string[]; open?: string[]; dry?: boolean; res
   const reads: number[] = [];
   let answer: TicketComment | undefined;
   f.tr.comments = async (_t, since) => (reads.push(since), answer ? [answer] : []);
-  const panes = (a: string[]) => (a[1] === "list-panes" ? { out: "1 %7 0\n0 %5 0\n" } : undefined);
+  // A human's split, listed first and started from a shell, is never the target.
+  const panes = (a: string[]) => (a[1] === "list-panes" ? { out: `%7 0 bash\n%5 0 ${join(root, "acme/web/gh-1")}.sh\n` } : undefined);
   const { io, cmds, logs } = fakeIo((a) => opts.respond?.(a) ?? (a[1] === "list-windows" ? windowsOut(opts.open ?? ["acme/web/gh-1"]) : panes(a) ?? noPr(a)), opts.dry);
   const cfg = config({ repos: [{ name: "acme/web", path: join(root, "src-web"), feedbackAuthors: opts.authors ?? ["op"] }] });
   let state: State = "idle";
@@ -310,14 +311,14 @@ test("answer: a window started this pass (no @id yet) gets nothing until the nex
 
 test("answer: a pane in copy mode is skipped before answerId is recorded, then delivered", async () => {
   let mode = "1";
-  const d = deliver({ respond: (a) => (a[1] === "list-panes" ? { out: `0 %5 ${mode}\n` } : undefined) });
+  const d = deliver({ respond: (a) => (a[1] === "list-panes" ? { out: `%5 ${mode} ${join(root, "acme/web/gh-1")}.sh\n` } : undefined) });
   ask("Which DB?");
   await d.run();
   d.answer(answerAt(d.sidecar().postedAt));
   await d.run();
   expect(d.sidecar().answerId).toBeUndefined();
   expect(d.keys()).toEqual([]);
-  expect(d.cmds).toContain("tmux list-panes -t @0 -F #{pane_index} #{pane_id} #{pane_in_mode}");
+  expect(d.cmds).toContain("tmux list-panes -t @0 -F #{pane_id} #{pane_in_mode} #{pane_start_command}");
   mode = "0";
   await d.run();
   expect(d.keys()).toEqual([`tmux set-buffer -b aw-gh-1 -- ${POINTER}`, "tmux paste-buffer -p -d -b aw-gh-1 -t %5", "tmux send-keys -t %5 Enter"]);
@@ -346,4 +347,12 @@ test("answer: a reply from an unlisted author is never delivered", async () => {
   expect(d.states).toEqual([]);
   expect(d.keys()).toEqual([]);
   expect(d.sidecar().answerId).toBeUndefined();
+});
+
+test("agentPane: exactly one pane started by the launcher, else none", async () => {
+  const pick = (out: string) => agentPane(fakeIo(() => ({ out })).io, "@1", "/r/gh-1.sh");
+  expect(await pick("%7 0 bash\n%5 0 /r/gh-1.sh\n")).toBe("%5");
+  expect(await pick("%5 0 /r/gh-1.sh\n%6 0 /r/gh-1.sh\n")).toBeUndefined();
+  expect(await pick("%5 0 '/r/gh-1.sh'\n%7 0 /r/gh-1.shx\n%8 0 /r/gh-1.sh bash\n")).toBeUndefined();
+  expect(await pick("%5 1 /r/gh-1.sh\n%6 10 /r/gh-1.sh\n")).toBeUndefined();
 });

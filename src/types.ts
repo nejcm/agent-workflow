@@ -36,6 +36,7 @@ export interface Config {
   reposRoot: string;
   tmuxSession: string;
   maxConcurrent: number;
+  stallMinutes: number;
   repos: Record<string, Repo>;
   sources: Source[];
 }

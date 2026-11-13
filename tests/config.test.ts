@@ -12,6 +12,8 @@ test("config: defaults applied and errors listed", () => {
   expect(c.pollIntervalMs).toBe(60000);
   expect(c.tmuxSession).toBe("aw");
   expect(c.maxConcurrent).toBe(2);
+  expect(c.stallMinutes).toBe(30);
+  for (const v of [0, 1.5, "30"]) expect(() => config({ stallMinutes: v })).toThrow("stallMinutes: positive integer");
   expect(c.reposRoot).toMatch(/\/agent-repos$/);
   expect(c.sources[0]).toMatchObject({ readyLabel: "agent", done: ["Done", "Canceled", "Duplicate"] });
   expect(web(c)).toMatchObject({ key: "acme/web", path: join(root, "src-web"), baseBranch: "main", agent: "claude", maxConcurrent: undefined });

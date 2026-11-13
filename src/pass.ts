@@ -163,6 +163,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
           return io.log(`${key}/${t.id}: session ended, ticket still in progress; ${s.tracker === "linear" ? `move it to ${s.todo}` : `remove the ${s.inProgressLabel} label`} to start it again`);
         }
         if (await tr.closed(t.id, key)) return;
+        await stopScope(io, key, t.id);
         await tr.comment(w, endedNotice(lastMessage(join(dir, t.id), cfg.repos[key]!.agent)));
         put(io, ended, new Date().toISOString());
       });
@@ -221,8 +222,9 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
       await step(x.io, `cleanup ${r.key}/${id}`, async () => {
         const end = await x.tr.closed(id, r.key);
         if (!end) return;
-        await stopScope(x.io, r.key, id);
         const w = wins.get(winName(r.key, id));
+        if (end === "canceled" && !w && existsSync(join(dir, `${id}.ended`))) return;
+        await stopScope(x.io, r.key, id);
         if (w) await write(x.io, ["tmux", "kill-window", "-t", w]);
         wins.delete(winName(r.key, id));
         if (end === "canceled") {

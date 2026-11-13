@@ -12,6 +12,8 @@ export const diskRepos = (cfg: Config) => subdirs(cfg.workspaceRoot).filter((o) 
 // Second layer for aw's own git calls: hook files, fsmonitor, auto-gc and risky transports only, not every config that runs code.
 export const GIT = ["git", ...["core.hooksPath=/dev/null", "core.fsmonitor=false", "core.alternateRefsCommand=", "maintenance.auto=false", "protocol.ext.allow=never", "protocol.file.allow=never", "protocol.git.allow=never"].flatMap((c) => ["-c", c])];
 
+export const nonEmpty = (v: unknown): v is string => typeof v === "string" && v.length > 0;
+
 // Untrusted text: drop ESC sequences and invisible chars, blank controls and bidi; ZWJ/ZWNJ stay (emoji, Persian, Indic).
 export const strip = (s: string) =>
   s
@@ -125,3 +127,11 @@ export function removeAw(wt: string, file: string) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
 }
+
+const PRIORITIES = ["urgent", "high", "medium", "low"];
+/** Most urgent `priority:<urgent|high|medium|low>` label as a Linear-style rank, or undefined. */
+export const labelPriority = (labels: string[]) => {
+  const ranks = labels.map((x) => PRIORITIES.indexOf(/^priority:(\w+)$/i.exec(x)?.[1]?.toLowerCase() ?? "") + 1).filter((r) => r > 0);
+  return ranks.length ? Math.min(...ranks) : undefined;
+};
+export const byPriority = (a: Ticket, b: Ticket) => (a.priority ?? 5) - (b.priority ?? 5);

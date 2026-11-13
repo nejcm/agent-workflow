@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Config, Repo, Source } from "./types";
+import { TRACKERS } from "./trackers";
 import { AW_DIR } from "./util";
 
 const NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
@@ -86,25 +87,13 @@ export function parseConfig(raw: any, base: string): Config {
     r = obj(r) ? r : {};
     for (const k of LANE_KEYS) check(r[k] === undefined, `${at}.${k}: moved to repos / defaults`);
     check(r.repos === undefined, `${at}.repos: removed; a GitHub source polls every repo in repos`);
-    const s: Source = {
-      name: r.name,
-      tracker: r.tracker,
-      readyLabel: r.readyLabel ?? "agent",
-      inProgressLabel: r.inProgressLabel ?? "in-progress",
-      inReviewLabel: r.inReviewLabel ?? "in-review",
-      needsHumanLabel: r.needsHumanLabel ?? "needs-human",
-      team: r.team,
-      todo: r.todo ?? "Todo",
-      inProgress: r.inProgress ?? "In Progress",
-      inReview: r.inReview ?? "In Review",
-      done: r.done ?? ["Done"],
-    };
-    check(NAME.test(s.name ?? ""), `${at}.name: required, [a-z0-9-]`);
-    check(["github", "linear"].includes(s.tracker), `${at}.tracker: "github" | "linear"`);
-    for (const k of ["readyLabel", "inProgressLabel", "inReviewLabel", "needsHumanLabel", "todo", "inProgress", "inReview"] as const)
-      check(str(s[k]), `${at}.${k}: non-empty string`);
-    check(Array.isArray(s.done) && s.done.length > 0 && s.done.every(str), `${at}.done: non-empty string array`);
-    if (s.tracker === "linear") check(/^[A-Z0-9]+$/.test(s.team ?? ""), `${at}.team: Linear team key, e.g. ENG`);
+    const common = { name: r.name, tracker: r.tracker, readyLabel: r.readyLabel ?? "agent", needsHumanLabel: r.needsHumanLabel ?? "needs-human" };
+    check(NAME.test(common.name ?? ""), `${at}.name: required, [a-z0-9-]`);
+    for (const k of ["readyLabel", "needsHumanLabel"] as const) check(str(common[k]), `${at}.${k}: non-empty string`);
+    const adapter = typeof common.tracker === "string" && Object.hasOwn(TRACKERS, common.tracker) ? TRACKERS[common.tracker as Source["tracker"]] : undefined;
+    check(adapter, `${at}.tracker: ${Object.keys(TRACKERS).map((k) => `"${k}"`).join(" | ")}`);
+    const s = { ...common, ...adapter?.parse(r, at, check) } as Source;
+    if (adapter) for (const k of Object.keys(r)) check(Object.hasOwn(s, k) || LANE_KEYS.includes(k) || k === "repos", `${at}.${k}: not a ${s.tracker} source key`);
     return s;
   });
   const names = sources.map((s) => s.name);

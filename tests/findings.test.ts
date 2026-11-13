@@ -3,10 +3,10 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileFindings, parseFindings } from "../src/findings";
-import { github } from "../src/github";
-import { linear } from "../src/linear";
+import { github } from "../src/trackers/github";
+import { linear } from "../src/trackers/linear";
 import { pass } from "../src/pass";
-import { config, fakeIo, fakeTracker, root, src, ticket, useTempRoot, windowsOut, withLinearKey, worktree } from "./helpers";
+import { config, fakeIo, fakeTracker, gh, lin, root, src, ticket, useTempRoot, windowsOut, withLinearKey, worktree } from "./helpers";
 
 useTempRoot();
 
@@ -177,7 +177,7 @@ test("findings: malformed or oversized input files nothing; text is capped, stri
 test("findings: GitHub files a plain issue with no labels and no parent; Linear a team issue with no parent", async () => {
   const c = config({ sources: [src({ tracker: "linear", team: "ENG" })] });
   const { io, cmds } = fakeIo((a) => (a[2] === "create" ? { out: "https://github.com/acme/web/issues/9\n" } : undefined));
-  expect(await github(config().sources[0]!, "box", io, false, ["acme/web"]).createTicket(ticket(1), "T", "B")).toBe("https://github.com/acme/web/issues/9");
+  expect(await github(gh(), "box", io, false, ["acme/web"]).createTicket(ticket(1), "T", "B")).toBe("https://github.com/acme/web/issues/9");
   expect(cmds).toEqual(["gh issue create --repo acme/web --title T --body B"]);
   const inputs: any[] = [];
   io.fetch = (async (_u: string, init: any) => {
@@ -186,7 +186,7 @@ test("findings: GitHub files a plain issue with no labels and no parent; Linear 
     inputs.push(variables.i);
     return Response.json({ data: { issueCreate: { issue: { id: "u-9", url: "https://linear.app/x/ENG-9" } } } });
   }) as any;
-  expect(await withLinearKey(() => linear(c.sources[0]!, "box", io).createTicket({ ...ticket(1), ref: "u-1" }, "T", "B"))).toBe("https://linear.app/x/ENG-9");
+  expect(await withLinearKey(() => linear(lin(c), "box", io).createTicket({ ...ticket(1), ref: "u-1" }, "T", "B"))).toBe("https://linear.app/x/ENG-9");
   expect(inputs).toEqual([{ teamId: "team-1", stateId: "s-todo", title: "T", description: "B" }]);
 });
 

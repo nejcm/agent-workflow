@@ -1,13 +1,13 @@
 import { expect, test } from "bun:test";
 import { allowedRepo } from "../src/config";
-import { LINEAR_ISSUES, linear, linearRepo, linearTicket } from "../src/linear";
-import { pass } from "../src/pass";
-import { config, fakeIo, phase, src, two, useTempRoot, windowsOut, withLinearKey, writePhases } from "./helpers";
+import { LINEAR_ISSUES, linear, linearRepo, linearTicket } from "../src/trackers/linear";
+import { makeTracker, pass } from "../src/pass";
+import { config, fakeIo, lin, phase, src, two, useTempRoot, windowsOut, withLinearKey, writePhases } from "./helpers";
 
 useTempRoot();
 
 test("linear adapter: defaultHost takes unlabelled tickets, not other hosts'", async () => {
-  const l = config({ sources: [src({ tracker: "linear", team: "ENG" })] }).sources[0]!;
+  const l = lin(config({ sources: [src({ tracker: "linear", team: "ENG" })] }));
   const node = (identifier: string, ...labels: string[]) => ({ id: identifier, identifier, title: "t", description: null, url: "u", labels: { nodes: labels.map((name) => ({ name })) } });
   const bodies: any[] = [];
   const { io } = fakeIo();
@@ -64,13 +64,13 @@ test("linear adapter: phases become child issues that are never picked up as wor
   }) as any;
   writePhases("ENG-1", [phase("a", "in-progress"), phase("b", "done"), phase("c", "todo")]);
   await withLinearKey(async () => {
-    await pass(c, io, linear, "/aw");
-    await pass(c, io, linear, "/aw");
-    const tr = linear(c.sources[0]!, "box", io, true);
+    await pass(c, io, makeTracker, "/aw");
+    await pass(c, io, makeTracker, "/aw");
+    const tr = linear(lin(c), "box", io, true);
     expect((await tr.listReady()).map((t) => t.id)).toEqual([]);
     expect((await tr.listInProgress()).map((t) => t.id)).toEqual(["ENG-1"]);
     prs = '[{"url":"https://pr/1","state":"OPEN"}]';
-    await pass(c, io, linear, "/aw");
+    await pass(c, io, makeTracker, "/aw");
   });
   expect(mutations).toEqual([
     { teamId: "team-1", parentId: "u-1", stateId: "s-todo", title: "ENG-1: Do a", description: "b" },
@@ -98,7 +98,7 @@ test("linear repo resolution: label > description > project summary > project ov
 });
 
 test("linear adapter: tickets carry the resolved repo from labels, description and project", async () => {
-  const l = two().sources[1]!;
+  const l = lin(two(), 1);
   const node = (identifier: string, labels: string[], description: string | null, project: object | null) => ({ id: identifier, identifier, title: "t", description, url: "u", labels: { nodes: labels.map((name) => ({ name })) }, project });
   const { io } = fakeIo();
   io.fetch = (async () =>
@@ -133,7 +133,7 @@ test("linear repo: project label and label groups", () => {
 });
 
 test("linear adapter: every comment starts with aw:", async () => {
-  const l = config({ sources: [src({ tracker: "linear", team: "ENG" })] }).sources[0]!;
+  const l = lin(config({ sources: [src({ tracker: "linear", team: "ENG" })] }));
   const bodies: any[] = [];
   const { io } = fakeIo();
   io.fetch = (async (_url: string, init: any) => {
@@ -145,14 +145,14 @@ test("linear adapter: every comment starts with aw:", async () => {
 });
 
 test("linear adapter: a comment Linear reports as not successful throws", async () => {
-  const l = config({ sources: [src({ tracker: "linear", team: "ENG" })] }).sources[0]!;
+  const l = lin(config({ sources: [src({ tracker: "linear", team: "ENG" })] }));
   const { io } = fakeIo();
   io.fetch = (async () => Response.json({ data: { commentCreate: { success: false } } })) as any;
   await expect(withLinearKey(() => linear(l, "box", io, false).comment({ id: "ENG-1", ref: "u-1", title: "", body: "", url: "" }, "hi"))).rejects.toThrow("not successful for ENG-1");
 });
 
 test("linear adapter: comments parsed, author is the user email, none for a null user", async () => {
-  const l = config({ sources: [src({ tracker: "linear", team: "ENG" })] }).sources[0]!;
+  const l = lin(config({ sources: [src({ tracker: "linear", team: "ENG" })] }));
   const bodies: any[] = [];
   const { io } = fakeIo();
   io.fetch = (async (_url: string, init: any) => {
@@ -169,7 +169,7 @@ test("linear adapter: comments parsed, author is the user email, none for a null
 });
 
 test("linear adapter: comments are read across pages, so a marker past comment 100 is seen; past 20 pages it throws", async () => {
-  const l = config({ sources: [src({ tracker: "linear", team: "ENG" })] }).sources[0]!;
+  const l = lin(config({ sources: [src({ tracker: "linear", team: "ENG" })] }));
   const t = { id: "ENG-1", ref: "u-1", title: "", body: "", url: "" };
   const afters: unknown[] = [];
   const { io } = fakeIo();
@@ -192,7 +192,7 @@ test("linear adapter: comments are read across pages, so a marker past comment 1
 });
 
 test("linear adapter: park adds an ungrouped team or workspace label, fails clearly otherwise; parked reads fresh labels", async () => {
-  const l = config({ sources: [src({ tracker: "linear", team: "ENG" })] }).sources[0]!;
+  const l = lin(config({ sources: [src({ tracker: "linear", team: "ENG" })] }));
   let labels: any[] = [{ id: "l-eng", parent: null }];
   let success = true;
   const bodies: any[] = [];
@@ -226,7 +226,7 @@ test("linear adapter: park adds an ungrouped team or workspace label, fails clea
 });
 
 test("linear adapter: a canceled-type state is canceled whatever its name, a done name is done", async () => {
-  const l = config({ sources: [src({ tracker: "linear", team: "ENG", done: ["Done", "Canceled"] })] }).sources[0]!;
+  const l = lin(config({ sources: [src({ tracker: "linear", team: "ENG", done: ["Done", "Canceled"] })] }));
   const { io } = fakeIo();
   let state: object | null = null;
   const queries: string[] = [];
@@ -250,7 +250,7 @@ test("linear adapter: a canceled-type state is canceled whatever its name, a don
 });
 
 test("linear adapter: claim survives a failed pickup comment; a move Linear reports as not successful throws", async () => {
-  const l = config({ sources: [src({ tracker: "linear", team: "ENG" })] }).sources[0]!;
+  const l = lin(config({ sources: [src({ tracker: "linear", team: "ENG" })] }));
   let moved = true;
   const bodies: any[] = [];
   const respond = (async (_url: string, init: any) => {
@@ -276,7 +276,7 @@ test("linear adapter: claim survives a failed pickup comment; a move Linear repo
 });
 
 test("linear adapter: a trashed issue, or one missing from the response, is canceled", async () => {
-  const l = config({ sources: [src({ tracker: "linear", team: "ENG" })] }).sources[0]!;
+  const l = lin(config({ sources: [src({ tracker: "linear", team: "ENG" })] }));
   let issue: object | null = null;
   const queries: string[] = [];
   const { io } = fakeIo();

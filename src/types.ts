@@ -14,19 +14,29 @@ export interface Repo {
 
 export type AutoMerge = "off" | "intelligent" | "all";
 
-export interface Source {
+interface SourceBase {
   name: string;
-  tracker: "github" | "linear";
   readyLabel: string;
+  needsHumanLabel: string;
+}
+
+export interface GitHubSource extends SourceBase {
+  tracker: "github";
   inProgressLabel: string;
   inReviewLabel: string;
-  needsHumanLabel: string;
+}
+
+export interface LinearSource extends SourceBase {
+  tracker: "linear";
   team: string;
   todo: string;
   inProgress: string;
   inReview: string;
   done: string[];
 }
+
+export type Source = GitHubSource | LinearSource;
+export type Check = (ok: unknown, msg: string) => unknown;
 
 export interface Config {
   host: string;
@@ -62,6 +72,12 @@ export interface TicketComment {
 }
 
 export interface Tracker {
+  /** Ticket ids are unique across the whole tracker, not per repo, so one ticket may name any repo. */
+  globalIds: boolean;
+  /** How a human requeues a ticket whose session ended, e.g. "remove the in-progress label". */
+  restartHint(): string;
+  /** One-line summary for `aw status`. */
+  describe(): string;
   listReady(): Promise<Ticket[]>;
   listInProgress(): Promise<Ticket[]>;
   listInReview(): Promise<Ticket[]>;

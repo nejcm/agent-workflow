@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { validRepo } from "../src/config";
-import { canonCache, github } from "../src/github";
+import { canonCache } from "../src/github";
+import { github } from "../src/trackers/github";
 import { authStamp, CODEX_AUTH, codexLogin, codexRefresh, launcher, render, scopeUnit, sweepScopes, seedClaude, seedCodex } from "../src/launcher";
 import { endedNotice, pass } from "../src/pass";
 import { liveStates, pickAnswer } from "../src/question";
@@ -524,7 +525,7 @@ test("allowlist: a rejected ticket gets one comment whatever the reason, kept ac
   const c = two();
   const eng = (n: number, repo?: string): Ticket => ({ ...ticket(n), id: `ENG-${n}`, repo });
   const run = async (ready: Ticket[]) => {
-    const f = fakeTracker({ ready });
+    const f = fakeTracker({ ready, globalIds: true });
     const { io, cmds } = fakeIo(noPr);
     await pass(c, io, (s) => (s.name === "lin" ? f.tr : fakeTracker({}).tr), "/aw");
     return { calls: f.calls, cmds };
@@ -541,9 +542,18 @@ test("allowlist: a rejected ticket gets one comment whatever the reason, kept ac
   expect(readFileSync(join(root, ".rejected/ENG-1"), "utf8")).toBe("repo evil/x is not in the aw allowlist");
 });
 
+test("rejection keys off the tracker's globalIds, not the source's tracker name", async () => {
+  for (const globalIds of [true, false]) {
+    rmSync(join(root, ".rejected"), { recursive: true, force: true });
+    const { tr, calls } = fakeTracker({ ready: [ticket(1, "evil/x")], globalIds });
+    await pass(config(), fakeIo(noPr).io, () => tr, "/aw");
+    expect(calls).toEqual(globalIds ? ["comment gh-1 repo evil/x is not in the aw allowlist"] : []);
+  }
+});
+
 test("allowlist match is case-insensitive and uses the canonical key", async () => {
   const c = two();
-  const { tr, calls } = fakeTracker({ ready: [{ ...ticket(1), id: "ENG-1", repo: "ACME/Api" }] });
+  const { tr, calls } = fakeTracker({ ready: [{ ...ticket(1), id: "ENG-1", repo: "ACME/Api" }], globalIds: true });
   const { io, cmds } = fakeIo(noPr);
   await pass(c, io, (s) => (s.name === "lin" ? tr : fakeTracker({}).tr), "/aw");
   expect(calls).toEqual(["claim ENG-1"]);
@@ -612,7 +622,7 @@ test("after a restart cleanup and findPr use the repo and source recorded next t
     writeFileSync(join(root, dir!, `${id}.source`), source!);
   }
   const gh = fakeTracker({ done: ["acme/api#gh-5"], inProgress: [ticket(5, "acme/api")] });
-  const lin = fakeTracker({ inProgress: [{ ...ticket(7), id: "ENG-7", repo: "acme/web" }] });
+  const lin = fakeTracker({ inProgress: [{ ...ticket(7), id: "ENG-7", repo: "acme/web" }], globalIds: true });
   let names = ["acme/web/gh-5", "acme/api/gh-5", "acme/api/ENG-7"];
   const { io, cmds, logs } = fakeIo((a) => {
     if (a[1] === "list-windows") return windowsOut(names);
@@ -637,7 +647,7 @@ test("after a restart cleanup and findPr use the repo and source recorded next t
 test("redirected or unresolvable repos are skipped before listing, cloning or starting", async () => {
   const c = config({ repos: ["acme/web", { name: "acme/api", path: join(root, "src-api") }, { name: "acme/docs", path: join(root, "src-docs") }], sources: [src({ name: "gh" }), src({ name: "lin", tracker: "linear", team: "ENG" })] });
   const eng = (n: number, repo: string): Ticket => ({ ...ticket(n), id: `ENG-${n}`, repo });
-  const st = { ready: [eng(1, "acme/api"), eng(2, "acme/docs"), eng(3, "acme/web")] };
+  const st = { ready: [eng(1, "acme/api"), eng(2, "acme/docs"), eng(3, "acme/web")], globalIds: true };
   const lin = fakeTracker(st);
   const { io, cmds, logs } = fakeIo((a) => {
     if (a[2] === "view" && a[3] === "acme/api") return { out: '{"nameWithOwner":"evil/api"}' };
@@ -661,7 +671,7 @@ test("redirected or unresolvable repos are skipped before listing, cloning or st
 test("a Linear ticket requeued with another repo does not start a second session", async () => {
   const c = two();
   worktree("ENG-1", "lin", "acme/web");
-  const lin = fakeTracker({ ready: [{ ...ticket(1), id: "ENG-1", repo: "acme/api" }, { ...ticket(2), id: "ENG-2", repo: "acme/api" }] });
+  const lin = fakeTracker({ ready: [{ ...ticket(1), id: "ENG-1", repo: "acme/api" }, { ...ticket(2), id: "ENG-2", repo: "acme/api" }], globalIds: true });
   const { io, cmds, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(["acme/web/ENG-2"]) : noPr(a)));
   await pass(c, io, (s) => (s.name === "lin" ? lin.tr : fakeTracker({}).tr), "/aw");
   expect(lin.calls).toEqual([]);
@@ -746,7 +756,7 @@ test("a Linear ticket started in a repo since removed from aw.json is not starte
   const c = two();
   worktree("ENG-1", "lin", "acme/old");
   const eng1 = { ...ticket(1), id: "ENG-1", repo: "acme/api" };
-  const lin = fakeTracker({ ready: [eng1], inProgress: [eng1] });
+  const lin = fakeTracker({ ready: [eng1], inProgress: [eng1], globalIds: true });
   const { io, cmds, logs } = fakeIo(noPr);
   await pass(c, io, (s) => (s.name === "lin" ? lin.tr : fakeTracker({}).tr), "/aw");
   expect(lin.calls).toEqual([]);
@@ -760,7 +770,7 @@ test("rejection: one comment per Linear ticket across sources and starts; marked
   const marker = join(root, ".rejected/ENG-1");
   const comments: string[] = [];
   const run = async (repo: string | undefined, fail = false) => {
-    const f = fakeTracker({ ready: [eng(repo)] });
+    const f = fakeTracker({ ready: [eng(repo)], globalIds: true });
     f.tr.comment = async (t, b) => {
       expect(existsSync(marker)).toBe(true);
       if (fail) throw new Error("linear down");

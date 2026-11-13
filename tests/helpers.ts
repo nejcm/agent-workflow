@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { CLAUDE_TOKEN, claudeDir } from "../src/agents";
 import { parseConfig } from "../src/config";
 import { canonCache } from "../src/github";
-import type { Config, Io, Ticket, Tracker } from "../src/types";
+import type { Config, GitHubSource, Io, LinearSource, Ticket, Tracker } from "../src/types";
 import { AW_DIR, GIT, hasLabel } from "../src/util";
 
 export let root: string;
@@ -29,6 +29,8 @@ export function useTempRoot() {
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 }
 
+export const gh = (c: Config = config()) => c.sources[0] as GitHubSource;
+export const lin = (c: Config, i = 0) => c.sources[i] as LinearSource;
 export const src = (over: object = {}) => ({ name: "web", tracker: "github", ...over });
 export const raw = (over: object = {}) => ({
   host: "box",
@@ -42,10 +44,13 @@ export const config = (over: object = {}): Config => parseConfig(raw(over), AW_D
 export const web = (c: Config) => c.repos["acme/web"]!;
 export const ticket = (n: number, repo = "acme/web"): Ticket => ({ id: `gh-${n}`, ref: String(n), title: `Fix thing ${n}`, body: "body; rm -rf ~ $(whoami)", url: `https://x/${n}`, repo });
 
-export function fakeTracker(s: { ready?: Ticket[]; inProgress?: Ticket[]; inReview?: Ticket[]; done?: string[]; canceled?: string[] }) {
+export function fakeTracker(s: { ready?: Ticket[]; inProgress?: Ticket[]; inReview?: Ticket[]; done?: string[]; canceled?: string[]; globalIds?: boolean }) {
   const calls: string[] = [];
   const subs: { ref: string; title: string }[] = [];
   const tr: Tracker = {
+    globalIds: s.globalIds ?? false,
+    restartHint: () => "remove the in-progress label",
+    describe: () => "fake",
     listReady: async () => s.ready ?? [],
     listInProgress: async () => s.inProgress ?? [],
     listInReview: async () => s.inReview ?? [],

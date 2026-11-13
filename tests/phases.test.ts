@@ -1,8 +1,7 @@
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { github } from "../src/github";
-import { pass } from "../src/pass";
+import { makeTracker, pass } from "../src/pass";
 import { parsePhases, phaseProgress } from "../src/phases";
 import { config, fakeIo, fakeTracker, noPr, phase, root, ticket, useTempRoot, windowsOut, worktree, writePhases } from "./helpers";
 
@@ -130,7 +129,7 @@ test("phases: dry-run creates nothing and writes no sidecar", async () => {
   const c = config();
   const { io, cmds, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(["acme/web/gh-1"]) : a[2] === "list" ? { out: JSON.stringify([{ number: 1, title: "t", body: "", url: "u", labels: [] }]) } : a[1] === "api" ? { out: "[]" } : noPr(a)), true);
   writePhases("gh-1", [phase("a", "done")]);
-  await pass(c, io, github, "/aw");
+  await pass(c, io, makeTracker, "/aw");
   expect(cmds.filter((x) => /issue (create|edit|close)/.test(x))).toEqual([]);
   expect(logs.some((l) => l.includes("dry: gh issue create --repo acme/web --parent 1"))).toBe(true);
   expect(logs.some((l) => l.includes("dry: gh issue close  --repo acme/web"))).toBe(true);

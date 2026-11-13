@@ -294,9 +294,12 @@ Same steps on the VM (Tailscale for access), with `"sandbox": "none"` in `defaul
 | `defaults` / `repos[].feedbackAuthors` | `[]` | GitHub logins / Linear emails (case-insensitive) whose replies answer agent questions and whose PR reviews and comments go back to the session, see [Questions](#questions) and [PR feedback](#pr-feedback); a per-repo list replaces the `defaults` one |
 | `sources[].name` | required | `[a-z0-9-]`, unique |
 | `sources[].tracker` | required | `github` \| `linear` |
-| GitHub: `readyLabel`, `inProgressLabel`, `inReviewLabel` | `agent`, `in-progress`, `in-review` | done = issue closed, unless as not planned or duplicate (canceled) |
+| `readyLabel` | `agent` | ready label, GitHub and Linear |
 | `needsHumanLabel` | `needs-human` | park label, GitHub and Linear; see **Parked** above |
+| GitHub: `inProgressLabel`, `inReviewLabel` | `in-progress`, `in-review` | done = issue closed, unless as not planned or duplicate (canceled) |
 | Linear: `team`, `todo`, `inProgress`, `inReview`, `done` | —, `Todo`, `In Progress`, `In Review`, `[Done]` | `team` is the key, e.g. `ENG`; a Canceled- or Duplicate-type state is canceled even if listed in `done` |
+
+A source key its tracker does not use (e.g. `team` on a GitHub source, `inProgressLabel` on a Linear one) is rejected at startup.
 
 Prompt placeholders: `{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{testCmd}} {{repo}}`; `base`, `testCmd` and `repo` come from the ticket's repo settings.
 
@@ -315,7 +318,8 @@ CLI: `bun aw.ts <run|once|status|watch|tail> [--dry-run] [--json] [--interval s]
 - `aw.ts`: CLI entry (`run`, `once`, `status`, `watch`, `tail`).
 - `src/types.ts`: shared types (`Config`, `Repo`, `Source`, `Ticket`, `Tracker`, `Io`).
 - `src/config.ts`: `aw.json` parsing and the repo allowlist.
-- `src/github.ts`, `src/linear.ts`: tracker adapters, priority, canonical-repo lookup.
+- `src/trackers/`: tracker adapters (`github.ts`, `linear.ts`) and the `TRACKERS` registry.
+- `src/github.ts`: canonical-repo and PR lookup.
 - `src/phases.ts`: `.aw/phases.json` validation and sub-ticket sync.
 - `src/findings.ts`: `.aw/findings.json` validation, sanitizing and filing.
 - `src/feedback.ts`: PR reviews, comments, failed checks and conflicts fed back into an idle In Review session.

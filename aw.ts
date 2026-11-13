@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseConfig } from "./src/config";
 import { dashboard, watch } from "./src/dash";
-import { pass } from "./src/pass";
+import { makeTracker, pass } from "./src/pass";
 import { snapshot, table } from "./src/status";
 import { tail } from "./src/tail";
 import type { Config, Io, Run } from "./src/types";
@@ -12,7 +12,7 @@ import type { Config, Io, Run } from "./src/types";
 async function status(cfg: Config, io: Io) {
   return [
     `max ${cfg.maxConcurrent} sessions`,
-    ...cfg.sources.map((s) => `source ${s.name}  ${s.tracker === "linear" ? `linear ${s.team}` : "github (all repos)"}`),
+    ...cfg.sources.map((s) => `source ${s.name}  ${makeTracker(s, cfg.host, io, cfg.defaultHost, Object.keys(cfg.repos)).describe()}`),
     ...Object.values(cfg.repos).map((r) => `${r.key}  ${r.agent}/${r.sandbox}  max ${r.maxConcurrent ?? "-"}  merge ${r.autoMerge}  ${r.path}`),
     "",
     table(await snapshot(cfg, io)),

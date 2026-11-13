@@ -1,5 +1,13 @@
-import type { Io, Source, Ticket, Tracker } from "./types";
-import { hasLabel, ours } from "./util";
+import type { Check, Io, LinearSource, Ticket, Tracker } from "../types";
+import { hasLabel, nonEmpty, ours } from "../util";
+
+export function parseLinear(r: Record<string, any>, at: string, check: Check) {
+  const s = { team: r.team, todo: r.todo ?? "Todo", inProgress: r.inProgress ?? "In Progress", inReview: r.inReview ?? "In Review", done: r.done ?? ["Done"] };
+  for (const k of ["todo", "inProgress", "inReview"] as const) check(nonEmpty(s[k]), `${at}.${k}: non-empty string`);
+  check(Array.isArray(s.done) && s.done.length > 0 && s.done.every(nonEmpty), `${at}.done: non-empty string array`);
+  check(/^[A-Z0-9]+$/.test(s.team ?? ""), `${at}.team: Linear team key, e.g. ENG`);
+  return s;
+}
 
 const REPO_LINE = /^repo:[ \t]*([^\r\n]*?)[ \t\r]*$/im;
 
@@ -23,7 +31,7 @@ export function linearTicket(i: any): Ticket {
   return { id: i.identifier, ref: i.id, title: i.title ?? "", body: i.description ?? "", url: i.url ?? "", labels, repo, priority };
 }
 
-export function linear(l: Source, host: string, io: Io, defaultHost = false): Tracker {
+export function linear(l: LinearSource, host: string, io: Io, defaultHost = false): Tracker {
   const gql = async (query: string, variables: object, mutate = false) => {
     if (mutate) io.log(`${io.dry ? "dry: " : ""}linear ${/\{\s*(\w+)/.exec(query)?.[1]} ${JSON.stringify(variables)}`);
     if (mutate && io.dry) return {};
@@ -74,6 +82,9 @@ export function linear(l: Source, host: string, io: Io, defaultHost = false): Tr
   const hostLabel = `host:${host}`;
   const listMine = (state: string, labels: string[]) => defaultHost ? list(state, labels).then((r) => r.filter((t) => ours(t, host, true))) : list(state, [...labels, hostLabel]);
   return {
+    globalIds: true,
+    restartHint: () => `move it to ${l.todo}`,
+    describe: () => `linear ${l.team}`,
     listReady: async () => (await listMine(l.todo, [l.readyLabel])).filter((t) => !hasLabel(t.labels, l.needsHumanLabel)),
     listInProgress: () => listMine(l.inProgress, [l.readyLabel]),
     listInReview: () => listMine(l.inReview, [l.readyLabel]),

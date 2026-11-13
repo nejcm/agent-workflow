@@ -20,7 +20,8 @@ Do this:
 2. Load the `agent-orchestration` skill and use it to plan and implement the ticket.
 3. If you split the work into phases, record them in the phases file (below) before you
    start the first one, and keep it current as you go.
-4. Implement the ticket in this worktree only.
+4. Implement the ticket in this worktree only. Do not fix, or leave TODO comments for, bugs or
+   problems outside the ticket's scope; list them in the findings file (below) instead.
 5. Run `{{testCmd}}` and make it pass.
 6. Commit with a message that references {{id}}. Add no attribution: no `Co-Authored-By` trailer, no "Generated with ..." line, no emoji signature.
 7. `git push origin {{branch}}`
@@ -48,6 +49,15 @@ It is not a gate: never wait for it, and do not touch the tracker yourself. Form
   `done` when it is finished. Status only moves forward; going back is ignored.
 - Add new phases by appending entries; do not delete entries. Rewrite the whole file as valid JSON.
 - Mark every finished phase `done` before you open the PR.
+
+Findings file: `.aw/findings.json` in this worktree (git ignores `.aw/`; never commit it), out-of-scope
+problems you noticed but did not touch. A tool outside this session files each one once as a new,
+unlabelled ticket and links them from {{id}}; nobody works on them automatically. At most 5 entries,
+`title` one line (max 120 chars), `body` what and where, short (max 4000 chars). Mention no one. Format:
+
+```json
+[{ "title": "Date parser drops the timezone", "body": "src/date.ts parse() ignores the offset; seen while doing X." }]
+```
 
 Question file: `.aw/question.md` in this worktree (git ignores `.aw/`; never commit it),
 Markdown, max 8000 chars. Write it to a temp file in `.aw/` and rename it into place. A tool

@@ -148,7 +148,7 @@ test("done: kills window, removes worktree, files and config dir; keeps them all
   const c = config();
   for (const id of ["gh-1", "gh-2", "gh-3"]) {
     mkdirSync(join(root, "acme/web", id), { recursive: true });
-    for (const ext of [".prompt.md", ".sh", ".ended", ".pr", ".question"]) writeFileSync(join(root, "acme/web", id + ext), "");
+    for (const ext of [".prompt.md", ".sh", ".ended", ".pr", ".question", ".findings"]) writeFileSync(join(root, "acme/web", id + ext), "");
     writeFileSync(join(root, "acme/web", `${id}.source`), "web\n");
     mkdirSync(join(root, "acme/web", `${id}.claude/projects/p`), { recursive: true });
     symlinkSync(join(root, "src-web"), join(root, "acme/web", `${id}.claude/link`));
@@ -166,6 +166,7 @@ test("done: kills window, removes worktree, files and config dir; keeps them all
   expect(existsSync(join(root, "acme/web/gh-1.source"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.pr"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.question"))).toBe(false);
+  expect(existsSync(join(root, "acme/web/gh-1.findings"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.claude"))).toBe(false);
   expect(existsSync(join(root, "src-web"))).toBe(true);
   expect(existsSync(join(root, "acme/web/gh-3.claude"))).toBe(true);

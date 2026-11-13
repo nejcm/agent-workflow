@@ -61,6 +61,7 @@ export function fakeTracker(s: { ready?: Ticket[]; inProgress?: Ticket[]; inRevi
     comment: async (t, b) => void calls.push(`comment ${t.id} ${b}`),
     comments: async () => [],
     createPhase: async (t, title) => (calls.push(`create ${t.id} ${title}`), subs.push({ ref: `sub-${calls.length}`, title }), `sub-${calls.length}`),
+    createTicket: async (t, title, body) => (calls.push(`file ${t.id} ${title} | ${body}`), `https://x/new-${calls.length}`),
     listPhases: async () => subs,
     setPhase: async (_t, ref, st) => void calls.push(`set ${ref} ${st}`),
   };

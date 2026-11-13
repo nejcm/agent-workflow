@@ -61,6 +61,14 @@ export function linear(l: Source, host: string, io: Io, defaultHost = false): Tr
   const move = async (ref: string, state: string) => {
     await gql(`mutation($id: String!, $s: String!) { issueUpdate(id: $id, input: { stateId: $s }) { success } }`, { id: ref, s: await stateId(state) }, true);
   };
+  const create = async (input: object): Promise<{ id: string; url: string }> => {
+    const todo = await stateId(l.todo);
+    const d = await gql(`mutation($i: IssueCreateInput!) { issueCreate(input: $i) { issue { id url } } }`, { i: { teamId, stateId: todo, ...input } }, true);
+    if (io.dry) return { id: "", url: "" };
+    const i = d.issueCreate?.issue;
+    if (typeof i?.id !== "string" || !i.id) throw new Error("linear issueCreate: no id returned");
+    return { id: i.id, url: typeof i.url === "string" ? i.url : i.id };
+  };
   const hostLabel = `host:${host}`;
   const listMine = (state: string, labels: string[]) => defaultHost ? list(state, labels).then((r) => r.filter((t) => ours(t, host, true))) : list(state, [...labels, hostLabel]);
   return {
@@ -98,18 +106,8 @@ export function linear(l: Source, host: string, io: Io, defaultHost = false): Tr
       const d = await gql(q, { id: t.ref, since: new Date(since).toISOString() });
       return (d.issue?.comments?.nodes ?? []).map((c: any) => ({ id: String(c.id), body: c.body ?? "", createdAt: c.createdAt ?? "", author: c.user?.email ?? undefined }));
     },
-    async createPhase(parent, title, description) {
-      const todo = await stateId(l.todo);
-      const d = await gql(
-        `mutation($i: IssueCreateInput!) { issueCreate(input: $i) { issue { id } } }`,
-        { i: { teamId, parentId: parent.ref, stateId: todo, title, description } },
-        true,
-      );
-      if (io.dry) return "";
-      const id = d.issueCreate?.issue?.id;
-      if (typeof id !== "string" || !id) throw new Error("linear issueCreate: no id returned");
-      return id;
-    },
+    createPhase: async (parent, title, description) => (await create({ parentId: parent.ref, title, description })).id,
+    createTicket: async (_from, title, description) => (await create({ title, description })).url,
     listPhases: async (parent) =>
       (await gql(`query($id: String!) { issue(id: $id) { children(first: 100) { nodes { id title } } } }`, { id: parent.ref })).issue.children.nodes.map((i: any) => ({ ref: i.id, title: i.title })),
     setPhase: (_parent, ref, status) => move(ref, status === "done" ? l.done[0]! : l.inProgress),

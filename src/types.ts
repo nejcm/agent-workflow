@@ -78,6 +78,8 @@ export interface Tracker {
   comments(t: Ticket, since: number): Promise<TicketComment[]>;
   /** Creates a sub-ticket of `parent` with no labels; returns its ref ("" in dry-run). */
   createPhase(parent: Ticket, title: string, body: string): Promise<string>;
+  /** Creates a standalone ticket with no labels in `from`'s repo or team; returns its URL ("" in dry-run). */
+  createTicket(from: Ticket, title: string, body: string): Promise<string>;
   listPhases(parent: Ticket): Promise<{ ref: string; title: string }[]>;
   setPhase(parent: Ticket, ref: string, status: "in-progress" | "done"): Promise<void>;
 }

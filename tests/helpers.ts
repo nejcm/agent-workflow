@@ -71,7 +71,7 @@ export function fakeTracker(s: { ready?: Ticket[]; inProgress?: Ticket[]; inRevi
   return { tr, calls, subs };
 }
 
-export function fakeIo(respond: (argv: string[]) => { code?: number; out?: string } | undefined = () => undefined, dry = false) {
+export function fakeIo(respond: (argv: string[]) => { code?: number; out?: string; err?: string } | undefined = () => undefined, dry = false) {
   const cmds: string[] = [];
   const logs: string[] = [];
   const io: Io = {
@@ -88,7 +88,7 @@ export function fakeIo(respond: (argv: string[]) => { code?: number; out?: strin
         (argv[1] === "repo" && argv[2] === "view" ? { out: JSON.stringify({ nameWithOwner: argv[3] }) } : argv[5] === "--git-common-dir" ? { out: join(realpathSync(argv[2]!), ".git") + "\n" } : argv[4] === "get-url" ? { out: "https://github.com/acme/web.git\n" } : {});
       if (argv[1] === "repo" && argv[2] === "clone" && !r.code) mkdirSync(argv[4]!, { recursive: true });
       if (argv[0] === "git" && argv[5] === "clone" && !r.code) mkdirSync(join(argv.at(-1)!, ".git"), { recursive: true });
-      return { code: r.code ?? 0, out: r.out ?? "", err: r.code ? "boom" : "" };
+      return { code: r.code ?? 0, out: r.out ?? "", err: r.err ?? (r.code ? "boom" : "") };
     },
   };
   return { io, cmds, logs };

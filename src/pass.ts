@@ -4,7 +4,7 @@ import { allowedRepo, repoDir, validRepo } from "./config";
 import { deliverFeedback } from "./feedback";
 import { fileFindings } from "./findings";
 import { byPriority, canonical, findPr, github, sameRepo } from "./github";
-import { nonoRun, SLOW_SECS, start, windows, winName } from "./launcher";
+import { nonoRun, SLOW_SECS, start, stopScope, sweepScopes, windows, winName } from "./launcher";
 import { linear } from "./linear";
 import { autoMerge } from "./merge";
 import { syncPhases } from "./phases";
@@ -208,6 +208,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
     }),
   );
   const wins = await windows(cfg, io);
+  await step(io, "sweep scopes", () => sweepScopes(cfg, io));
 
   for (const r of Object.values(cfg.repos)) {
     const dir = repoDir(cfg, r.key);
@@ -222,6 +223,8 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
         const end = await x.tr.closed(id, r.key);
         if (!end) return;
         const w = wins.get(winName(r.key, id));
+        if (end === "canceled" && !w && existsSync(join(dir, `${id}.ended`))) return;
+        await stopScope(cfg, x.io, r.key, id);
         if (w) await write(x.io, ["tmux", "kill-window", "-t", w]);
         wins.delete(winName(r.key, id));
         if (end === "canceled") {
@@ -231,9 +234,9 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
         }
         const wt = join(dir, id);
         if (!lstatSync(join(wt, ".git"), { throwIfNoEntry: false })?.isDirectory()) throw new Error(`${wt}/.git is not a directory; left in place`);
-        // The session controls its .git (config, filters, commondir), so git checks it inside the sandbox, read-only; aw then deletes without git.
+        // The session controls its .git (config, filters, commondir), so git checks it sandboxed: read-only, no network, no credentials; aw then deletes without git.
         // A planted filter can block git; the runner's deadline kills its whole process group.
-        const box = r.sandbox === "nono" ? nonoRun(r, awDir, [["--read", wt], ["--read", join(r.path, ".git", "objects")]]) : [];
+        const box = r.sandbox === "nono" ? nonoRun("aw-check", awDir, [["--read", wt], ["--read", join(r.path, ".git", "objects")]]) : [];
         // A fresh clone has no tags (--revision, tagOpt=--no-tags), so any tag, stash or note is the session's own.
         const checks = [["status", "--porcelain", "--ignore-submodules=none"], ["log", "--format=%h", "--branches", "--not", "--remotes"], ["for-each-ref", "--format=%(refname)", "refs/tags", "refs/stash", "refs/notes"]];
         for (const c of checks) if ((await write(x.io, [...box, ...GIT, "-C", wt, ...c])).trim()) throw new Error(`${wt} has uncommitted, untracked or unpushed work; left in place`);

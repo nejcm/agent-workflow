@@ -83,7 +83,7 @@ test("newest picks the most recent existing file", () => {
 
 test("transcript finds the newest claude file, or the codex session whose meta cwd matches", () => {
   const wt = join(root, "acme/web/PER-1");
-  const cd = claudeDir(root, wt);
+  const cd = claudeDir(wt);
   claudeFile(wt, "old.jsonl", claudeText);
   claudeFile(wt, "new.jsonl", claudeText);
   utimesSync(join(cd, "old.jsonl"), 1000, 1000);
@@ -112,7 +112,7 @@ test("worktreesFor rejects traversal and unsafe ids, finds the worktree on disk,
 
 test("tail prints the last n events and never tool output", async () => {
   const wt = join(root, "acme/web/PER-3");
-  const cd = claudeDir(root, wt);
+  const cd = claudeDir(wt);
   mkdirSync(cd, { recursive: true });
   writeFileSync(join(cd, "s.jsonl"), [cwdLine(wt), claudePrompt, claudeText, claudeTool, claudeOk, "garbage", claudeErr, `${claudeText.slice(0, 20)}`].join("\n"));
   const out: string[] = [];
@@ -138,8 +138,8 @@ test("transcript skips symlinks and FIFOs and never blocks on them", () => {
   utimesSync(real, 1000, 1000);
   const outside = join(root, "outside.jsonl");
   writeFileSync(outside, `${cwdLine(wt)}\n`);
-  symlinkSync(outside, join(claudeDir(root, wt), "link.jsonl"));
-  expect(Bun.spawnSync(["mkfifo", join(claudeDir(root, wt), "fifo.jsonl")]).exitCode).toBe(0);
+  symlinkSync(outside, join(claudeDir(wt), "link.jsonl"));
+  expect(Bun.spawnSync(["mkfifo", join(claudeDir(wt), "fifo.jsonl")]).exitCode).toBe(0);
   expect(transcript(wt, "claude", root)).toBe(real);
 });
 

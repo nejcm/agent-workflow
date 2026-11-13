@@ -56,6 +56,7 @@ done
 
 todo=0
 CLAUDE_CONFIG_DIR=~/.claude-aw claude auth status 2>/dev/null | grep -q '"loggedIn": true' || { todo=1; echo "TODO: CLAUDE_CONFIG_DIR=~/.claude-aw claude   # then /login"; }
+[ -s ~/.claude-aw/oauth-token ] || { todo=1; echo "TODO: claude setup-token, then save the token to ~/.claude-aw/oauth-token (chmod 600)"; }
 CODEX_HOME=~/.codex-aw codex login status >/dev/null 2>&1 || { todo=1; echo "TODO: CODEX_HOME=~/.codex-aw codex login"; }
 echo "Linear sources: create labels agent and host:$host in the team."
 [ "$todo" = 0 ] && echo "Setup done. Next: scripts/run.sh"

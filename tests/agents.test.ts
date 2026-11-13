@@ -15,13 +15,13 @@ const hookFile = (id: string, o: unknown) => {
   writeFileSync(stateAt(id), typeof o === "string" ? o : JSON.stringify(o));
 };
 
-test("claude transcript dir mirrors the cwd with non-alphanumerics as -, so a-b and a.b collide", () => {
-  expect(claudeDir("/h", "/home/u/agent-ws/acme/web.js/PER-10")).toBe("/h/.claude-aw/projects/-home-u-agent-ws-acme-web-js-PER-10");
-  expect(claudeDir(root, "/w/a-b")).toBe(claudeDir(root, "/w/a.b"));
+test("claude transcript dir is in the ticket's own config dir and mirrors the cwd with non-alphanumerics as -", () => {
+  expect(claudeDir("/home/u/agent-ws/acme/web.js/PER-10")).toBe("/home/u/agent-ws/acme/web.js/PER-10.claude/projects/-home-u-agent-ws-acme-web-js-PER-10");
+  expect(claudeDir("/w/a-b").split("/").at(-1)).toBe(claudeDir("/w/a.b").split("/").at(-1));
 });
 
 test("transcripts lists regular .jsonl files only, never walking a symlinked dir", () => {
-  const cd = claudeDir(root, wt("PER-1"));
+  const cd = claudeDir(wt("PER-1"));
   const sd = join(root, ".codex-aw/sessions/2026/11");
   for (const d of [cd, sd]) mkdirSync(d, { recursive: true });
   for (const f of [join(cd, "a.jsonl"), join(cd, "b.txt"), join(sd, "r.jsonl")]) writeFileSync(f, "");
@@ -34,7 +34,7 @@ test("transcripts lists regular .jsonl files only, never walking a symlinked dir
 
 test("codex live state is the hook file lookup", async () => {
   hookFile("A", { state: "idle", ts: NOW });
-  expect((await AGENTS.codex.live(root))(wt("A"), 0, NOW)).toEqual({ state: "idle", since: NOW, waitingFor: null });
+  expect((await AGENTS.codex.live(root, []))(wt("A"), 0, NOW)).toEqual({ state: "idle", since: NOW, waitingFor: null });
 });
 
 test("parseAgents maps busy/waiting/idle by exact cwd, newest session wins", () => {

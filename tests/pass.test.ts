@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync,
 import { join } from "node:path";
 import { validRepo } from "../src/config";
 import { canonCache, github } from "../src/github";
-import { adminDir, launcher, render, trustClaude } from "../src/launcher";
+import { adminDir, launcher, render, seedClaude } from "../src/launcher";
 import { pass } from "../src/pass";
 import type { Io, Ticket, Tracker } from "../src/types";
 import { GIT } from "../src/util";
@@ -15,22 +15,21 @@ test("render is single-pass so ticket text cannot expand placeholders", () => {
   expect(render("{{title}} / {{body}} / {{nope}}", { title: "{{body}}", body: "b" })).toBe("{{body}} / b / {{nope}}");
 });
 
-test("launcher: claude under nono, ticket text never in shell", () => {
+test("launcher: claude under nono, token read on the host, never written", () => {
   const c = config();
-  const s = launcher(web(c), { ...ticket(1), title: "x'; rm -rf / $(id) `id`" }, "/ws/web/gh-1", "/ws/web/gh-1.prompt.md", "/aw");
-  expect(s).toContain("export CLAUDE_CONFIG_DIR=\"$HOME/.claude-aw\" CODEX_HOME=\"$HOME/.codex-aw\" CLAUDE_CODE_TMPDIR=\"$HOME/.claude-aw/tmp\"");
+  const s = launcher(web(c), "/ws/web/gh-1", "/ws/web/gh-1.prompt.md", "/aw");
+  expect(s).toContain(`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-aw/oauth-token")" || exit 1\nexport CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/web/gh-1'.claude CODEX_HOME="$HOME/.codex-aw" CLAUDE_CODE_TMPDIR='/ws/web/gh-1'.claude/tmp`);
   expect(s).toContain("--no-rollback-prompt");
-  expect(s).toContain(`exec nono run --no-rollback-prompt --profile '/aw/nono/aw-claude.json' --allow '/ws/web/gh-1' --read '${root}/src-web/.git' --allow '${root}/src-web/.git/objects' --allow '${root}/src-web/.git/refs' --allow '${root}/src-web/.git/logs' --allow '${root}/src-web/.git/worktrees/gh-1' -- claude --remote-control`);
+  expect(s).toContain(`exec nono run --no-rollback-prompt --profile '/aw/nono/aw-claude.json' --allow '/ws/web/gh-1' --allow '/ws/web/gh-1.claude' --read '${root}/src-web/.git' --allow '${root}/src-web/.git/objects' --allow '${root}/src-web/.git/refs' --allow '${root}/src-web/.git/logs' --allow '${root}/src-web/.git/worktrees/gh-1' -- claude --permission-mode`);
   expect(s).toContain(`--permission-mode bypassPermissions "$(cat '/ws/web/gh-1.prompt.md')"`);
-  expect(s).not.toMatch(/\$\(id\)|`id`|'; rm/);
 });
 
 test("launcher: codex without sandbox keeps the daemon", () => {
   const c = config({ repos: [{ name: "acme/web", agent: "codex", sandbox: "none" }] });
-  const s = launcher(web(c), ticket(2), "/ws/web/gh-2", "/ws/web/gh-2.prompt.md", "/aw");
+  const s = launcher(web(c), "/ws/web/gh-2", "/ws/web/gh-2.prompt.md", "/aw");
   expect(s).toContain('export CODEX_HOME="$HOME/.codex-aw"');
   expect(s).toContain(`exec codex --sandbox danger-full-access --ask-for-approval never -C '/ws/web/gh-2' "$(cat '/ws/web/gh-2.prompt.md')"`);
-  expect(launcher(web(config({ repos: [{ name: "acme/web", agent: "codex" }] })), ticket(2), "/w", "/p", "/aw")).toContain("-- codex --no-daemon ");
+  expect(launcher(web(config({ repos: [{ name: "acme/web", agent: "codex" }] })), "/w", "/p", "/aw")).toContain("-- codex --no-daemon ");
 });
 
 test("launcher scripts are byte-for-byte stable for each agent, with and without nono", () => {
@@ -38,15 +37,16 @@ test("launcher scripts are byte-for-byte stable for each agent, with and without
 cd '/ws/it'\''s' || exit 1
 unset LINEAR_API_KEY
 `;
-  const claudeEnv = String.raw`export CLAUDE_CONFIG_DIR="$HOME/.claude-aw" CODEX_HOME="$HOME/.codex-aw" CLAUDE_CODE_TMPDIR="$HOME/.claude-aw/tmp"; mkdir -p "$CLAUDE_CODE_TMPDIR"
+  const claudeEnv = String.raw`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-aw/oauth-token")" || exit 1
+export CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CODEX_HOME="$HOME/.codex-aw" CLAUDE_CODE_TMPDIR='/ws/it'\''s'.claude/tmp; mkdir -p "$CLAUDE_CODE_TMPDIR"
 `;
-  const nono = (a: string) => String.raw`nono run --no-rollback-prompt --profile '/aw/nono/aw-${a}.json' --allow '/ws/it'\''s' --read '/src/web/.git' --allow '/src/web/.git/objects' --allow '/src/web/.git/refs' --allow '/src/web/.git/logs' --allow '/src/web/.git/worktrees/it'\''s' -- `;
-  const claude = String.raw`claude --remote-control 'gh-3: Its (x)' --permission-mode bypassPermissions "$(cat '/ws/p.md')"
+  const nono = (a: string, own = "") => String.raw`nono run --no-rollback-prompt --profile '/aw/nono/aw-${a}.json' --allow '/ws/it'\''s' ${own}--read '/src/web/.git' --allow '/src/web/.git/objects' --allow '/src/web/.git/refs' --allow '/src/web/.git/logs' --allow '/src/web/.git/worktrees/it'\''s' -- `;
+  const claude = String.raw`claude --permission-mode bypassPermissions "$(cat '/ws/p.md')"
 `;
   const codex = (d: string) => String.raw`codex ${d}--sandbox danger-full-access --ask-for-approval never -C '/ws/it'\''s' "$(cat '/ws/p.md')"
 `;
-  const s = (agent: string, sandbox: string) => launcher(web(config({ repos: [{ name: "acme/web", path: "/src/web", agent, sandbox }] })), { ...ticket(3), title: "It's $(x) ✓" }, "/ws/it's", "/ws/p.md", "/aw");
-  expect(s("claude", "nono")).toBe(`${head}${claudeEnv}exec ${nono("claude")}${claude}`);
+  const s = (agent: string, sandbox: string) => launcher(web(config({ repos: [{ name: "acme/web", path: "/src/web", agent, sandbox }] })), "/ws/it's", "/ws/p.md", "/aw");
+  expect(s("claude", "nono")).toBe(`${head}${claudeEnv}exec ${nono("claude", String.raw`--allow '/ws/it'\''s.claude' `)}${claude}`);
   expect(s("claude", "none")).toBe(`${head}${claudeEnv}exec ${claude}`);
   expect(s("codex", "nono")).toBe(`${head}export CODEX_HOME="$HOME/.codex-aw"\nexec ${nono("codex")}${codex("--no-daemon ")}`);
   expect(s("codex", "none")).toBe(`${head}export CODEX_HOME="$HOME/.codex-aw"\nexec ${codex("")}`);
@@ -63,55 +63,42 @@ test("starts ready tickets up to maxConcurrent", async () => {
   const prompt = readFileSync(join(root, "acme/web/gh-1.prompt.md"), "utf8");
   expect(prompt).toContain("body; rm -rf ~ $(whoami)");
   expect(prompt).toContain("git push origin agent/gh-1");
-  const trust = JSON.parse(readFileSync(join(root, ".claude-aw/.claude.json"), "utf8"));
-  expect(trust.projects).toEqual({ [realpathSync(join(root, "src-web"))]: { hasTrustDialogAccepted: true } });
+  const seeded = JSON.parse(readFileSync(join(root, "acme/web/gh-1.claude/.claude.json"), "utf8"));
+  expect(seeded.projects).toEqual({ [realpathSync(join(root, "src-web"))]: { hasTrustDialogAccepted: true } });
 });
 
-test("trustClaude adds one key atomically, keeps the rest, and refuses a symlink", () => {
-  const file = join(root, ".claude-aw/.claude.json");
-  mkdirSync(join(root, ".claude-aw"));
-  writeFileSync(file, JSON.stringify({ oauthAccount: { a: 1 }, projects: { "/r": { allowedTools: ["x"] }, "/o": { hasTrustDialogAccepted: true } } }), { mode: 0o600 });
-  const { io, logs } = fakeIo();
-  trustClaude({ ...io, dry: true }, "/r");
-  expect(JSON.parse(readFileSync(file, "utf8")).projects["/r"]).toEqual({ allowedTools: ["x"] });
-  trustClaude(io, "/r");
-  trustClaude(io, "/o");
-  expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ oauthAccount: { a: 1 }, projects: { "/r": { allowedTools: ["x"], hasTrustDialogAccepted: true }, "/o": { hasTrustDialogAccepted: true } } });
-  expect(statSync(file).mode & 0o777).toBe(0o600);
-  expect(logs).toEqual([`dry: trust /r in ${file}`, `trust /r in ${file}`]);
-  expect(readdirSync(join(root, ".claude-aw"))).toEqual([".claude.json"]);
-  rmSync(file);
-  symlinkSync(join(root, "elsewhere.json"), file);
-  writeFileSync(join(root, "elsewhere.json"), "{}");
-  expect(() => trustClaude(io, "/r")).toThrow();
-  expect(readFileSync(join(root, "elsewhere.json"), "utf8")).toBe("{}");
+test("a claude start without the token file fails before cloning, with the fix in the log", async () => {
+  rmSync(join(root, ".claude-aw/oauth-token"));
+  const { tr, calls } = fakeTracker({ ready: [ticket(1)] });
+  const { io, cmds, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : noPr(a)));
+  await pass(config(), io, () => tr, "/aw");
+  expect(calls).toEqual([]);
+  expect(cmds.filter((c) => / clone | worktree add | new-window /.test(c))).toEqual([]);
+  expect(logs.join("\n")).toContain(`${root}/.claude-aw/oauth-token is missing: run \`claude setup-token\``);
 });
 
-test("trustClaude waits for Claude's lock, then skips without touching it; a FIFO fails instead of blocking", () => {
-  const file = join(root, ".claude-aw/.claude.json");
-  mkdirSync(`${file}.lock`, { recursive: true });
-  writeFileSync(file, "{}");
+test("seedClaude: a fresh dir with template links, account keys and trust only; dry run touches nothing", () => {
+  const tpl = join(root, ".claude-aw");
+  mkdirSync(join(root, ".claude/skills"), { recursive: true });
+  mkdirSync(join(tpl, "plugins"), { recursive: true });
+  writeFileSync(join(tpl, "settings.json"), "{}");
+  symlinkSync(join(root, ".claude/skills"), join(tpl, "skills"));
+  writeFileSync(join(tpl, ".credentials.json"), "{}");
+  writeFileSync(join(tpl, ".claude.json"), JSON.stringify({ hasCompletedOnboarding: true, oauthAccount: { a: 1 }, userID: "u", mcpServers: { x: {} }, projects: { "/o": { hasTrustDialogAccepted: true, mcpServers: { y: {} } } } }));
+  const dir = join(root, "acme/web/gh-1.claude");
   const { io, logs } = fakeIo();
-  trustClaude(io, "/r", 100);
-  expect(logs).toEqual([`skip trust /r: ${file}.lock is held`]);
-  expect(readFileSync(file, "utf8")).toBe("{}");
-  expect(existsSync(`${file}.lock`)).toBe(true);
-  rmSync(`${file}.lock`, { recursive: true });
-  rmSync(file);
-  expect(Bun.spawnSync(["mkfifo", file]).exitCode).toBe(0);
-  for (const dry of [true, false]) expect(() => trustClaude({ ...io, dry }, "/r")).toThrow("is not a regular file");
-  expect(existsSync(`${file}.lock`)).toBe(false);
-});
-
-test("trustClaude publishes nothing and leaves the lock once held past maxHoldMs", () => {
-  const file = join(root, ".claude-aw/.claude.json");
-  mkdirSync(join(root, ".claude-aw"));
-  writeFileSync(file, "{}");
-  const { io, logs } = fakeIo();
-  trustClaude(io, "/r", 100, -1);
-  expect(logs).toEqual([`trust /r in ${file}`, `skip trust /r: lost ${file}.lock`]);
-  expect(readFileSync(file, "utf8")).toBe("{}");
-  expect(readdirSync(join(root, ".claude-aw")).sort()).toEqual([".claude.json", ".claude.json.lock"]);
+  seedClaude({ ...io, dry: true }, dir, "/r");
+  expect(existsSync(dir)).toBe(false);
+  mkdirSync(join(dir, "projects/x/memory"), { recursive: true });
+  writeFileSync(join(dir, "settings.json"), '{"hooks":{}}');
+  seedClaude(io, dir, "/r");
+  expect(readdirSync(dir).sort()).toEqual([".claude.json", "plugins", "settings.json", "skills"]);
+  expect(realpathSync(join(dir, "skills"))).toBe(realpathSync(join(root, ".claude/skills")));
+  expect(realpathSync(join(dir, "settings.json"))).toBe(realpathSync(join(tpl, "settings.json")));
+  expect(JSON.parse(readFileSync(join(dir, ".claude.json"), "utf8"))).toEqual({ hasCompletedOnboarding: true, oauthAccount: { a: 1 }, userID: "u", projects: { "/r": { hasTrustDialogAccepted: true } } });
+  expect(statSync(join(dir, ".claude.json")).mode & 0o777).toBe(0o600);
+  expect(statSync(dir).mode & 0o777).toBe(0o700);
+  expect(logs).toEqual([`dry: seed ${dir} from ${tpl}`, `seed ${dir} from ${tpl}`]);
 });
 
 test("reuses existing worktree dir and existing branch", async () => {
@@ -146,7 +133,10 @@ test("done: kills window, removes worktree and files; keeps files when remove fa
     mkdirSync(join(root, "acme/web", id), { recursive: true });
     for (const ext of [".prompt.md", ".sh", ".ended", ".pr", ".question"]) writeFileSync(join(root, "acme/web", id + ext), "");
     writeFileSync(join(root, "acme/web", `${id}.source`), "web\n");
+    mkdirSync(join(root, "acme/web", `${id}.claude/projects/p`), { recursive: true });
+    symlinkSync(join(root, "src-web"), join(root, "acme/web", `${id}.claude/link`));
   }
+  mkdirSync(join(root, "src-web"), { recursive: true });
   const { tr } = fakeTracker({ done: ["gh-1", "gh-2"] });
   const { io, cmds, logs } = fakeIo((a) => {
     if (a[1] === "list-windows") return windowsOut(["acme/web/gh-1"]);
@@ -159,6 +149,9 @@ test("done: kills window, removes worktree and files; keeps files when remove fa
   expect(existsSync(join(root, "acme/web/gh-1.source"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.pr"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.question"))).toBe(false);
+  expect(existsSync(join(root, "acme/web/gh-1.claude"))).toBe(false);
+  expect(existsSync(join(root, "src-web"))).toBe(true);
+  expect(existsSync(join(root, "acme/web/gh-3.claude"))).toBe(true);
   expect(existsSync(join(root, "acme/web/gh-2.sh"))).toBe(true);
   expect(existsSync(join(root, "acme/web/gh-3.sh"))).toBe(true);
   expect(logs.some((l) => l.includes("[web] cleanup acme/web/gh-2 failed"))).toBe(true);
@@ -555,6 +548,7 @@ test("cleanup never runs git's own dirty check, which follows a planted commondi
     worktree(id);
     writeFileSync(join(wt, "f"), "x");
     writeFileSync(join(wt, ".gitattributes"), "* filter=evil\n");
+    mkdirSync(`${wt}.claude`);
     const admin = join(clone, ".git/worktrees", id);
     if (how === "commondir") {
       const fake = join(root, `fake-${id}`);
@@ -576,14 +570,14 @@ test("cleanup never runs git's own dirty check, which follows a planted commondi
     return logs;
   };
   expect((await run("?? f\n")).filter((l) => l.includes("has uncommitted or untracked files"))).toHaveLength(2);
-  expect([existsSync(a), existsSync(b), existsSync(marker)]).toEqual([true, true, false]);
+  expect([existsSync(a), existsSync(b), existsSync(marker), existsSync(`${a}.claude`)]).toEqual([true, true, false, true]);
   for (const wt of [a, b]) {
     expect(sh("git", "-C", clone, "worktree", "remove", wt).exitCode).not.toBe(0);
     expect(existsSync(marker)).toBe(true);
     rmSync(marker);
   }
   await run("");
-  expect([existsSync(a), existsSync(b), existsSync(marker)]).toEqual([false, false, false]);
+  expect([existsSync(a), existsSync(b), existsSync(marker), existsSync(`${a}.claude`)]).toEqual([false, false, false, false]);
 });
 
 test("the session is granted git's actual admin dir, and a .git pointing elsewhere is refused", () => {
@@ -596,7 +590,7 @@ test("the session is granted git's actual admin dir, and a .git pointing elsewhe
   expect(sh(...GIT, "-C", clone, "worktree", "add", "-q", wt, "-b", "agent/gh-1")).toBe(0);
   const r = { ...web(config()), path: clone };
   expect(adminDir(r, wt)).toBe(join(clone, ".git/worktrees/gh-11"));
-  expect(launcher(r, ticket(1), wt, "/p", "/aw", adminDir(r, wt))).toContain(`--allow '${clone}/.git/worktrees/gh-11' --`);
+  expect(launcher(r, wt, "/p", "/aw", adminDir(r, wt))).toContain(`--allow '${clone}/.git/worktrees/gh-11' --`);
   writeFileSync(join(wt, ".git"), `gitdir: ${join(clone, ".git/worktrees/gh-1")}\n`);
   expect(() => adminDir(r, wt)).toThrow("does not point to its own admin dir");
 });

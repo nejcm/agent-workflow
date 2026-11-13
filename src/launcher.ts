@@ -1,6 +1,6 @@
-import { closeSync, constants as C, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { AGENTS } from "./agents";
+import { AGENTS, CLAUDE_TOKEN, claudeHome } from "./agents";
 import { repoDir } from "./config";
 import type { Config, Io, Repo, Source, Ticket, Tracker } from "./types";
 import { AW_DIR, GIT, inAw, put, remove, write } from "./util";
@@ -12,15 +12,15 @@ const q = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 export const nonoRun = (l: Repo, awDir: string, grants: [string, string][], quote = (s: string) => s) =>
   ["nono", "run", "--no-rollback-prompt", "--profile", quote(join(awDir, "nono", `aw-${l.agent}.json`)), ...grants.flatMap(([flag, path]) => [flag, quote(path)]), "--"];
 
-export function launcher(l: Repo, t: Ticket, wt: string, promptFile: string, awDir = AW_DIR, admin = join(l.path, ".git", "worktrees", basename(wt))) {
+export function launcher(l: Repo, wt: string, promptFile: string, awDir = AW_DIR, admin = join(l.path, ".git", "worktrees", basename(wt))) {
   const prompt = `"$(cat ${q(promptFile)})"`;
   const nono = l.sandbox === "nono";
   const git = join(l.path, ".git");
   // Read-only .git: config, hooks and info stay out of reach; only what commits and pushes write is granted.
   const rw = [join(git, "objects"), join(git, "refs"), join(git, "logs"), admin].map((p): [string, string] => ["--allow", p]);
-  const wrap = nono ? nonoRun(l, awDir, [["--allow", wt], ["--read", git], ...rw], q) : [];
-  const title = t.title.replace(/[^\w .,:()#-]/g, "").slice(0, 60).trim();
-  const [env, cmd] = AGENTS[l.agent].launch(q(wt), q(`${t.id}: ${title}`), prompt, nono);
+  const own: [string, string][] = l.agent === "claude" ? [["--allow", claudeHome(wt)]] : [];
+  const wrap = nono ? nonoRun(l, awDir, [["--allow", wt], ...own, ["--read", git], ...rw], q) : [];
+  const [env, cmd] = AGENTS[l.agent].launch(q(wt), prompt, nono);
   return `#!/usr/bin/env bash\ncd ${q(wt)} || exit 1\nunset LINEAR_API_KEY\n${env}\nexec ${[...wrap, ...cmd].join(" ")}\n`;
 }
 
@@ -63,72 +63,25 @@ async function ensureClone(cfg: Config, io: Io, r: Repo) {
   if (!io.dry) renameSync(tmp, r.path);
 }
 
-// Claude keys folder trust on the clone root, which covers its worktrees; an untrusted one stalls the session on the dialog.
-export function trustClaude(io: Io, root: string, waitMs = 2000, maxHoldMs = 5000) {
-  const file = join(io.home, ".claude-aw", ".claude.json");
-  const lock = `${file}.lock`;
-  let ino = 0;
-  let dev = 0;
-  let t0 = 0;
-  // Claude takes a lock older than 10 s; never publish or unlock once ours may have been taken over.
-  const held = () => {
-    const st = lstatSync(lock, { throwIfNoEntry: false });
-    return !!st && st.ino === ino && st.dev === dev && performance.now() - t0 < maxHoldMs;
-  };
-  if (!io.dry) {
-    mkdirSync(dirname(file), { recursive: true });
-    // Claude's own config lock (proper-lockfile: mkdir, stale after 10 s by mtime); we hold it for milliseconds.
-    for (const end = Date.now() + waitMs; ; Bun.sleepSync(50)) {
-      try {
-        mkdirSync(lock);
-        ({ ino, dev } = lstatSync(lock));
-        t0 = performance.now();
-        break;
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-        if (Date.now() >= end) return io.log(`skip trust ${root}: ${lock} is held`);
-      }
-    }
-  }
+const TEMPLATE = ["settings.json", "CLAUDE.md", "AGENTS.md", "skills", "plugins"];
+const ACCOUNT = ["hasCompletedOnboarding", "lastOnboardingVersion", "oauthAccount", "userID"];
+
+// Fresh per start, so nothing a session left there carries over. Trust goes on the clone root, which covers its worktrees.
+export function seedClaude(io: Io, dir: string, root: string) {
+  const tpl = join(io.home, ".claude-aw");
+  io.log(`${io.dry ? "dry: " : ""}seed ${dir} from ${tpl}`);
+  if (io.dry) return;
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  for (const f of TEMPLATE) if (existsSync(join(tpl, f))) symlinkSync(realpathSync(join(tpl, f)), join(dir, f));
+  let o: any = {};
   try {
-    let o: any = {};
-    let mode = 0o600;
-    try {
-      const fd = openSync(file, C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK);
-      try {
-        const st = fstatSync(fd);
-        if (!st.isFile()) throw new Error(`${file} is not a regular file`);
-        mode = st.mode & 0o777;
-        o = JSON.parse(readFileSync(fd, "utf8"));
-      } finally {
-        closeSync(fd);
-      }
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
-    }
-    if (!o || typeof o !== "object" || Array.isArray(o)) throw new Error(`${file} is not a JSON object`);
-    if (o.projects?.[root]?.hasTrustDialogAccepted === true) return;
-    io.log(`${io.dry ? "dry: " : ""}trust ${root} in ${file}`);
-    if (io.dry) return;
-    o.projects = { ...o.projects, [root]: { ...o.projects?.[root], hasTrustDialogAccepted: true } };
-    const tmp = `${file}.aw-${process.pid}.tmp`;
-    rmSync(tmp, { force: true });
-    try {
-      const fd = openSync(tmp, C.O_WRONLY | C.O_CREAT | C.O_EXCL | C.O_NOFOLLOW, mode);
-      try {
-        writeFileSync(fd, JSON.stringify(o, null, 2));
-        fsyncSync(fd);
-      } finally {
-        closeSync(fd);
-      }
-      if (!held()) return io.log(`skip trust ${root}: lost ${lock}`);
-      renameSync(tmp, file);
-    } finally {
-      rmSync(tmp, { force: true });
-    }
-  } finally {
-    if (!io.dry && held()) rmSync(lock, { recursive: true, force: true });
+    o = JSON.parse(readFileSync(join(tpl, ".claude.json"), "utf8"));
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
+  const seed = Object.fromEntries(ACCOUNT.filter((k) => o?.[k] !== undefined).map((k) => [k, o[k]]));
+  writeFileSync(join(dir, ".claude.json"), JSON.stringify({ ...seed, projects: { [root]: { hasTrustDialogAccepted: true } } }, null, 2), { mode: 0o600, flag: "wx" });
 }
 
 export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Tracker, io: Io, awDir: string) {
@@ -137,8 +90,10 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   const branch = `agent/${t.id}`;
   const promptFile = join(dir, `${t.id}.prompt.md`);
   const script = join(dir, `${t.id}.sh`);
+  const token = join(io.home, CLAUDE_TOKEN);
+  if (r.agent === "claude" && !existsSync(token)) throw new Error(`${token} is missing: run \`claude setup-token\` and save the token it prints there (chmod 600)`);
   await ensureClone(cfg, io, r);
-  if (r.agent === "claude") trustClaude(io, existsSync(r.path) ? realpathSync(r.path) : r.path);
+  if (r.agent === "claude") seedClaude(io, claudeHome(wt), existsSync(r.path) ? realpathSync(r.path) : r.path);
   put(io, join(dir, `${t.id}.source`), s.name);
   remove(io, join(dir, `${t.id}.ended`));
   await write(io, [...GIT, "-C", r.path, "fetch", "origin", r.baseBranch]);
@@ -155,7 +110,7 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
     inAw(wt, (d) => (rmSync(`${d}/.gitignore`, { force: true }), writeFileSync(`${d}/.gitignore`, "*\n", { flag: "wx" })));
   }
   put(io, promptFile, render(readFileSync(r.prompt, "utf8"), vars));
-  put(io, script, launcher(r, t, wt, promptFile, awDir, io.dry || r.sandbox !== "nono" ? undefined : adminDir(r, wt)), 0o755);
+  put(io, script, launcher(r, wt, promptFile, awDir, io.dry || r.sandbox !== "nono" ? undefined : adminDir(r, wt)), 0o755);
   await write(io, ["tmux", "new-window", "-d", "-t", `=${cfg.tmuxSession}:`, "-n", winName(r.key, t.id), script]);
   // Claimed last so a failed start leaves the ticket ready for the next poll; the open window stops a double start.
   try {

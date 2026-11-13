@@ -32,7 +32,7 @@ test("resolve: ended/orphan first, then the feed, stale working is unknown", () 
   expect(resolve("running", { ...working, since: null }, null, NOW).state).toBe("working");
 });
 
-test("snapshot runs claude agents once with aw's config dir, maps rows by exact cwd, and shows state in table and JSON", async () => {
+test("snapshot runs claude agents once per running ticket with its own config dir, maps rows by exact cwd, and shows state in table and JSON", async () => {
   for (const id of ["PER-1", "PER-2", "PER-3"]) worktree(id);
   const bin = join(root, "bin");
   mkdirSync(bin);
@@ -48,7 +48,7 @@ test("snapshot runs claude agents once with aw's config dir, maps rows by exact 
   } finally {
     process.env.PATH = path;
   }
-  expect(readFileSync(join(root, "calls"), "utf8")).toBe(`${root}/.claude-aw agents --json\n`);
+  expect(readFileSync(join(root, "calls"), "utf8").split("\n").filter(Boolean).sort()).toEqual([`${wt("PER-1")}.claude agents --json`, `${wt("PER-2")}.claude agents --json`]);
   expect(rs.map((r) => [r.id, r.session, r.state, r.waitingFor])).toEqual([["PER-1", "running", "waiting", "permission"], ["PER-2", "running", "unknown", null], ["PER-3", "orphan", "ended", null]]);
   expect(JSON.parse(JSON.stringify(rs))[0]).toMatchObject({ state: "waiting", waitingFor: "permission", stateSince: null });
   expect(table(rs).split("\n")[1]).toMatch(/^PER-1\s+acme\/web\s+claude\s+running\s+waiting: permission\s+/);
@@ -64,7 +64,7 @@ test("codex rows read the hook file; one from before the launch is ignored", asy
   hookFile("PER-4", { state: "idle", ts: NOW - 10_000 });
   hookFile("PER-5", { state: "working", ts: (T - 120) * 1000 });
   const { io } = fakeIo((argv) => (argv[0] === "tmux" ? windowsOut(["acme/web/PER-4", "acme/web/PER-5"]) : undefined));
-  const rs = await snapshot(codex(), io, root, NOW, (a) => (a === "claude" ? Promise.reject(new Error("not for codex")) : AGENTS[a].live(root)));
+  const rs = await snapshot(codex(), io, root, NOW, (a) => (a === "claude" ? Promise.reject(new Error("not for codex")) : AGENTS[a].live(root, [])));
   expect(rs.map((r) => [r.state, r.stateSince])).toEqual([["idle", NOW - 10_000], ["unknown", null]]);
 });
 

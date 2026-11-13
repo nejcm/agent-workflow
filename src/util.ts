@@ -58,7 +58,7 @@ export const mtime = (p: string) => {
 export function remove(io: Io, path: string) {
   if (!existsSync(path)) return;
   io.log(`${io.dry ? "dry: " : ""}rm ${path}`);
-  if (!io.dry) rmSync(path);
+  if (!io.dry) rmSync(path, { recursive: true });
 }
 
 // Ours if labelled host:<host>, or (defaultHost) if no host: label at all. Case-insensitive like GitHub's label filter.

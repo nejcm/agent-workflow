@@ -3,7 +3,7 @@ import { afterEach, beforeEach } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { claudeDir } from "../src/agents";
+import { CLAUDE_TOKEN, claudeDir } from "../src/agents";
 import { parseConfig } from "../src/config";
 import { canonCache } from "../src/github";
 import type { Config, Io, Ticket, Tracker } from "../src/types";
@@ -14,6 +14,8 @@ export let root: string;
 export function useTempRoot() {
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "aw-test-"));
+    mkdirSync(join(root, ".claude-aw"));
+    writeFileSync(join(root, CLAUDE_TOKEN), "tok");
     canonCache.clear();
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
@@ -99,7 +101,7 @@ export const worktree = (id: string, source = "web", repo = "acme/web") => {
   writeFileSync(join(root, repo, `${id}.source`), source);
 };
 export const claudeFile = (wt: string, name: string, ...lines: string[]) => {
-  const cd = claudeDir(root, wt);
+  const cd = claudeDir(wt);
   mkdirSync(cd, { recursive: true });
   writeFileSync(join(cd, name), [JSON.stringify({ type: "user", cwd: wt }), ...lines, ""].join("\n"));
   return join(cd, name);

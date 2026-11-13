@@ -22,7 +22,7 @@ test("launcher: claude under nono, token read on the host, never written; only a
   const s = launcher(web(c), "/ws/web/gh-1", "/ws/web/gh-1.prompt.md", "/aw", `${root}/src-web/.git/worktrees/gh-1`);
   expect(s).toContain(`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-aw/oauth-token")" || exit 1\nexport CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/web/gh-1'.claude CODEX_HOME='/ws/web/gh-1'.codex CLAUDE_CODE_TMPDIR='/ws/web/gh-1'.claude/tmp`);
   expect(s).toContain("--no-rollback-prompt");
-  expect(s).toContain(`exec nono run --no-rollback-prompt --profile '/aw/nono/aw-claude.json' --allow '/ws/web/gh-1' --allow '/ws/web/gh-1.claude' --allow '/ws/web/gh-1.codex' --read '${root}/src-web/.git' --allow '${root}/src-web/.git/objects' --allow '${root}/src-web/.git/refs' --allow '${root}/src-web/.git/logs' --allow '${root}/src-web/.git/worktrees/gh-1' -- claude --permission-mode`);
+  expect(s).toContain(`exec nono run --no-rollback-prompt --profile '/aw/nono/aw-claude.json' --allow '/ws/web/gh-1' --allow-unix-socket-subtree-bind '/ws/web/gh-1' --allow '/ws/web/gh-1.claude' --allow '/ws/web/gh-1.codex' --read '${root}/src-web/.git' --allow '${root}/src-web/.git/objects' --allow '${root}/src-web/.git/refs' --allow '${root}/src-web/.git/logs' --allow '${root}/src-web/.git/worktrees/gh-1' -- claude --permission-mode`);
   expect(s).toContain(`--permission-mode bypassPermissions "$(cat '/ws/web/gh-1.prompt.md')"`);
   expect(launcher(web(c), "/ws/web/gh-1", "/p", "/aw")).toContain(`--allow '/ws/web/gh-1.codex' --read '${root}/src-web/.git/objects' -- claude`);
 });
@@ -43,7 +43,7 @@ unset LINEAR_API_KEY
   const claudeEnv = String.raw`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-aw/oauth-token")" || exit 1
 export CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CODEX_HOME='/ws/it'\''s'.codex CLAUDE_CODE_TMPDIR='/ws/it'\''s'.claude/tmp; mkdir -p "$CLAUDE_CODE_TMPDIR"
 `;
-  const nono = (a: string, own = "") => String.raw`nono run --no-rollback-prompt --profile '/aw/nono/aw-${a}.json' --allow '/ws/it'\''s' ${own}--read '/src/web/.git/objects' -- `;
+  const nono = (a: string, own = "") => String.raw`nono run --no-rollback-prompt --profile '/aw/nono/aw-${a}.json' --allow '/ws/it'\''s' --allow-unix-socket-subtree-bind '/ws/it'\''s' ${own}--read '/src/web/.git/objects' -- `;
   const claude = String.raw`claude --permission-mode bypassPermissions "$(cat '/ws/p.md')"
 `;
   const codex = (d: string) => String.raw`codex ${d}--dangerously-bypass-hook-trust --sandbox danger-full-access --ask-for-approval never -C '/ws/it'\''s' "$(cat '/ws/p.md')"
@@ -969,4 +969,11 @@ test("a session clone that fails half-way is removed, not reused next poll", asy
   expect(calls).toEqual([]);
   expect(logs.some((l) => l.includes("start gh-1 failed"))).toBe(true);
   expect([existsSync(join(root, "acme/web/gh-1")), existsSync(join(root, "acme/web/gh-1.tmp"))]).toEqual([false, false]);
+});
+
+test("sandbox profiles deny host Unix sockets", () => {
+  for (const a of ["claude", "codex"]) {
+    const p = JSON.parse(readFileSync(join(import.meta.dir, "..", "nono", `aw-${a}.json`), "utf8"));
+    expect([a, p.linux?.af_unix_mediation, Object.keys(p.filesystem).filter((k) => k.startsWith("unix_socket"))]).toEqual([a, "pathname", []]);
+  }
 });

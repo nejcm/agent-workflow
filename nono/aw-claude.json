@@ -15,6 +15,9 @@
       "node_runtime"
     ]
   },
+  "linux": {
+    "af_unix_mediation": "pathname"
+  },
   "workdir": {
     "access": "none"
   },

@@ -21,7 +21,7 @@ export function launcher(l: Repo, wt: string, promptFile: string, awDir = AW_DIR
   const git = join(l.path, ".git");
   const rw = admin ? [join(git, "objects"), join(git, "refs"), join(git, "logs"), admin].map((p): [string, string] => ["--allow", p]) : [];
   const own = [...(l.agent === "claude" ? [claudeHome(wt)] : []), codexHome(wt)].map((p): [string, string] => ["--allow", p]);
-  const wrap = nono ? nonoRun(l, awDir, [["--allow", wt], ...own, ["--read", admin ? git : join(git, "objects")], ...rw], q) : [];
+  const wrap = nono ? nonoRun(l, awDir, [["--allow", wt], ["--allow-unix-socket-subtree-bind", wt], ...own, ["--read", admin ? git : join(git, "objects")], ...rw], q) : [];
   const [env, cmd] = AGENTS[l.agent].launch(q(wt), prompt, nono);
   return `#!/usr/bin/env bash\ncd ${q(wt)} || exit 1\nunset LINEAR_API_KEY\n${env}\nexec ${[...wrap, ...cmd].join(" ")}\n`;
 }

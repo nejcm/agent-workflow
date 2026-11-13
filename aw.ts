@@ -19,8 +19,8 @@ async function status(cfg: Config, io: Io) {
   ].join("\n");
 }
 
-// timeout leads its own process group and still fires if aw is killed. Anything left in that group once it exits only
-// holds our pipes (e.g. a grandchild ignoring TERM), so kill it; the drain bound covers members that left the group.
+// timeout leads its own process group and still fires if aw is killed, but exits once its child dies: on a timeout, kill
+// what is left of the group (a grandchild ignoring TERM). The drain bound covers anything else still holding the pipes.
 export const spawnRun: Run = async (argv, cwd, secs = 60) => {
   const start = performance.now();
   const cmd = argv.slice(0, 3).join(" ");
@@ -35,11 +35,12 @@ export const spawnRun: Run = async (argv, cwd, secs = 60) => {
   const output = Promise.all(readers.map(text));
   const code = await p.exited;
   const timedOut = (code === 124 || code === 137) && performance.now() - start >= secs * 1000;
-  try {
-    process.kill(-p.pid, "SIGKILL");
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "ESRCH") throw e;
-  }
+  if (timedOut)
+    try {
+      process.kill(-p.pid, "SIGKILL");
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ESRCH") throw e;
+    }
   let timer: number | undefined;
   const drained = await Promise.race([output, new Promise<undefined>((r) => (timer = setTimeout(r, 5000)))]).finally(() => clearTimeout(timer));
   if (!drained) {

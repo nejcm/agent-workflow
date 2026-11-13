@@ -1,3 +1,4 @@
+import { readdirSync } from "node:fs";
 import { expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { parseArgs, spawnRun } from "../aw";
@@ -59,17 +60,20 @@ test("spawnRun kills a TERM-ignoring grandchild that holds the pipes", async () 
   expect(Bun.spawnSync(["pgrep", "-f", `sleep ${mark}`]).exitCode).toBe(1);
 });
 
-test("spawnRun does not wait on a background child that a finished command left holding the pipes", async () => {
-  const mark = `${10_000 + (process.pid % 10_000)}.5`;
-  const t0 = performance.now();
-  expect(await spawnRun(["sh", "-c", `sleep ${mark} & echo partial; exit 0`])).toEqual({ code: 0, out: "partial\n", err: "" });
-  expect(performance.now() - t0).toBeLessThan(2000);
-  expect(Bun.spawnSync(["pgrep", "-f", `sleep ${mark}`]).exitCode).toBe(1);
-});
+const fds = () => readdirSync("/proc/self/fd").length;
 
-test("spawnRun gives up on output held open outside its group", async () => {
-  const mark = `${10_000 + (process.pid % 10_000)}.6`;
-  const r = await spawnRun(["sh", "-c", `setsid sleep ${mark} & sleep 0.3; echo partial; exit 0`]);
-  Bun.spawnSync(["pkill", "-f", `sleep ${mark}`]);
-  expect(r).toMatchObject({ code: 1, err: `sh -c setsid sleep ${mark} & sleep 0.3; echo partial; exit 0 exited 0 but left its output open` });
-}, 10_000);
+test("spawnRun gives up on output a finished command left open, and releases its pipes", async () => {
+  for (const [mark, prefix] of [[`${10_000 + (process.pid % 10_000)}.5`, ""], [`${10_000 + (process.pid % 10_000)}.6`, "setsid "]]) {
+    const before = fds();
+    const t0 = performance.now();
+    const r = await spawnRun(["sh", "-c", `${prefix}sleep ${mark} & echo partial; exit 0`]);
+    try {
+      expect(performance.now() - t0).toBeLessThan(7000);
+      expect(r).toMatchObject({ code: 1, err: `sh -c ${prefix}sleep ${mark} & echo partial; exit 0 exited 0 but left its output open` });
+      expect(Bun.spawnSync(["pgrep", "-fx", `sleep ${mark}`]).exitCode).toBe(0);
+      expect(fds()).toBe(before);
+    } finally {
+      Bun.spawnSync(["pkill", "-fx", `sleep ${mark}`]);
+    }
+  }
+}, 20_000);

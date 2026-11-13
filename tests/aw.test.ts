@@ -70,6 +70,8 @@ const fds = () => readdirSync("/proc/self/fd").length;
 
 test("spawnRun gives up on output a finished command left open, and releases its pipes", async () => {
   for (const [mark, prefix] of [[`${10_000 + (process.pid % 10_000)}.5`, ""], [`${10_000 + (process.pid % 10_000)}.6`, "setsid "]]) {
+    // A Blob stdin from an earlier test file holds an fd until GC, which would shift the count.
+    Bun.gc(true);
     const before = fds();
     const t0 = performance.now();
     try {

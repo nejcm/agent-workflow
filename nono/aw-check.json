@@ -82,7 +82,6 @@
       "/dev/random",
       "/dev/urandom",
       "/dev/full",
-      "/dev/tty",
       "/dev/console",
       "/dev/stdin",
       "/dev/stdout",

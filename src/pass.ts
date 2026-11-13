@@ -141,6 +141,14 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
         if (!key) return;
         const w = { ...t, repo: key };
         const dir = repoDir(cfg, key);
+        const win = wins.get(winName(key, t.id));
+        const scope = `${key}/${t.id}`;
+        // No window: whatever is left in the scope dies, parked, PR or not; once per aw process.
+        if (win) stopped.delete(scope);
+        else if (!stopped.has(scope)) {
+          await stopScope(io, key, t.id);
+          stopped.add(scope);
+        }
         const pr = await findPr(key, t.id, io, dir);
         await step(io, `phases ${t.id}`, () => syncPhases(w, tr, io, dir, !!pr));
         if (pr) {
@@ -148,7 +156,6 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
           return tr.toReview(w, pr);
         }
         const ended = join(dir, `${t.id}.ended`);
-        const win = wins.get(winName(key, t.id));
         if (win) {
           if (!hasLabel(t.labels, s.needsHumanLabel)) await step(io, `stall ${t.id}`, () => checkStall(cfg, s, cfg.repos[key]!, w, tr, io, dir, win, state));
           await step(io, `question ${t.id}`, () => syncQuestion(w, tr, io, dir, join(dir, t.id)));
@@ -163,7 +170,6 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
           return io.log(`${key}/${t.id}: session ended, ticket still in progress; ${s.tracker === "linear" ? `move it to ${s.todo}` : `remove the ${s.inProgressLabel} label`} to start it again`);
         }
         if (await tr.closed(t.id, key)) return;
-        await stopScope(io, key, t.id);
         await tr.comment(w, endedNotice(lastMessage(join(dir, t.id), cfg.repos[key]!.agent)));
         put(io, ended, new Date().toISOString());
       });
@@ -198,6 +204,7 @@ export function makeTracker(s: Source, host: string, io: Io, defaultHost: boolea
 }
 
 const warned = new Set<string>();
+const stopped = new Set<string>();
 
 export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = AW_DIR, state = liveStates()) {
   if ((await io.run(["tmux", "has-session", "-t", `=${cfg.tmuxSession}`])).code !== 0)

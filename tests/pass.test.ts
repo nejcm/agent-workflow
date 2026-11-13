@@ -287,7 +287,8 @@ test("in-progress: PR moves to review; missing window comments once", async () =
   await pass(c, io, () => tr, "/aw");
   await pass(c, io, () => tr, "/aw");
   expect(calls).toEqual(["review gh-1 https://pr/1", "comment gh-2 session ended without a PR", "review gh-1 https://pr/1"]);
-  expect(cmds.filter((x) => x.startsWith("systemctl"))).toEqual(["systemctl --user kill --signal=KILL aw-acme:web:gh-2.scope"]);
+  // Windowless sessions lose their scope once per aw process, PR or not.
+  expect(cmds.filter((x) => x.startsWith("systemctl"))).toEqual(["gh-1", "gh-2"].map((id) => `systemctl --user kill --signal=KILL aw-acme:web:${id}.scope`));
   expect(existsSync(join(root, "acme/web/gh-2.ended"))).toBe(true);
   expect(readFileSync(join(root, "acme/web/gh-1.pr"), "utf8")).toBe("https://pr/1");
   expect(logs.filter((l) => l.endsWith("write " + join(root, "acme/web/gh-1.pr")))).toHaveLength(1);
@@ -1024,5 +1025,17 @@ test("no sandbox profile grants /dev/pts, so a session cannot open another termi
     const p = JSON.parse(readFileSync(join(import.meta.dir, "..", "nono", `aw-${a}.json`), "utf8"));
     expect(p.groups.exclude).toEqual(expect.arrayContaining(["system_read_linux_core", "system_write_linux"]));
     expect(JSON.stringify(p.filesystem)).not.toContain("/dev/pts");
+    // Cleanup's git filters must not reach the terminal aw itself runs in.
+    if (a === "check") expect(JSON.stringify(p.filesystem)).not.toContain("/dev/tty");
   }
+});
+
+test("a parked session whose window is gone still has its scope killed, once per aw process", async () => {
+  const t = { ...ticket(7), labels: ["needs-human"] };
+  const { tr, calls } = fakeTracker({ inProgress: [t] });
+  const { io, cmds } = fakeIo((a) => (a[1] === "pr" ? { out: "[]" } : undefined));
+  await pass(config(), io, () => tr, "/aw");
+  await pass(config(), io, () => tr, "/aw");
+  expect(cmds.filter((x) => x.startsWith("systemctl"))).toEqual(["systemctl --user kill --signal=KILL aw-acme:web:gh-7.scope"]);
+  expect(calls).toEqual([]);
 });

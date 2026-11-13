@@ -174,6 +174,8 @@ Each session works in its own clone, `<workspaceRoot>/<owner>/<name>/<ID>`, made
 
 Sessions started before per-session clones are git worktrees of the base clone (their `.git` is a file). They keep running and are restarted and cleaned up the old way: the session can also write the base's `objects/`, `refs/`, `logs/` and its own `worktrees/<ID>/`, and cleanup runs the sandboxed `git status` and then `git worktree remove --force --force`, which skips git's own dirty check (so clean submodules are deleted too) and the agent-writable lock file. Until they finish, such a session can still rewrite base refs and objects that session clones borrow. `aw`'s own `git` calls also pass `-c` overrides (`core.hooksPath`, `core.fsmonitor`, `core.alternateRefsCommand`, `maintenance.auto`, and the `ext`, `file` and `git://` transports) as a second layer; only the local copy that creates a session clone re-allows `file`. Because of the `file` override, the clone's `origin` must be an HTTPS or SSH URL; a clone of a local path fails at `git fetch` (`transport 'file' not allowed`).
 
+Unix sockets: Landlock's file rules do not cover `connect()` to a socket, so both profiles set `linux.af_unix_mediation: "pathname"`. Without it, a session could reach your tmux server (`tmux new-window <cmd>` runs on the host), the systemd user manager, D-Bus, gpg/ssh agents, Hyprland and other Claude sessions under `$XDG_RUNTIME_DIR/cc-socks`. The profiles grant no host sockets. The launcher adds `--allow-unix-socket-subtree-bind <clone>`, so a session can bind and connect sockets only inside its own clone; sockets under `/tmp` and in the abstract namespace fail with `EACCES`, so a test suite that needs one must put it in the clone. gh, git and the GitHub credentials go through nono's TCP proxy, and Codex runs with `--no-daemon`, so neither needs a socket. Claude's inter-session messaging socket (`cc-socks/<pid>.sock`) is denied, and sessions run without it.
+
 ### 5. First run
 
 Dry run — logs every side effect instead of doing it:
@@ -327,6 +329,7 @@ Prove the sandbox boundaries on a throwaway repo first.
 - [ ] `git push origin agent/<ID>` and `gh pr create` work, also with an SSH `origin`.
 - [ ] Sandboxed Codex reaches its backend (`chatgpt.com`, `auth.openai.com`).
 - [ ] Codex session is in the app history.
+- [ ] Inside a sandboxed session, `tmux -S /tmp/tmux-$(id -u)/default list-sessions` fails with `Permission denied`.
 - [ ] Inside a sandboxed session, writing anything under `~/agent-repos` (the base clone's objects, refs, config included) or another session's clone fails; commit, fetch, rebase, `push -u` and `gh pr create` still work.
 - [ ] A Linear ticket for a repo not in `repos` gets one comment and no worktree, also after restarting `aw`.
 - [ ] Issue → PR → `in-review`; closing the issue removes the window and the session clone.

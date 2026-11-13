@@ -80,7 +80,7 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
     return tr.comment(t, `PR feedback stopped after ${MAX_ROUNDS} rounds on ${url}: a human is needed`);
   }
   if ((await state()) !== "idle") return;
-  const pane = await agentPane(io, win);
+  const pane = await agentPane(io, win, `${join(dir, t.id)}.sh`);
   if (!pane) return;
   const runs = [...new Set(failed.map((c) => /\/actions\/runs\/(\d+)/.exec(c.detailsUrl ?? c.targetUrl ?? "")?.[1]).filter((x): x is string => !!x))].slice(0, MAX_RUNS);
   const logs = await Promise.all(runs.map((id) => failedLog(io, r.key, id)));

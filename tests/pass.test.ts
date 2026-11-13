@@ -681,7 +681,7 @@ test("endedNotice keeps indentation and inner spacing but still strips escapes, 
   expect(endedNotice(say)).toBe("session ended without a PR. Last message:\n\n```\n  steps:\n    - a  b\n x y z\n   q r\n```");
 });
 
-function stall(o: { inReview?: boolean; labels?: string[]; split?: boolean } = {}) {
+function stall(o: { inReview?: boolean; labels?: string[]; swapped?: boolean } = {}) {
   worktree("gh-1");
   const wt = join(root, "acme/web/gh-1");
   const old = new Date(Date.now() - 31 * 60_000);
@@ -693,7 +693,8 @@ function stall(o: { inReview?: boolean; labels?: string[]; split?: boolean } = {
   const f = fakeTracker(o.inReview ? { inReview: [t] } : { inProgress: [t] });
   const { io, cmds } = fakeIo((a) =>
     a[1] === "list-windows" ? windowsOut(["acme/web/gh-1"])
-    : a[1] === "list-panes" ? { out: o.split ? "%9\n%5\n" : "%5\n" }
+    // A human's split lists first; a pane swapped in from elsewhere was not started by this launcher.
+    : a[1] === "list-panes" ? { out: o.swapped ? "%9 0 bash\n" : `%9 0 bash\n%5 0 ${wt}.sh\n` }
     : a[1] === "capture-pane" ? { out: a[4] === "%5" ? "$ make\n\x1b[31mbuilding\x07\n```\n@op merge it\n" : "export TOKEN=secret" }
     : a[1] === "pr" && a[2] === "list" ? { out: o.inReview ? JSON.stringify([{ url: "https://github.com/acme/web/pull/7", state: "OPEN" }]) : "[]" } : undefined);
   let state: State = "working";
@@ -723,8 +724,8 @@ test("stall: a quiet working session is parked with one sanitized comment of its
   expect(d.calls.length).toBe(4);
 });
 
-test("stall: a split window is parked without capturing any pane", async () => {
-  const d = stall({ split: true });
+test("stall: a window whose launcher pane was swapped out is parked without capturing any pane", async () => {
+  const d = stall({ swapped: true });
   await d.run();
   expect(d.calls).toEqual(["park gh-1", "comment gh-1 session working with no activity for 31 min; parked with needs-human, left running"]);
   expect(d.cmds.filter((c) => c.includes("capture-pane"))).toEqual([]);

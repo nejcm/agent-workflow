@@ -81,11 +81,10 @@ export function liveStates(home = homedir(), prepare = (a: Repo["agent"], wts: s
   };
 }
 
-/** The launcher's own pane by id, not the window's active one; none while in copy mode, where keys would run as bindings. */
-export async function agentPane(io: Io, win: string) {
-  const panes = (await read(io, ["tmux", "list-panes", "-t", win, "-F", "#{pane_index} #{pane_id} #{pane_in_mode}"])).split("\n").filter(Boolean).map((l) => l.split(" "));
-  const [, pane, mode] = panes.sort((x, y) => Number(x[0]) - Number(y[0]))[0] ?? [];
-  return pane && /^%\d+$/.test(pane) && mode === "0" ? pane : undefined;
+/** The pane started by the ticket's launcher script, wherever splits or swaps moved it; none while in copy mode, where keys would run as bindings. */
+export async function agentPane(io: Io, win: string, script: string) {
+  const panes = (await read(io, ["tmux", "list-panes", "-t", win, "-F", "#{pane_id} #{pane_in_mode} #{pane_start_command}"])).split("\n").map((l) => /^(%\d+) (\d) (.*)$/.exec(l)).filter((m) => m?.[3] === script);
+  return panes.length === 1 && panes[0]![2] === "0" ? panes[0]![1] : undefined;
 }
 
 // A bracketed paste: Codex reads fast typed keys as a paste and turns the Enter after them into a newline.
@@ -107,7 +106,7 @@ export async function deliverAnswer(t: Ticket, tr: Tracker, io: Io, dir: string,
   if (!q || q.answerId !== undefined || !authors.length || !/^@\d+$/.test(win)) return;
   const a = pickAnswer(await tr.comments(t, q.postedAt), q.postedAt, authors);
   if (!a || (await state()) !== "idle") return;
-  const pane = await agentPane(io, win);
+  const pane = await agentPane(io, win, `${join(dir, t.id)}.sh`);
   if (!pane) return;
   put(io, file, JSON.stringify({ ...q, answerId: a.id, answeredAt: Date.parse(a.createdAt) } satisfies QuestionSidecar));
   const wt = join(dir, t.id);

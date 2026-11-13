@@ -23,7 +23,7 @@ function setup(o: { authors?: string[]; open?: string[] } = {}) {
   const log = Array.from({ length: 100 }, (_, i) => `line ${i}`).join("\n");
   const { io, cmds, logs } = fakeIo((a) =>
     a[1] === "list-windows" ? windowsOut(o.open ?? ["acme/web/gh-1"])
-    : a[1] === "list-panes" ? { out: "0 %5 0\n" }
+    : a[1] === "list-panes" ? { out: `%5 0 ${join(root, "acme/web/gh-1")}.sh\n` }
     : a[1] === "pr" && a[2] === "list" ? { out: JSON.stringify([{ url: URL, state: "OPEN" }]) }
     : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(pr) }
     : a[1] === "api" ? { out: JSON.stringify(lines) }

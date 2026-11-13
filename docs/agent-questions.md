@@ -5,7 +5,8 @@ An agent that is blocked asks on the ticket instead of only in its tmux session.
 ## Decisions
 
 - GitHub and Linear. Several question rounds per ticket. No timeout, no reminders, ticket state unchanged.
-- The agent writes `.aw/question.md` (Markdown, ≤ 8000 chars, no control characters but newline and tab; temp file + rename) and stops, at any point it is blocked. This replaces "ask in this session".
+- The agent writes `.aw/question.md` (Markdown, ≤ 8000 chars, no control characters but newline and tab; temp file + rename) and stops, at any point it is blocked. This replaces "ask in this session". Each question states the blocker, the options and the recommended one.
+- No `needs-human` while a question is open: aw never removes that label, so it would have to tell its own park from a human's or a stall's, and a failed removal would leave stall checks, findings, feedback and auto-merge off. The `question` state in `aw status` / `aw watch` is the signal.
 - Posting: new or changed content hash, or the same question still there after its answer was recorded (a new round) → sidecar `<dir>/<ID>.question` `{hash, postedAt}` written first, then comment `aw: question from agent:\n\n<text>`. Over the cap or control characters: logged, not posted. `postedAt` never moves back across rounds.
 - Every `aw` comment starts with `aw:`; a comment starting with `aw:` is never an answer (aw posts with the operator's credentials).
 - Answer = first comment with `createdAt > postedAt` (the next round's `postedAt` is at least the last delivered answer's `createdAt`, as `answeredAt`), author in `feedbackAuthors`, body not starting with `aw:`. Later comments and edits are ignored.

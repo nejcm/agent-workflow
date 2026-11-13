@@ -236,7 +236,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
         if (kind === "clone") await write(x.io, ["rm", "-rf", "--one-file-system", "--", wt], undefined, SLOW_SECS);
         else await write(x.io, [...GIT, "-C", r.path, "worktree", "remove", ...(r.sandbox === "nono" ? ["--force", "--force"] : []), wt]);
         // After the clone or worktree, so a delete that fails keeps the transcripts too.
-        for (const ext of [".claude", ".codex", ".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".stall", ".findings", ".source"]) remove(x.io, join(dir, id + ext));
+        for (const ext of [".claude", ".codex", ".tmpdir", ".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".stall", ".findings", ".source"]) remove(x.io, join(dir, id + ext));
       });
     }
   }

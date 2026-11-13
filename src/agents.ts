@@ -30,6 +30,8 @@ export const CLAUDE_TOKEN = ".claude-aw/oauth-token";
 export const claudeHome = (wt: string) => `${wt}.claude`;
 /** The ticket's own CODEX_HOME, a sidecar of its worktree; Claude sessions get one too, to run Codex. */
 export const codexHome = (wt: string) => `${wt}.codex`;
+/** The session's TMPDIR, made fresh on the host at each start; a sidecar, so nothing in it shows in the clone. */
+export const tmpHome = (wt: string) => `${wt}.tmpdir`;
 
 /** Claude Code's project dir name for a cwd: every non-alphanumeric char becomes "-". */
 export const claudeDir = (wt: string) => join(claudeHome(wt), "projects", wt.replace(/[^A-Za-z0-9]/g, "-"));
@@ -111,7 +113,7 @@ export function codexState(wt: string, since: number, now: number): Live | undef
 
 export const AGENTS: Record<Repo["agent"], Agent> = {
   claude: {
-    launch: (wt, prompt) => [`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/${CLAUDE_TOKEN}")" || exit 1\nexport CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR=${claudeHome(wt)} CODEX_HOME=${codexHome(wt)} CLAUDE_CODE_TMPDIR=${claudeHome(wt)}/tmp; mkdir -p "$CLAUDE_CODE_TMPDIR"`, ["claude", "--permission-mode", "bypassPermissions", prompt]],
+    launch: (wt, prompt) => [`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/${CLAUDE_TOKEN}")" || exit 1\nexport CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR=${claudeHome(wt)} CODEX_HOME=${codexHome(wt)} CLAUDE_CODE_TMPDIR=${tmpHome(wt)}`, ["claude", "--permission-mode", "bypassPermissions", prompt]],
     store: (wt) => [claudeHome(wt), "projects"],
     transcripts: (wt) => jsonl(claudeDir(wt)),
     cwd: (o) => o?.cwd,

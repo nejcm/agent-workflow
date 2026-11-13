@@ -1,6 +1,6 @@
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { AGENTS, CLAUDE_TOKEN, claudeHome, codexHome } from "./agents";
+import { AGENTS, CLAUDE_TOKEN, claudeHome, codexHome, tmpHome } from "./agents";
 import { repoDir } from "./config";
 import type { Config, Io, Repo, Source, Ticket, Tracker } from "./types";
 import { AW_DIR, GIT, inAw, put, read, remove, write } from "./util";
@@ -21,11 +21,12 @@ export function launcher(l: Repo, wt: string, promptFile: string, awDir = AW_DIR
   const git = join(l.path, ".git");
   const rw = admin ? [join(git, "objects"), join(git, "refs"), join(git, "logs"), admin].map((p): [string, string] => ["--allow", p]) : [];
   const own = [...(l.agent === "claude" ? [claudeHome(wt)] : []), codexHome(wt)].map((p): [string, string] => ["--allow", p]);
-  const wrap = nono ? nonoRun(l, awDir, [["--allow", wt], ["--allow-unix-socket-subtree-bind", wt], ...own, ["--read", admin ? git : join(git, "objects")], ...rw], q) : [];
+  const tmp = tmpHome(wt);
+  const wrap = nono ? nonoRun(l, awDir, [["--allow", wt], ["--allow-unix-socket-subtree-bind", wt], ["--allow", tmp], ["--allow-unix-socket-subtree-bind", tmp], ...own, ["--read", admin ? git : join(git, "objects")], ...rw], q) : [];
   const [env, cmd] = AGENTS[l.agent].launch(q(wt), prompt, nono);
   // gh exits if it cannot read its config dir; <ID>.gh is never created, so gh runs on defaults plus nono's GH_TOKEN.
   const gh = nono ? `export GH_CONFIG_DIR=${q(wt)}.gh\n` : "";
-  return `#!/usr/bin/env bash\ncd ${q(wt)} || exit 1\nunset LINEAR_API_KEY\n${gh}${env}\nexec ${[...wrap, ...cmd].join(" ")}\n`;
+  return `#!/usr/bin/env bash\ncd ${q(wt)} || exit 1\nunset LINEAR_API_KEY\nexport TMPDIR=${q(tmp)} TMP=${q(tmp)} TEMP=${q(tmp)}\n${gh}${env}\nexec ${[...wrap, ...cmd].join(" ")}\n`;
 }
 
 /** `worktree` for a session started before per-session clones (its `.git` is a file), `clone` for its own `.git` dir. */
@@ -191,6 +192,11 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   const login = r.agent === "codex" ? await codexLogin(io) : await codexLogin(io).catch(() => undefined);
   await ensureClone(cfg, io, r);
   seedCodex(io, codexHome(wt), login);
+  io.log(`${io.dry ? "dry: " : ""}mkdir ${tmpHome(wt)}`);
+  if (!io.dry) {
+    rmSync(tmpHome(wt), { recursive: true, force: true });
+    mkdirSync(tmpHome(wt), { recursive: true, mode: 0o700 });
+  }
   put(io, join(dir, `${t.id}.source`), s.name);
   remove(io, join(dir, `${t.id}.ended`));
   await write(io, [...GIT, "-C", r.path, "fetch", "origin", r.baseBranch], undefined, SLOW_SECS);

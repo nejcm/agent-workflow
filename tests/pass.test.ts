@@ -223,6 +223,7 @@ test("a codex start seeds the ticket's own auth.json, 0600, without the refresh 
   expect(statSync(f).mode & 0o777).toBe(0o600);
   expect(JSON.parse(readFileSync(f, "utf8")).tokens.refresh_token).toBe("");
   expect(readFileSync(f, "utf8")).not.toContain("secret-rt");
+  expect(readFileSync(join(root, "acme/web/gh-1.codex/config.toml"), "utf8")).toContain(`[projects.${JSON.stringify(realpathSync(join(root, "acme/web/gh-1")))}]\ntrust_level = "trusted"`);
   expect(existsSync(join(root, "acme/web/gh-1.claude"))).toBe(false);
 });
 
@@ -244,16 +245,38 @@ test("seedCodex: a fresh dir with copied config, linked instructions and skills,
   writeFileSync(join(root, ".claude/AGENTS.md"), "a");
   symlinkSync(join(root, ".claude/AGENTS.md"), join(tpl, "AGENTS.md"));
   symlinkSync(join(root, ".claude/skills"), join(tpl, "skills"));
-  for (const f of ["config.toml", "auth.json", "history.jsonl"]) writeFileSync(join(tpl, f), f);
+  for (const f of ["auth.json", "history.jsonl"]) writeFileSync(join(tpl, f), f);
+  writeFileSync(join(tpl, "config.toml"), 'model = "m"\n\n[projects."/home/u/x"]\ntrust_level = "trusted"');
   const dir = join(root, "acme/web/gh-1.codex");
   mkdirSync(join(dir, "sessions"), { recursive: true });
-  seedCodex({ ...fakeIo().io, dry: true }, dir, "{}");
+  seedCodex({ ...fakeIo().io, dry: true }, dir, "{}", "/r");
   expect(readdirSync(dir)).toEqual(["sessions"]);
-  seedCodex(fakeIo().io, dir, undefined);
+  seedCodex(fakeIo().io, dir, undefined, '/w/a"b\\c');
   expect(readdirSync(dir).sort()).toEqual(["AGENTS.md", "config.toml", "skills"]);
   expect(realpathSync(join(dir, "skills"))).toBe(realpathSync(join(root, ".claude/skills")));
   expect(lstatSync(join(dir, "config.toml")).isFile()).toBe(true);
-  expect(readFileSync(join(dir, "config.toml"), "utf8")).toBe("config.toml");
+  const cfg = readFileSync(join(dir, "config.toml"), "utf8");
+  expect(cfg).toBe('model = "m"\n\n[projects."/home/u/x"]\ntrust_level = "trusted"\n[projects."/w/a\\"b\\\\c"]\ntrust_level = "trusted"\n');
+  expect((Bun.TOML.parse(cfg) as any).projects).toEqual({ "/home/u/x": { trust_level: "trusted" }, '/w/a"b\\c': { trust_level: "trusted" } });
+});
+
+test("seedCodex: the trust entry round-trips any path, keeps an existing one, and refuses a template it would break", () => {
+  const tpl = join(root, ".codex-aw");
+  const dir = join(root, "acme/web/gh-1.codex");
+  const projects = () => (Bun.TOML.parse(readFileSync(join(dir, "config.toml"), "utf8")) as any).projects;
+  mkdirSync(tpl, { recursive: true });
+  const odd = '/w/\\"é💡\t\n\x01\x1f\x7f/x';
+  seedCodex(fakeIo().io, dir, undefined, odd);
+  expect(projects()).toEqual({ [odd]: { trust_level: "trusted" } });
+  const same = '[projects."/r"]\ntrust_level = "trusted"\n';
+  writeFileSync(join(tpl, "config.toml"), same);
+  seedCodex(fakeIo().io, dir, undefined, "/r");
+  expect(readFileSync(join(dir, "config.toml"), "utf8")).toBe(same);
+  for (const bad of ['projects = { "/x" = { trust_level = "trusted" } }\n', '[projects."/r"]\ntrust_level = "untrusted"\n']) {
+    writeFileSync(join(tpl, "config.toml"), bad);
+    expect(() => seedCodex(fakeIo().io, dir, undefined, "/r")).toThrow(`${tpl}/config.toml cannot take a trust entry for /r`);
+    expect(readFileSync(join(dir, "config.toml"), "utf8")).toBe(bad);
+  }
 });
 
 test("an unsandboxed claude start without the token file fails before cloning, with the fix in the log", async () => {
@@ -348,6 +371,21 @@ test("parked: no ended-without-PR comment, and a done parked ticket is still cle
   expect(cmds).toContain("tmux kill-window -t @0");
   expect(cmds).toContain(`rm -rf --one-file-system -- ${root}/acme/web/gh-2`);
   expect(existsSync(join(root, "acme/web/gh-2.source"))).toBe(false);
+});
+
+test("cleanup treats a window already closed by the scope kill as gone, but fails on other tmux errors", async () => {
+  worktree("gh-2");
+  mkdirSync(join(root, "src-web"), { recursive: true });
+  const { tr } = fakeTracker({ done: ["gh-2"] });
+  let err = "no server running";
+  const { io, cmds, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(["acme/web/gh-2"]) : a[1] === "kill-window" ? { code: 1, err } : noPr(a)));
+  await pass(config(), io, () => tr, "/aw");
+  expect(logs.some((l) => l.includes("cleanup acme/web/gh-2 failed") && l.includes("no server running"))).toBe(true);
+  expect(existsSync(join(root, "acme/web/gh-2"))).toBe(true);
+  err = "can't find window: @0";
+  await pass(config(), io, () => tr, "/aw");
+  expect(cmds).toContain(`rm -rf --one-file-system -- ${root}/acme/web/gh-2`);
+  expect(logs.filter((l) => l.includes("failed"))).toHaveLength(1);
 });
 
 test("done: kills window, removes the session clone, files and config dir; keeps them all when the delete fails", async () => {

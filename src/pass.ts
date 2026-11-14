@@ -233,7 +233,11 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
         const w = wins.get(winName(r.key, id));
         if (end === "canceled" && !w && existsSync(join(dir, `${id}.ended`))) return;
         await stopScope(cfg, x.io, r.key, id);
-        if (w) await write(x.io, ["tmux", "kill-window", "-t", w]);
+        // Killing the scope usually closes the window first.
+        if (w)
+          await write(x.io, ["tmux", "kill-window", "-t", w]).catch((e) => {
+            if (!/can't find window/.test(e.message)) throw e;
+          });
         wins.delete(winName(r.key, id));
         if (end === "canceled") {
           if (existsSync(join(dir, `${id}.ended`))) return;

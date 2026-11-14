@@ -163,7 +163,7 @@ export async function codexLogin(io: Io, now = Date.now()) {
 }
 
 // Same as seedClaude; `login` is codexLogin's copy, the session's own credential.
-export function seedCodex(io: Io, dir: string, login: string | undefined) {
+export function seedCodex(io: Io, dir: string, login: string | undefined, root: string) {
   const tpl = join(io.home, ".codex-aw");
   io.log(`${io.dry ? "dry: " : ""}seed ${dir} from ${tpl}`);
   if (io.dry) return;
@@ -173,7 +173,22 @@ export function seedCodex(io: Io, dir: string, login: string | undefined) {
   // Copies, not links: Codex rewrites config.toml in place, and the template stays out of the sandbox.
   for (const f of ["config.toml", "hooks.json"]) if (existsSync(join(tpl, f))) copyFileSync(join(tpl, f), join(dir, f));
   if (login) writeFileSync(join(dir, "auth.json"), login, { mode: 0o600, flag: "wx" });
+  const cfg = join(dir, "config.toml");
+  const old = existsSync(cfg) ? readFileSync(cfg, "utf8") : "";
+  if (trusted(old, root)) return;
+  // JSON escapes every character a TOML basic string forbids except DEL.
+  const next = `${old}\n[projects.${JSON.stringify(root).replaceAll("\x7f", "\\u007F")}]\ntrust_level = "trusted"\n`;
+  if (!trusted(next, root)) throw new Error(`${join(tpl, "config.toml")} cannot take a trust entry for ${root} (invalid TOML, an inline \`projects\` table, or that path already untrusted): fix it by hand`);
+  writeFileSync(cfg, next);
 }
+
+const trusted = (toml: string, root: string) => {
+  try {
+    return (Bun.TOML.parse(toml) as any).projects?.[root]?.trust_level === "trusted";
+  } catch {
+    return false;
+  }
+};
 
 // Shares the base clone's objects (--shared): the session never writes the base, and aw never prunes it (maintenance.auto=false, gc.pruneExpire=never).
 async function cloneSession(io: Io, r: Repo, wt: string, branch: string) {
@@ -215,7 +230,6 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   // Claude sessions run Codex only as a helper, so a missing Codex login does not stop them.
   const login = r.agent === "codex" ? await codexLogin(io) : await codexLogin(io).catch(() => undefined);
   await ensureClone(cfg, io, r);
-  seedCodex(io, codexHome(wt), login);
   io.log(`${io.dry ? "dry: " : ""}mkdir ${tmpHome(wt)}`);
   if (!io.dry) {
     rmSync(tmpHome(wt), { recursive: true, force: true });
@@ -226,7 +240,9 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   await write(io, [...GIT, "-C", r.path, "fetch", "origin", r.baseBranch], undefined, SLOW_SECS);
   if (existsSync(wt)) io.log(`reuse ${wt}`);
   else await cloneSession(io, r, wt, branch);
-  if (r.agent === "claude" || nono) seedClaude(io, claudeHome(wt), existsSync(wt) ? realpathSync(wt) : wt);
+  const root = existsSync(wt) ? realpathSync(wt) : wt;
+  seedCodex(io, codexHome(wt), login, root);
+  if (r.agent === "claude" || nono) seedClaude(io, claudeHome(wt), root);
   const vars = { id: t.id, title: t.title, body: t.body, url: t.url, branch, base: r.baseBranch, testCmd: r.testCmd, repo: r.key, planStep: r.planStep };
   io.log(`${io.dry ? "dry: " : ""}write ${join(wt, ".aw", ".gitignore")}`);
   if (!io.dry) {

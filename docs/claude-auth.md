@@ -2,7 +2,7 @@
 
 Research for replacing the `claude setup-token` step. Checked 2026-11-14 on this host: Claude Code 2.1.323, nono 0.81.0, Linux. No token values were printed or copied; only expiry/scope metadata was read. Revised after an independent review (see [Review dispositions](#review-dispositions)).
 
-**Status:** Phase 0 gates B1–B6 passed on 2026-11-14 ([results](#phase-0-results)). Phase 2 is implemented on `feat/claude-auth-activate`; gates R1–R6 are still pending, so don't rely on it yet.
+**Status:** Phase 0 gates B1–B6 passed on 2026-11-14 ([results](#phase-0-results)). Phase 2 is implemented (#59). Gates R1–R4 and R6 passed live on 2026-11-14; R5 was blocked (no setup token on the test host), and R1's long session across a refresh was skipped.
 
 Evidence labels: **[live]** run on this host (commands below), **[code]** read from the Claude Code 2.1.323 or nono 0.81.0 binary (`strings`) or this repo, **[docs]** official docs, **[inferred]** not checked.
 
@@ -263,6 +263,7 @@ Nothing changes how sessions authenticate until the activation PR, and that PR l
   - It waits while Claude's refresh lock exists, for at most 3 s (inside `timeout_secs: 5`), then reads anyway. Claude holds the lock from before the token call until after the new credentials are written, and the server revokes the old token at rotation (gates B3, B4), so a read inside it would return a dead token. A stale lock (its holder died) must not blackhole every session until the next refresh, and the write is tmp + rename (gate B3: `.credentials.json MOVED_TO`), so the late read is never partial.
   - It is read-only and parses real JSON. Only the root `claudeAiOauth` counts, and `expiresAt` must be a safe integer more than 30 s in the future. Anything else exits 1 with no output.
   - `catch {}` keeps parse errors, which can quote file content, out of stderr; nono audits capture stderr (`credential_capture_stderr` [code]).
+  - nono expands `$HOME` in the argv itself before the shell runs [live, R gates]; only the host sets `HOME`.
   - It ignores the ticket's cwd, `PATH` and bun-specific env (`BUN_OPTIONS`, a clone's `bunfig.toml` and `.env`): `cd /`, `env -i` with only `HOME`, `--no-env-file`, and no imports.
   - `-p` (bash privileged mode) ignores exported functions, `SHELLOPTS`, `BASHOPTS`, `CDPATH`, `ENV` and `BASH_ENV` from the inherited env. Without it, `BASH_FUNC_cd%%` and `SHELLOPTS=xtrace`+`PS4=$(…)` ran code before `env -i` [live, gate B5].
   - It does **not** neutralise `LD_PRELOAD`. Safe only while the supervisor env comes from aw's launch script (`launcher()` in `src/launcher.ts`).
@@ -343,21 +344,21 @@ Blocking, Phase 0 (before activation). All passed on 2026-11-14; see [Phase 0 re
 - **B5. Host-boundary negatives.** Plant `bun`/`env`/`claude`/`sh` on the ticket PATH, `BUN_OPTIONS`/`NODE_OPTIONS` in the ticket env, `.claude/settings*.json` hooks, `bunfig.toml` and `.env` in the clone, and files in the ticket tmp/XDG dirs; also inherit `ANTHROPIC_*`/`CLAUDE_CODE_OAUTH_TOKEN`. Neither the capture nor the refresh may execute or read any of them. Also confirm a session cannot set `LD_PRELOAD`, `BASH_FUNC_*%%` or `SHELLOPTS`/`PS4` on the `nono run` process, since those act on the capture's `/bin/sh` before `env -i`.
 - **B6. Managed policy.** Review `/etc/claude-code/managed-settings.json` (if any): it loads under `--setting-sources ""` and is accepted as host trust.
 
-Before rollout, on the activation PR. **Pending**; run them with the operator:
+On the activation PR, run live on 2026-11-14:
 
-- **R1.** An interactive TUI session, and a long session across a host refresh.
-- **R2.** Claude → Codex and Codex → Claude, end to end.
-- **R3.** Billing appears on claude.ai/settings/usage, not as API spend.
-- **R4.** Stop aw: running sessions 401 once the token lapses (≤ 8 h), unless your own Claude use refreshed it. Document this.
-- **R5.** `sandbox: "none"` lanes still work on the setup-token.
-- **R6.** Lifecycle: `scripts/run.sh` (dry-run preflight) spawns no refresh, and `once` exits.
+- **R1.** An interactive TUI session (**pass**: ticket, PR, one CI-feedback round), and a long session across a host refresh (**skipped**: no rotation window during the run).
+- **R2.** Claude → Codex and Codex → Claude, end to end (**pass**; Codex 0.169 first stopped at its folder-trust prompt).
+- **R3.** Billing appears on claude.ai/settings/usage, not as API spend (**pass** for what is visible: the usage endpoint shows the subscription buckets, and responses carry only subscription rate-limit headers; the web page itself was not checked).
+- **R4.** Stop aw (**pass**): running sessions keep working until the token lapses (≤ 8 h), unless your own Claude use refreshed it. Then the capture exits 1 and nono's proxy answers **503**, which Claude retries for about 190 s and then reports as a server-side error.
+- **R5.** `sandbox: "none"` lanes still work on the setup-token (**blocked**: no `~/.claude-aw/oauth-token` on the test host; the start failed with the expected message).
+- **R6.** Lifecycle: `scripts/run.sh` (dry-run preflight) spawns no refresh, and `once` exits (**pass**).
 
 ## Risks
 
 - **The refresh runs unsandboxed `claude` on the host.** Clean env, `--safe-mode` and empty setting sources keep agent-written files out of it. Gate B5 must prove that, and B1 that it is the real binary.
-- **The login has a time limit.** When the `~/.claude` login reaches it, every Claude session 401s until `claude auth login`. A setup-token lasts a year.
+- **The login has a time limit.** When the `~/.claude` login reaches it, every Claude request gets nono's 503 (Claude reports a server-side error) until `claude auth login`. A setup-token lasts a year.
 - **A refresh revokes the old access token at once** (gate B4). The capture's lock wait narrows the gap between rotation and the credentials write, but a capture that passed the check just before a rotation still hands out a token that dies in flight. If the lock is held for more than 3 s (a slow token call, or a stale lock left by a killed refresh, which proper-lockfile clears only when another Claude process next tries to take it), the capture reads the file anyway, so a stale lock costs 3 s per request rather than every request failing.
-- **A 401 mid-turn ends the turn.** Env mode never retries a refresh (`CLAUDE_CODE_OAUTH_401_WAIT_MS` is 0 outside remote sessions [code]), so the turn needs a nudge or a restart. aw downtime longer than the token's remaining life causes this.
+- **A 401 mid-turn ends the turn.** Env mode never retries a refresh (`CLAUDE_CODE_OAUTH_401_WAIT_MS` is 0 outside remote sessions [code]), so the turn needs a nudge or a restart. A token revoked mid-request causes this; a lapsed token gives 503 instead (R4).
 - **Spend while running.** The agent can still spend the subscription through the proxy, on any `api.anthropic.com` path, but it can't take the token away. There is no `org:create_api_key` scope.
 - **Shared rotation with your sessions.** This rests on Claude's lock; gates B3 and B4 passed.
 - **Terms ambiguity** (above).

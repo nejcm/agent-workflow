@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { AGENTS, CLAUDE_TOKEN, claudeHome, codexHome, tmpHome } from "./agents";
 import { checkLogin, findBun, readLogin } from "./claude-auth";
@@ -172,10 +172,23 @@ export function seedCodex(io: Io, dir: string, login: string | undefined, root: 
   for (const f of ["AGENTS.md", "skills"]) if (existsSync(join(tpl, f))) symlinkSync(realpathSync(join(tpl, f)), join(dir, f));
   // Copies, not links: Codex rewrites config.toml in place, and the template stays out of the sandbox.
   for (const f of ["config.toml", "hooks.json"]) if (existsSync(join(tpl, f))) copyFileSync(join(tpl, f), join(dir, f));
-  // JSON string escapes are a subset of TOML basic string escapes.
-  appendFileSync(join(dir, "config.toml"), `\n[projects.${JSON.stringify(root)}]\ntrust_level = "trusted"\n`);
   if (login) writeFileSync(join(dir, "auth.json"), login, { mode: 0o600, flag: "wx" });
+  const cfg = join(dir, "config.toml");
+  const old = existsSync(cfg) ? readFileSync(cfg, "utf8") : "";
+  if (trusted(old, root)) return;
+  // JSON escapes every character a TOML basic string forbids except DEL.
+  const next = `${old}\n[projects.${JSON.stringify(root).replaceAll("\x7f", "\\u007F")}]\ntrust_level = "trusted"\n`;
+  if (!trusted(next, root)) throw new Error(`${join(tpl, "config.toml")} cannot take a trust entry for ${root} (invalid TOML, an inline \`projects\` table, or that path already untrusted): fix it by hand`);
+  writeFileSync(cfg, next);
 }
+
+const trusted = (toml: string, root: string) => {
+  try {
+    return (Bun.TOML.parse(toml) as any).projects?.[root]?.trust_level === "trusted";
+  } catch {
+    return false;
+  }
+};
 
 // Shares the base clone's objects (--shared): the session never writes the base, and aw never prunes it (maintenance.auto=false, gc.pruneExpire=never).
 async function cloneSession(io: Io, r: Repo, wt: string, branch: string) {

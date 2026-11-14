@@ -260,6 +260,25 @@ test("seedCodex: a fresh dir with copied config, linked instructions and skills,
   expect((Bun.TOML.parse(cfg) as any).projects).toEqual({ "/home/u/x": { trust_level: "trusted" }, '/w/a"b\\c': { trust_level: "trusted" } });
 });
 
+test("seedCodex: the trust entry round-trips any path, keeps an existing one, and refuses a template it would break", () => {
+  const tpl = join(root, ".codex-aw");
+  const dir = join(root, "acme/web/gh-1.codex");
+  const projects = () => (Bun.TOML.parse(readFileSync(join(dir, "config.toml"), "utf8")) as any).projects;
+  mkdirSync(tpl, { recursive: true });
+  const odd = '/w/\\"é💡\t\n\x01\x1f\x7f/x';
+  seedCodex(fakeIo().io, dir, undefined, odd);
+  expect(projects()).toEqual({ [odd]: { trust_level: "trusted" } });
+  const same = '[projects."/r"]\ntrust_level = "trusted"\n';
+  writeFileSync(join(tpl, "config.toml"), same);
+  seedCodex(fakeIo().io, dir, undefined, "/r");
+  expect(readFileSync(join(dir, "config.toml"), "utf8")).toBe(same);
+  for (const bad of ['projects = { "/x" = { trust_level = "trusted" } }\n', '[projects."/r"]\ntrust_level = "untrusted"\n']) {
+    writeFileSync(join(tpl, "config.toml"), bad);
+    expect(() => seedCodex(fakeIo().io, dir, undefined, "/r")).toThrow(`${tpl}/config.toml cannot take a trust entry for /r`);
+    expect(readFileSync(join(dir, "config.toml"), "utf8")).toBe(bad);
+  }
+});
+
 test("an unsandboxed claude start without the token file fails before cloning, with the fix in the log", async () => {
   rmSync(join(root, ".claude-aw/oauth-token"));
   const { tr, calls } = fakeTracker({ ready: [ticket(1)] });

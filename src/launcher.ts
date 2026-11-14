@@ -162,13 +162,14 @@ export async function codexLogin(io: Io, now = Date.now()) {
   return JSON.stringify({ ...pick(o, LOGIN), tokens: { ...pick(o.tokens, TOKENS), ...(o.tokens.oauth_provenance && { oauth_provenance: pick(o.tokens.oauth_provenance, ["issuer", "client_id"]) }), refresh_token: "" } });
 }
 
-const HOOK_MARKERS = ["# >>> aw state hooks (managed by scripts/codex-hooks.sh)", "# <<< aw state hooks"];
 
 /** A warning when the template config lacks aw's Codex state hooks, without which answers and PR feedback are never delivered. */
 export function codexHooksWarning(home: string) {
   const file = join(home, ".codex-aw/config.toml");
   const lines = existsSync(file) ? readFileSync(file, "utf8").split("\n") : [];
-  if (!HOOK_MARKERS.every((m) => lines.includes(m))) return `${file} lacks aw's state hooks, so the session never reads idle and gets no answers or PR feedback: run \`scripts/codex-hooks.sh ~/.codex-aw/config.toml\``;
+  // Same rule as scripts/codex-hooks.sh: exactly one begin line, then exactly one end line.
+  const marks = lines.flatMap((l) => (l === "# >>> aw state hooks (managed by scripts/codex-hooks.sh)" ? "b" : l === "# <<< aw state hooks" ? "e" : [])).join("");
+  if (marks !== "be") return `${file} lacks aw's state hooks, so the session never reads idle and gets no answers or PR feedback: run \`scripts/codex-hooks.sh ~/.codex-aw/config.toml\``;
 }
 
 // Same as seedClaude; `login` is codexLogin's copy, the session's own credential.

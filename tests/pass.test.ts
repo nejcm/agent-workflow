@@ -239,12 +239,15 @@ test("a codex start under nono seeds a Claude config dir for a nested claude, wi
   expect(readFileSync(join(root, "acme/web/gh-1.sh"), "utf8")).toContain(`AW_BUN='${realpathSync(process.execPath)}'`);
 });
 
-test("codexHooksWarning: names the fix unless the template has both aw hook markers", () => {
+test("codexHooksWarning: names the fix unless the template has one begin then one end marker", () => {
   const cfg = join(root, ".codex-aw/config.toml");
   expect(codexHooksWarning(root)).toBe(`${cfg} lacks aw's state hooks, so the session never reads idle and gets no answers or PR feedback: run \`scripts/codex-hooks.sh ~/.codex-aw/config.toml\``);
   mkdirSync(join(root, ".codex-aw"));
-  writeFileSync(cfg, 'model = "m"\n# >>> aw state hooks (managed by scripts/codex-hooks.sh)\n');
-  expect(codexHooksWarning(root)).toContain("scripts/codex-hooks.sh");
+  const [b, e] = ["# >>> aw state hooks (managed by scripts/codex-hooks.sh)", "# <<< aw state hooks"];
+  for (const marks of [[b], [e, b], [b, b, e], [b, e, e]]) {
+    writeFileSync(cfg, ['model = "m"', ...marks, ""].join("\n"));
+    expect(codexHooksWarning(root)).toContain("scripts/codex-hooks.sh ~/.codex-aw/config.toml");
+  }
   writeFileSync(cfg, 'model = "m"\n\n# >>> aw state hooks (managed by scripts/codex-hooks.sh)\n[[hooks.Stop]]\n# <<< aw state hooks\n');
   expect(codexHooksWarning(root)).toBeUndefined();
 });

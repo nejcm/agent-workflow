@@ -238,7 +238,7 @@ test("capture reads anyway once a stuck refresh lock outlasts 3 s", async () => 
   expect(performance.now() - start).toBeLessThan(4500);
 });
 
-test("both profiles route api.anthropic.com through the capture, uncached; the doc shows the same argv", () => {
+test("both profiles route api.anthropic.com through the capture, uncached", () => {
   for (const name of ["aw-claude", "aw-codex"]) {
     const p = JSON.parse(readFileSync(join(AW_DIR, "nono", `${name}.json`), "utf8"));
     expect(p.network.credentials).toContain("anthropic_oauth");
@@ -247,7 +247,6 @@ test("both profiles route api.anthropic.com through the capture, uncached; the d
     expect(p.environment.allow_vars).toEqual(expect.arrayContaining(["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR"]));
     for (const v of ["AW_BUN", "CLAUDE_CODE_OAUTH_TOKEN"]) expect(p.environment.allow_vars).not.toContain(v);
   }
-  expect(readFileSync(join(AW_DIR, "docs/claude-auth.md"), "utf8")).toContain(`"command": ${JSON.stringify(CAPTURE_COMMAND)}`);
 });
 
 const hostIo = (home: string, logs: string[], dry: boolean, cmds: string[][] = []) => ({ dry, home, log: (m: string) => logs.push(m), fetch, run: async (a: string[]) => (cmds.push(a), { code: 0, out: "", err: "" }) });

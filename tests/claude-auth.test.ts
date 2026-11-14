@@ -275,6 +275,9 @@ test("hostLogin: login problems are only logged; without a login it resolves not
   expect(logs).toEqual([`~/${CREDENTIALS} is missing: run \`claude auth login\``]);
   expect(finds).toBe(0);
   expect(calls()).toEqual([]);
+  file(join(home, CREDENTIALS), "{");
+  expect(await hostLogin(hostIo(home, logs, true), [join(t, "ws")], () => NOW, find)).toBeUndefined();
+  expect(logs[1]).toEndWith("is unreadable or not JSON");
 });
 
 test("hostLogin: resolves claude and awaits the first refresh check; a failed resolve rejects", async () => {

@@ -109,8 +109,9 @@ export async function hostLogin(io: Io, writable: string[], now = Date.now, find
   // The refresh runs with aw's dir as cwd, and Claude reads that dir's settings and git config.
   if (writableBy([AW_DIR, real(AW_DIR)], writable)) throw new Error(`aw's dir ${AW_DIR} is under a path sessions can write`);
   findBun(writable);
-  const login = readLogin(io.home);
+  let login: Login | undefined;
   try {
+    login = readLogin(io.home);
     const warn = checkLogin(login, now());
     if (warn) io.log(warn);
   } catch (e) {

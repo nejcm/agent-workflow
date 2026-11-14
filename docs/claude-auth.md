@@ -260,7 +260,7 @@ Nothing changes how sessions authenticate until the activation PR, and that PR l
   } catch {}
   process.exit(1);
   ```
-  - It waits while Claude's refresh lock exists, for at most 3 s (inside `timeout_secs: 5`), then reads anyway. Claude holds the lock from before the token call until after the new credentials are written, and the server revokes the old token at rotation (gates B3, B4), so a read inside it would return a dead token. A stale lock (its holder died) must not blackhole every session until the next refresh, and the write is tmp + rename, so the late read is never partial.
+  - It waits while Claude's refresh lock exists, for at most 3 s (inside `timeout_secs: 5`), then reads anyway. Claude holds the lock from before the token call until after the new credentials are written, and the server revokes the old token at rotation (gates B3, B4), so a read inside it would return a dead token. A stale lock (its holder died) must not blackhole every session until the next refresh, and the write is tmp + rename (gate B3: `.credentials.json MOVED_TO`), so the late read is never partial.
   - It is read-only and parses real JSON. Only the root `claudeAiOauth` counts, and `expiresAt` must be a safe integer more than 30 s in the future. Anything else exits 1 with no output.
   - `catch {}` keeps parse errors, which can quote file content, out of stderr; nono audits capture stderr (`credential_capture_stderr` [code]).
   - It ignores the ticket's cwd, `PATH` and bun-specific env (`BUN_OPTIONS`, a clone's `bunfig.toml` and `.env`): `cd /`, `env -i` with only `HOME`, `--no-env-file`, and no imports.

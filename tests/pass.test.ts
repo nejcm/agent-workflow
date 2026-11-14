@@ -58,17 +58,17 @@ export CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CODEX_HOME
 `;
   const s = (agent: string, sandbox: string) => launcher(web(config({ repos: [{ name: "acme/web", path: "/src/web", agent, sandbox }] })), "/ws/it's", "/ws/p.md", "aw-acme:web:it's.scope", "/aw", sandbox === "nono" ? "/b/it's/bun" : "");
   const scope = String.raw`systemd-run --user --scope --quiet --collect --unit 'aw-acme:web:it'\''s.scope' -- `;
-  const gh = String.raw`unset CLAUDE_CODE_OAUTH_TOKEN
+  const box = String.raw`unset CLAUDE_CODE_OAUTH_TOKEN
 export GH_CONFIG_DIR='/ws/it'\''s'.gh XDG_CACHE_HOME='/ws/it'\''s.tmpdir/cache' AW_BUN='/b/it'\''s/bun'
 `;
   const own = String.raw`--allow '/ws/it'\''s.claude' --allow '/ws/it'\''s.codex' `;
-  expect(s("claude", "nono")).toBe(`${head}${gh}${claudeNonoEnv}exec ${scope}${nono("claude", own)}${claude}`);
+  expect(s("claude", "nono")).toBe(`${head}${box}${claudeNonoEnv}exec ${scope}${nono("claude", own)}${claude}`);
   expect(s("claude", "none")).toBe(`${head}${claudeEnv}exec ${scope}${claude}`);
   const codexEnv = String.raw`export CODEX_HOME='/ws/it'\''s'.codex
 `;
   const codexNonoEnv = String.raw`export CODEX_HOME='/ws/it'\''s'.codex CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CLAUDE_CODE_TMPDIR='/ws/it'\''s'.tmpdir
 `;
-  expect(s("codex", "nono")).toBe(`${head}${gh}${codexNonoEnv}exec ${scope}${nono("codex", own)}${codex("--no-daemon ")}`);
+  expect(s("codex", "nono")).toBe(`${head}${box}${codexNonoEnv}exec ${scope}${nono("codex", own)}${codex("--no-daemon ")}`);
   expect(s("codex", "none")).toBe(`${head}${codexEnv}exec ${scope}${codex("")}`);
 });
 

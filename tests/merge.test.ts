@@ -1,19 +1,23 @@
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type PrFacts, isCritical, mergeDecision, parseAssessment } from "../src/merge";
+import { type PrFacts, isCritical, isTest, mergeDecision, parseAssessment } from "../src/merge";
 import { pass } from "../src/pass";
 import { config, fakeIo, fakeTracker, root, ticket, useTempRoot, web, worktree } from "./helpers";
 
 useTempRoot();
 
 const ok = { __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" };
-const prFacts = (over: Partial<PrFacts> = {}): PrFacts => ({
-  state: "OPEN", isDraft: false, isCrossRepository: false, baseRefName: "main", mergeable: "MERGEABLE",
-  additions: 10, deletions: 5, changedFiles: 2, files: [{ path: "src/a.ts" }, { path: "src/b.ts" }], statusCheckRollup: [ok], labels: [], ...over,
-});
+const file = (filename: string, over: object = {}) => ({ filename, status: "modified", additions: 1, deletions: 0, ...over });
+const prFacts = (over: Partial<PrFacts> = {}): PrFacts => {
+  const files = over.files ?? Array.from({ length: over.changedFiles ?? 2 }, (_, i) => file(`src/${i}.ts`));
+  return {
+    state: "OPEN", isDraft: false, isCrossRepository: false, baseRefName: "main", mergeable: "MERGEABLE",
+    additions: 10, deletions: 5, statusCheckRollup: [ok], labels: [], ...over, files, changedFiles: over.changedFiles ?? files.length,
+  };
+};
 const assess = (over: object = {}) => ({ tested: true, confidence: "high" as const, critical: false, reason: "small fix, tests pass", ...over });
-const smart = { autoMerge: "intelligent" as const, criticalPaths: [], baseBranch: "main" };
+const smart = { autoMerge: "intelligent" as const, criticalPaths: [], testPaths: [], baseBranch: "main" };
 const medium = { additions: 200, deletions: 100, changedFiles: 8 };
 
 test("merge decision: hard blockers hold back any size and any mode but off", () => {
@@ -35,13 +39,13 @@ test("merge decision: hard blockers hold back any size and any mode but off", ()
     expect(m({ statusCheckRollup: [{ state: "PENDING" }] }, undefined, s).merge).toBe("wait");
     expect(m({ mergeable: "UNKNOWN" }, undefined, s).merge).toBe("wait");
   }
-  expect(m({ files: [{ path: ".github/workflows/ci.yml" }] }).reason).toBe("touches critical path .github/workflows/ci.yml");
+  expect(m({ files: [file(".github/workflows/ci.yml")] }).reason).toBe("touches critical path .github/workflows/ci.yml");
   expect(m({}, assess({ critical: true })).reason).toBe("agent marked it critical: small fix, tests pass");
   expect(m({}, assess({ confidence: "low" })).reason).toMatch(/^agent confidence is low/);
 });
 
 test("merge decision: all mode has no size, path or assessment gates", () => {
-  const d = mergeDecision(prFacts({ additions: 5000, changedFiles: 90, files: [{ path: "package.json" }], statusCheckRollup: [] }), assess({ critical: true, confidence: "low" }), { ...smart, autoMerge: "all" });
+  const d = mergeDecision(prFacts({ additions: 5000, changedFiles: 90, files: [file("package.json")], statusCheckRollup: [] }), assess({ critical: true, confidence: "low" }), { ...smart, autoMerge: "all" });
   expect(d).toEqual({ merge: true, reason: "autoMerge all" });
 });
 
@@ -71,7 +75,33 @@ test("critical paths: built-ins, case-insensitive, any depth without a slash, co
   expect(isCritical("lib/x.proto", ["*.proto"])).toBe(true);
   expect(isCritical("a.b", ["a?b"])).toBe(true);
   expect(isCritical("ab", ["a.b"])).toBe(false);
-  expect(mergeDecision(prFacts({ files: [{ path: "src/billing/pay.ts" }] }), undefined, { ...smart, criticalPaths: ["src/billing/**"] }).reason).toBe("touches critical path src/billing/pay.ts");
+  expect(mergeDecision(prFacts({ files: [file("src/billing/pay.ts")] }), undefined, { ...smart, criticalPaths: ["src/billing/**"] }).reason).toBe("touches critical path src/billing/pay.ts");
+});
+
+test("critical paths: agent config, manifests and infra, dot dirs at any depth", () => {
+  for (const p of ["AGENTS.md", "pkg/agents.md", "CLAUDE.md", "docs/CLAUDE.md", ".claude/settings.json", "web/.claude/commands/x.md", ".codex/config.toml", ".mcp.json", "svc/.mcp.json",
+    "uv.lock", "poetry.lock", "Gemfile", "api/Gemfile.lock", "main.tf", "ops/net/vpc.TF", "k8s/deploy.yaml", "ops/k8s/a.yml", "charts/helm/values.yaml"])
+    expect([p, isCritical(p)]).toEqual([p, true]);
+  for (const p of ["src/claude.ts", "docs/agents/intro.md", "src/codex/run.ts", "mcp.json", "Gemfile.md", "x.tfstate.ts", "src/k8s.ts", "helmet/x.ts"]) expect([p, isCritical(p)]).toEqual([p, false]);
+});
+
+test("test paths: built-ins, config extends", () => {
+  for (const p of ["src/a.test.ts", "web/b.spec.tsx", "tests/x.ts", "pkg/test/x.rb", "src/__tests__/a.js", "e2e/login.ts", "app/test_api.py", "srv/h_test.go", "m_test.py", "Tests/X.ts"])
+    expect([p, isTest(p)]).toEqual([p, true]);
+  for (const p of ["src/testing.ts", "src/latest.ts", "contest/x.ts", "test.py", "src/attest.go"]) expect([p, isTest(p)]).toEqual([p, false]);
+  expect(isTest("qa/x.ts", ["qa/**"])).toBe(true);
+});
+
+test("merge decision: rewriting an existing test is held back, adding to one is not", () => {
+  const m = (f: object, testPaths: string[] = []) => mergeDecision(prFacts({ files: [file("src/a.ts"), f as any] }), undefined, { ...smart, testPaths });
+  expect(m(file("tests/a.test.ts", { status: "added", additions: 40 })).merge).toBe(true);
+  expect(m(file("tests/a.test.ts", { additions: 20 })).merge).toBe(true);
+  expect(m(file("tests/a.test.ts", { deletions: 3 })).reason).toBe("changes existing test tests/a.test.ts (modified, 3 deletions)");
+  expect(m(file("tests/a.test.ts", { status: "removed", additions: 0, deletions: 0 })).reason).toBe("changes existing test tests/a.test.ts (removed, 0 deletions)");
+  expect(m(file("old/a.ts", { status: "renamed", previous_filename: "tests/a.test.ts", additions: 0 })).merge).toBe(false);
+  expect(m(file("qa/a.ts", { deletions: 1 })).merge).toBe(true);
+  expect(m(file("qa/a.ts", { deletions: 1 }), ["qa/**"]).merge).toBe(false);
+  expect(mergeDecision(prFacts({ files: [file("tests/a.test.ts", { deletions: 9 })] }), undefined, { ...smart, autoMerge: "all" }).merge).toBe(true);
 });
 
 test("merge assessment: strict shape", () => {
@@ -83,7 +113,8 @@ test("merge assessment: strict shape", () => {
 test("auto-merge pass: merges only when enabled, pinned to the head; not-merged comment once per SHA", async () => {
   let facts: any = { ...prFacts(), number: 7, url: "https://github.com/acme/web/pull/7", headRefOid: "a".repeat(40) };
   const respond = (a: string[]) =>
-    a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"OPEN"}]' } : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(a.at(-1) === "state" ? { state: "MERGED" } : facts) } : undefined;
+    a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"OPEN"}]' } : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(a.at(-1) === "state" ? { state: "MERGED" } : facts) }
+    : a[1] === "api" && a[3] === "repos/acme/web/pulls/7/files?per_page=100" ? { out: facts.files.map((f: object) => JSON.stringify(f)).join("\n") } : undefined;
   const run = async (autoMerge: string, dry = false) => {
     const { tr, calls } = fakeTracker({ inReview: [ticket(1)] });
     const { io, cmds, logs } = fakeIo(respond, dry);
@@ -103,17 +134,25 @@ test("auto-merge pass: merges only when enabled, pinned to the head; not-merged 
   expect(all.merges[0]).toBe(`gh pr merge 7 --repo acme/web --squash --delete-branch --match-head-commit ${"a".repeat(40)}`);
   expect(all.merges.join(" ")).not.toContain("--admin");
   expect(all.calls).toEqual(["comment gh-1 auto-merged https://github.com/acme/web/pull/7: autoMerge all", "done gh-1"]);
+  expect(all.cmds.some((x) => x.startsWith("gh api"))).toBe(false);
 
-  facts = { ...facts, files: [{ path: "package.json" }] };
+  facts = { ...facts, files: [file("package.json")], changedFiles: 1 };
   const blocked = [await run("intelligent"), await run("intelligent")];
   expect(blocked.flatMap((r) => r.merges)).toEqual([]);
   expect(blocked.flatMap((r) => r.calls)).toEqual(["comment gh-1 not auto-merged: touches critical path package.json"]);
   facts = { ...facts, headRefOid: "b".repeat(40) };
   expect((await run("intelligent")).calls).toEqual(["comment gh-1 not auto-merged: touches critical path package.json"]);
 
-  facts = { ...facts, statusCheckRollup: [{ status: "IN_PROGRESS" }], files: [{ path: "src/a.ts" }], headRefOid: "c".repeat(40) };
+  facts = { ...facts, statusCheckRollup: [{ status: "IN_PROGRESS" }], files: [file("src/a.ts")], changedFiles: 1, headRefOid: "c".repeat(40) };
   const waiting = await run("intelligent");
   expect([waiting.calls, waiting.merges]).toEqual([[], []]);
+
+  facts = { ...facts, statusCheckRollup: [ok], files: [file("src/a.ts"), file("old.ts", { status: "renamed", previous_filename: "package.json" })], changedFiles: 2, headRefOid: "d".repeat(40) };
+  const shadowBlocked = [await run("shadow"), await run("shadow")];
+  expect([shadowBlocked.flatMap((r) => r.calls), shadowBlocked.flatMap((r) => r.merges)]).toEqual([["comment gh-1 not auto-merged: touches critical path package.json"], []]);
+  facts = { ...facts, files: [file("src/a.ts")], changedFiles: 1, headRefOid: "e".repeat(40) };
+  const shadow = [await run("shadow"), await run("shadow")];
+  expect([shadow.flatMap((r) => r.calls), shadow.flatMap((r) => r.merges)]).toEqual([["comment gh-1 would auto-merge: small change"], []]);
 
   facts = { ...facts, state: "MERGED" };
   expect((await run("intelligent")).calls).toEqual(["done gh-1"]);
@@ -159,7 +198,8 @@ test("auto-merge pass: a held marker for an older head is cleared while the new 
 test("auto-merge pass: medium needs the agent's merge.json; a symlinked one is ignored", async () => {
   const facts = { ...prFacts(medium), number: 7, url: "https://github.com/acme/web/pull/7", headRefOid: "a".repeat(40) };
   const c = config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "intelligent" }] });
-  const respond = (a: string[]) => (a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"OPEN"}]' } : a[2] === "view" && a[1] === "pr" ? { out: JSON.stringify(a.at(-1) === "state" ? { state: "MERGED" } : facts) } : undefined);
+  const respond = (a: string[]) => (a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"OPEN"}]' } : a[2] === "view" && a[1] === "pr" ? { out: JSON.stringify(a.at(-1) === "state" ? { state: "MERGED" } : facts) }
+    : a[1] === "api" ? { out: facts.files!.map((f) => JSON.stringify(f)).join("\n") } : undefined);
   worktree("gh-1");
   mkdirSync(join(root, "acme/web/gh-1/.aw"));
   writeFileSync(join(root, "outside.json"), JSON.stringify(assess()));
@@ -178,11 +218,22 @@ test("auto-merge pass: medium needs the agent's merge.json; a symlinked one is i
   expect(b.calls).toEqual(["comment gh-1 auto-merged https://github.com/acme/web/pull/7: medium change; agent: small fix, tests pass", "done gh-1"]);
 });
 
+test("merge decision: a file list that disagrees with changedFiles holds back; an unfetched one skips the file gates", () => {
+  expect(mergeDecision(prFacts({ changedFiles: 3, files: [file("src/a.ts")] }), undefined, smart).reason).toBe("file list has 1 of 3 files");
+  expect(mergeDecision(prFacts({ changedFiles: 1, files: [] }), undefined, smart).reason).toBe("file list has 0 of 1 files");
+  expect(mergeDecision({ ...prFacts({ files: [file("package.json")] }), files: undefined }, undefined, smart).merge).toBe(true);
+  for (const p of ["CLAUDE.local.md", "GEMINI.md", ".cursor/rules/x.mdc", "bunfig.toml", "sub/vitest.config.ts", "conftest.py", ".husky/pre-commit"]) expect(isCritical(p)).toBe(true);
+  expect(isTest("spec/models/user_spec.rb")).toBe(true);
+});
+
 test("merge decision: renames, newline paths and skipped-only checks are held back", () => {
+  const renamed = (filename: string, previous_filename: string) => prFacts({ files: [file(filename, { previous_filename, status: "renamed", additions: 0 })] });
   expect(isCritical("pkg\n/package.json")).toBe(true);
   expect(isCritical("x\n/infra/main.tf")).toBe(true);
-  expect(mergeDecision(prFacts({ files: [{ path: "src/login.ts", changeType: "RENAMED" }] }), undefined, smart).reason).toBe("renames src/login.ts; its old path is not checked");
-  expect(mergeDecision(prFacts({ files: [{ path: "src/login.ts", changeType: "RENAMED" }] }), undefined, { ...smart, autoMerge: "all" }).merge).toBe(true);
+  expect(mergeDecision(renamed("src/login.ts", "src/auth/login.ts"), undefined, smart).reason).toBe("touches critical path src/auth/login.ts");
+  expect(mergeDecision(renamed("src/auth/login.ts", "src/login.ts"), undefined, smart).reason).toBe("touches critical path src/auth/login.ts");
+  expect(mergeDecision(renamed("src/session.ts", "src/login.ts"), undefined, smart)).toEqual({ merge: true, reason: "small change" });
+  expect(mergeDecision(renamed("src/login.ts", "src/auth/login.ts"), undefined, { ...smart, autoMerge: "all" }).merge).toBe(true);
   const skipped = { status: "COMPLETED", conclusion: "SKIPPED" };
   const m = (statusCheckRollup: any[]) => mergeDecision(prFacts({ ...medium, statusCheckRollup }), assess(), smart);
   expect(m([skipped, { status: "COMPLETED", conclusion: "NEUTRAL" }]).reason).toBe("medium change with no successful check");
@@ -264,7 +315,7 @@ test("in review: gh calls per ticket per poll; feedback reuses auto-merge's view
     return x.cmds.filter((c) => c.startsWith("gh "));
   };
   const list = "gh pr list --repo acme/web --head agent/gh-1 --state all --json url,state";
-  const merge = "gh pr view 7 --repo acme/web --json number,url,state,isDraft,isCrossRepository,baseRefName,mergeable,additions,deletions,changedFiles,files,statusCheckRollup,labels,headRefOid,reviewDecision,mergeStateStatus";
+  const merge = "gh pr view 7 --repo acme/web --json number,url,state,isDraft,isCrossRepository,baseRefName,mergeable,additions,deletions,changedFiles,statusCheckRollup,labels,headRefOid,reviewDecision,mergeStateStatus";
   worktree("gh-1");
   // The first poll comments "not auto-merged" and so shares nothing; count the held polls after it.
   expect(await run("intelligent", [], true)).toHaveLength(3);

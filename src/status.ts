@@ -27,7 +27,7 @@ export interface Row {
   startedAt: number | null;
   phases: { done: number; total: number; items: PhaseItem[] } | null;
   pr: string | null;
-  /** "held": aw decided not to auto-merge the PR's current head (the `<ID>.merge` marker). */
+  /** "held": aw already commented on the PR's current head, refused or, in shadow, would merge (the `<ID>.merge` marker). */
   merge: "held" | null;
   transcript: string | null;
   /** tmux window id (`@3`) while `running`. */

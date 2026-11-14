@@ -65,6 +65,7 @@ export function parseConfig(raw: any, base: string): Config {
       maxConcurrent: v.maxConcurrent,
       autoMerge: v.autoMerge === undefined ? "off" : v.autoMerge,
       criticalPaths: v.criticalPaths === undefined ? [] : v.criticalPaths,
+      testPaths: v.testPaths === undefined ? [] : v.testPaths,
       feedbackAuthors: v.feedbackAuthors === undefined ? [] : v.feedbackAuthors,
     };
     check(/^[\w./-]+$/.test(r.baseBranch) && !r.baseBranch.includes(".."), `${at}.baseBranch: invalid`);
@@ -74,8 +75,8 @@ export function parseConfig(raw: any, base: string): Config {
     check(str(r.planStep), `${at}.planStep: non-empty string`);
     check(r.maxConcurrent === undefined || posInt(r.maxConcurrent), `${at}.maxConcurrent: positive integer`);
     check(existsSync(r.prompt), `${at}.prompt: ${r.prompt} not found`);
-    check(["off", "intelligent", "all"].includes(r.autoMerge), `${at}.autoMerge: "off" | "intelligent" | "all"`);
-    check(Array.isArray(r.criticalPaths) && r.criticalPaths.every(str), `${at}.criticalPaths: array of non-empty glob strings`);
+    check(["off", "shadow", "intelligent", "all"].includes(r.autoMerge), `${at}.autoMerge: "off" | "shadow" | "intelligent" | "all"`);
+    for (const k of ["criticalPaths", "testPaths"] as const) check(Array.isArray(r[k]) && r[k].every(str), `${at}.${k}: array of non-empty glob strings`);
     check(Array.isArray(r.feedbackAuthors) && r.feedbackAuthors.every(str), `${at}.feedbackAuthors: array of non-empty strings (GitHub logins / Linear emails)`);
     repos[key] = r;
     keys.push(key);

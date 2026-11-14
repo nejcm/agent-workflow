@@ -10,10 +10,11 @@ export interface Repo {
   maxConcurrent?: number;
   autoMerge: AutoMerge;
   criticalPaths: string[];
+  testPaths: string[];
   feedbackAuthors: string[];
 }
 
-export type AutoMerge = "off" | "intelligent" | "all";
+export type AutoMerge = "off" | "shadow" | "intelligent" | "all";
 
 interface SourceBase {
   name: string;

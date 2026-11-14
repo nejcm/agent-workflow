@@ -60,18 +60,19 @@ test("config: repo overrides of the wrong type are rejected, not replaced by def
 });
 
 test("config: autoMerge and criticalPaths from defaults or per repo, validated", () => {
-  expect(web(config())).toMatchObject({ autoMerge: "off", criticalPaths: [] });
-  const c = config({ defaults: { agent: "claude", sandbox: "nono", testCmd: "t", autoMerge: "intelligent", criticalPaths: ["x/**"] }, repos: ["acme/web", { name: "acme/api", autoMerge: "all" }] });
-  expect(web(c)).toMatchObject({ autoMerge: "intelligent", criticalPaths: ["x/**"] });
-  expect(c.repos["acme/api"]!.autoMerge).toBe("all");
-  expect(() => config({ repos: [{ name: "acme/web", autoMerge: "yes" }] })).toThrow(`repos[0] (acme/web).autoMerge: "off" | "intelligent" | "all"`);
+  expect(web(config())).toMatchObject({ autoMerge: "off", criticalPaths: [], testPaths: [] });
+  const c = config({ defaults: { agent: "claude", sandbox: "nono", testCmd: "t", autoMerge: "intelligent", criticalPaths: ["x/**"], testPaths: ["qa/**"] }, repos: ["acme/web", { name: "acme/api", autoMerge: "shadow", testPaths: [] }] });
+  expect(web(c)).toMatchObject({ autoMerge: "intelligent", criticalPaths: ["x/**"], testPaths: ["qa/**"] });
+  expect(c.repos["acme/api"]).toMatchObject({ autoMerge: "shadow", testPaths: [] });
+  expect(() => config({ repos: [{ name: "acme/web", autoMerge: "yes" }] })).toThrow(`repos[0] (acme/web).autoMerge: "off" | "shadow" | "intelligent" | "all"`);
   expect(() => config({ repos: [{ name: "acme/web", criticalPaths: "x" }] })).toThrow("criticalPaths: array of non-empty glob strings");
   expect(() => config({ repos: [{ name: "acme/web", criticalPaths: [""] }] })).toThrow("criticalPaths");
+  expect(() => config({ repos: [{ name: "acme/web", testPaths: ["x", 1] }] })).toThrow("testPaths: array of non-empty glob strings");
 });
 
 test("config: explicit null autoMerge or criticalPaths is rejected, not defaulted", () => {
   expect(() => config({ repos: [{ name: "acme/web", criticalPaths: null }] })).toThrow("criticalPaths: array of non-empty glob strings");
-  expect(() => config({ repos: [{ name: "acme/web", autoMerge: null }] })).toThrow(`autoMerge: "off" | "intelligent" | "all"`);
+  expect(() => config({ repos: [{ name: "acme/web", autoMerge: null }] })).toThrow(`autoMerge: "off" | "shadow" | "intelligent" | "all"`);
 });
 
 test("config: feedbackAuthors defaults to [], from defaults or per repo, validated", () => {

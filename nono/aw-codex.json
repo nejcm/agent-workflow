@@ -105,6 +105,7 @@
       "/proc/loadavg",
       "/proc/version",
       "/proc/filesystems",
+      "$HOME/.claude-aw/plugins",
       "$HOME/.claude/skills",
       "$HOME/.agents/skills",
       "/usr/share/omarchy/default/agents",
@@ -112,6 +113,7 @@
       "$HOME/.bun"
     ],
     "read_file": [
+      "$HOME/.claude-aw/settings.json",
       "$HOME/.claude/CLAUDE.md",
       "$HOME/.claude/AGENTS.md"
     ]
@@ -144,6 +146,9 @@
       "XDG_CONFIG_HOME",
       "XDG_DATA_HOME",
       "XDG_CACHE_HOME",
+      "CLAUDE_CONFIG_DIR",
+      "CLAUDE_CODE_TMPDIR",
+      "CLAUDE_CODE_OAUTH_TOKEN",
       "CODEX_HOME",
       "GH_CONFIG_DIR"
     ]
@@ -158,7 +163,8 @@
     ],
     "credentials": [
       "github",
-      "github_git"
+      "github_git",
+      "anthropic_oauth"
     ],
     "custom_credentials": {
       "github": {
@@ -186,6 +192,12 @@
         "credential_key": "cmd://github_git",
         "env_var": "GITHUB_GIT_TOKEN",
         "inject_mode": "basic_auth"
+      },
+      "anthropic_oauth": {
+        "upstream": "https://api.anthropic.com",
+        "credential_key": "cmd://anthropic_oauth",
+        "env_var": "CLAUDE_CODE_OAUTH_TOKEN",
+        "credential_format": "Bearer {}"
       }
     }
   },
@@ -207,6 +219,18 @@
       ],
       "timeout_secs": 5,
       "cache_ttl_secs": 900
+    },
+    "anthropic_oauth": {
+      "command": [
+        "/bin/sh",
+        "-p",
+        "-c",
+        "cd / && exec /usr/bin/env -i HOME=\"$HOME\" \"$AW_BUN\" --no-env-file -e \"$1\"",
+        "sh",
+        "try{const f=require(\"node:fs\"),d=process.env.HOME+\"/.claude/\",w=Date.now()+3000;while(f.existsSync(d+\".oauth_refresh.lock\")){if(Date.now()>w)process.exit(1);Bun.sleepSync(50)}const c=JSON.parse(f.readFileSync(d+\".credentials.json\",\"utf8\"));const o=c!==null&&typeof c===\"object\"&&!Array.isArray(c)&&Object.hasOwn(c,\"claudeAiOauth\")?c.claudeAiOauth:null;const t=o!==null&&typeof o===\"object\"?o.accessToken:undefined,e=o!==null&&typeof o===\"object\"?o.expiresAt:undefined;if(typeof t===\"string\"&&/^[A-Za-z0-9._-]+$/.test(t)&&Number.isSafeInteger(e)&&e>Date.now()+30000){process.stdout.write(t);process.exit(0)}}catch{}process.exit(1)"
+      ],
+      "timeout_secs": 5,
+      "cache_ttl_secs": 0
     }
   }
 }

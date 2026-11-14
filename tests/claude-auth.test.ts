@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { CAPTURE_COMMAND, cached, checkLogin, CREDENTIALS, findClaude, hostExe, needsRefresh, readLogin, refresher } from "../src/claude-auth";
+import { dirname, join } from "node:path";
+import { CAPTURE_COMMAND, cached, checkLogin, CREDENTIALS, findClaude, hostExe, hostLogin, needsRefresh, readLogin, refresher } from "../src/claude-auth";
 import { AW_DIR } from "../src/util";
 
 let t: string;
@@ -166,10 +166,10 @@ function hostile() {
   return { home, clone, marker, env };
 }
 
-async function capture(text: string | undefined) {
+async function capture(text: string | undefined, env: (marker: string) => Record<string, string> = () => ({}), argv = CAPTURE_COMMAND) {
   const h = hostile();
   if (text !== undefined) creds(h.home, text);
-  const p = Bun.spawn(CAPTURE_COMMAND, { cwd: h.clone, env: h.env, stdio: ["ignore", "pipe", "pipe"] });
+  const p = Bun.spawn(argv, { cwd: h.clone, env: { ...h.env, ...env(h.marker) }, stdio: ["ignore", "pipe", "pipe"] });
   const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
   return { out, err, code, ran: existsSync(h.marker) };
 }
@@ -205,4 +205,61 @@ test("control: plain bun -e in the clone runs its preload and loads its .env", a
   const h = hostile();
   const p = Bun.spawn([BUN, "-e", "console.log(process.env.AW_DOTENV)"], { cwd: h.clone, env: { HOME: h.home, PATH: "/usr/bin:/bin" }, stdio: ["ignore", "pipe", "ignore"] });
   expect(await new Response(p.stdout).text()).toBe("PRELOAD-RAN\nloaded\n");
+});
+
+const valid = JSON.stringify({ claudeAiOauth: oauth({}) });
+const bashEnv = (marker: string) => ({ "BASH_FUNC_cd%%": `() { echo x >> ${marker}; echo FUNC; builtin cd "$@"; }`, SHELLOPTS: "xtrace", PS4: `$(echo x >> ${marker})` });
+
+test("capture ignores bash functions, SHELLOPTS and PS4 from the ticket env", async () => {
+  expect(await capture(valid, bashEnv)).toEqual({ out: TOKEN, err: "", code: 0, ran: false });
+});
+
+test.if(realpathSync("/bin/sh").endsWith("bash"))("control: without -p, bash runs them", async () => {
+  expect((await capture(valid, bashEnv, CAPTURE_COMMAND.filter((a) => a !== "-p"))).ran).toBe(true);
+});
+
+const lock = () => join(t, "home/.claude/.oauth_refresh.lock");
+
+test("capture waits while Claude holds its refresh lock, then reads the saved token", async () => {
+  mkdirSync(lock(), { recursive: true });
+  const start = performance.now();
+  setTimeout(() => rmSync(lock(), { recursive: true }), 500);
+  expect(await capture(valid)).toEqual({ out: TOKEN, err: "", code: 0, ran: false });
+  expect(performance.now() - start).toBeGreaterThan(450);
+});
+
+test("capture gives up on a stuck refresh lock within 3 s", async () => {
+  mkdirSync(lock(), { recursive: true });
+  const start = performance.now();
+  expect(await capture(valid)).toEqual({ out: "", err: "", code: 1, ran: false });
+  expect(performance.now() - start).toBeGreaterThan(2900);
+  expect(performance.now() - start).toBeLessThan(4500);
+});
+
+test("both profiles route api.anthropic.com through the capture, uncached; the doc shows the same argv", () => {
+  for (const name of ["aw-claude", "aw-codex"]) {
+    const p = JSON.parse(readFileSync(join(AW_DIR, "nono", `${name}.json`), "utf8"));
+    expect(p.network.credentials).toContain("anthropic_oauth");
+    expect(p.network.custom_credentials.anthropic_oauth).toEqual({ upstream: "https://api.anthropic.com", credential_key: "cmd://anthropic_oauth", env_var: "CLAUDE_CODE_OAUTH_TOKEN", credential_format: "Bearer {}" });
+    expect(p.credential_capture.anthropic_oauth).toEqual({ command: CAPTURE_COMMAND, timeout_secs: 5, cache_ttl_secs: 0 });
+    expect(p.environment.allow_vars).toEqual(expect.arrayContaining(["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR", "CLAUDE_CODE_OAUTH_TOKEN"]));
+    expect(p.environment.allow_vars).not.toContain("AW_BUN");
+  }
+  expect(readFileSync(join(AW_DIR, "docs/claude-auth.md"), "utf8")).toContain(`"command": ${JSON.stringify(CAPTURE_COMMAND)}`);
+});
+
+test("hostLogin: a dry run checks metadata only and spawns nothing", async () => {
+  const home = join(t, "home");
+  const logs: string[] = [];
+  const cmds: string[][] = [];
+  const io = { dry: true, home, log: (m: string) => logs.push(m), fetch, run: async (a: string[]) => (cmds.push(a), { code: 0, out: "", err: "" }) };
+  creds(home, login({ expiresAt: NOW, refreshTokenExpiresAt: NOW + 86_400_000 }));
+  expect(await hostLogin(io, [join(t, "ws")], () => NOW)).toBeUndefined();
+  expect(logs).toEqual(["the Claude login ends in 24h: run `claude auth login` before then", "dry: refresh the claude login when it expires within 5 minutes"]);
+  expect(cmds).toEqual([]);
+  expect(calls()).toEqual([]);
+  rmSync(join(home, CREDENTIALS));
+  await expect(hostLogin(io, [join(t, "ws")])).rejects.toThrow("run `claude auth login`");
+  await expect(hostLogin(io, [dirname(AW_DIR)])).rejects.toThrow("aw's dir");
+  await expect(hostLogin(io, [dirname(BUN)])).rejects.toThrow("bun: ");
 });

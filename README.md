@@ -2,7 +2,7 @@
 
 Move a GitHub issue or Linear ticket to **ready**, and `aw` starts a Claude Code or Codex session for it: in its own git clone, inside the [nono](https://github.com/nolabs-ai/nono) sandbox, in a tmux window you can attach to. The agent implements the ticket, runs the tests, pushes `agent/<ID>` and opens a PR; `aw` then moves the ticket to **In Review**.
 
-- **Watch and steer locally.** `tmux attach -t aw`, or open its clone in your editor. Codex sessions are interactive, so they also land in the ChatGPT/Codex app history. Claude sessions run without Remote Control: it needs a full login, and a shared login does not survive token refresh across sessions.
+- **Watch and steer locally.** `tmux attach -t aw`, or open its clone in your editor. Codex sessions are interactive, so they also land in the ChatGPT/Codex app history. Claude sessions run without Remote Control: they hold an inference-only token (nono's phantom, or the setup-token without a sandbox), which cannot open Remote Control sessions.
 - **Runs where you are.** Directly on your machine (sandboxed by nono), or on a VM (`sandbox: "none"`, the VM is the boundary). Same code, same config.
 - **No moving parts to babysit.** A small Bun + TypeScript program, no database: state is the tracker, the tmux windows and the session clones. Polls instead of webhooks, so nothing listens on a port.
 - **Your setup, read-only.** Agents use your `CLAUDE.md`, `AGENTS.md` and skills, but run from their own config dirs (a fresh `<ID>.claude` per Claude ticket and `<ID>.codex` per ticket) and cannot modify yours.
@@ -110,20 +110,24 @@ curl -fsSL https://nono.sh/install.sh | sh
 scripts/setup.sh owner/repo
 ```
 
-Idempotent, never overwrites real files. It creates `~/.claude-aw` and `~/.codex-aw` (symlinking your `CLAUDE.md`, `AGENTS.md`, skills), creates `~/agent-ws` and `~/agent-repos`, and creates the labels for each repo you pass. Then log the agents in — these are separate from your own sessions:
+Idempotent, never overwrites real files. It creates `~/.claude-aw` and `~/.codex-aw` (symlinking your `CLAUDE.md`, `AGENTS.md`, skills), creates `~/agent-ws` and `~/agent-repos`, and creates the labels for each repo you pass. Then check the logins.
 
-```bash
-CLAUDE_CONFIG_DIR=~/.claude-aw claude
-```
+#### Claude auth
 
-Run `/login` inside, then exit. Sessions do not use that login (only its onboarding and account keys, see below); they authenticate with a long-lived token:
+Sandboxed (`nono`) sessions use your own Claude login in `~/.claude` (`claude auth login` if you have none); there is nothing to set up for them. The session holds only nono's phantom in `CLAUDE_CODE_OAUTH_TOKEN`. For each request to `api.anthropic.com`, nono's proxy swaps in the real access token, read on the host from `~/.claude/.credentials.json` by aw's own `bun` (`AW_BUN`), from `/`, under `env -i`, uncached. The session never sees the token or the file. Codex sessions get the same route and their own `<ID>.claude` dir, so a `claude` they run works too.
+
+Claude refreshes only inside the last 5 minutes of the access token's 8 hours, and never from an env token, so `aw run` refreshes your login itself: at start and every 60 s it checks the expiry, and inside that window runs `claude -p /cost` on the host (the real executable that `mise which claude` resolves to, not the mise wrapper, with a clean env, `--safe-mode`, no setting sources and aw's dir as cwd). That makes no model turn, and Claude's own lock keeps it from racing your interactive sessions. `aw once` checks once; `--dry-run`, `status`, `watch` and `tail` never refresh. If `aw` is down for longer than the token has left, sessions get 401s until your own Claude use or `aw` refreshes it. When the login itself reaches its time limit, run `claude auth login`; `aw` warns 3 days ahead, and a sandboxed Claude start fails once it has passed. See [docs/claude-auth.md](docs/claude-auth.md).
+
+Unsandboxed (`none`) Claude sessions authenticate with a long-lived token instead:
 
 ```bash
 claude setup-token   # prints the token; save it with:
 install -m 600 /dev/stdin ~/.claude-aw/oauth-token   # paste, then Ctrl-D
 ```
 
-The launch script reads it on the host and passes it to the sandbox as `CLAUDE_CODE_OAUTH_TOKEN`, so it never lands in the script, the prompt or the logs, and the session cannot read the file. A Claude start fails while the file is missing. Copying `.credentials.json` per ticket would not work: Claude rotates refresh tokens, so the copies would log each other out.
+The launch script reads it on the host and passes it as `CLAUDE_CODE_OAUTH_TOKEN`, so it never lands in the script, the prompt or the logs. An unsandboxed Claude start fails while the file is missing. Copying `.credentials.json` per ticket would not work: Claude rotates refresh tokens, so the copies would log each other out.
+
+Log Codex in; this login is separate from your own:
 
 ```bash
 CODEX_HOME=~/.codex-aw codex login
@@ -135,7 +139,7 @@ Codex uses that ChatGPT login, so sessions draw on your plan's Codex limits (Plu
 
 Only the host holds the refresh token. ChatGPT refresh tokens rotate and Codex rejects a reused one, so a copy that could refresh would log the template out. The ticket's `auth.json` holds only what an access-token login needs, copied from the template: `auth_mode`, `last_refresh` and the tokens' `id_token`, `access_token`, `account_id`, `login_owner_id` and `oauth_provenance`, with `refresh_token` set to `""` (Codex refuses the file without the key). Anything else in the template (an API key, a personal access token, Bedrock keys, fields a newer Codex adds) stays on the host. It carries the access token, which lives 10 days and which the session can read: its own credential, like the Claude token. Before copying, if the template's access token (its JWT `exp`) expires within 24 hours, `aw` refreshes it on the host: Codex has no refresh command, so `aw` runs `CODEX_HOME=~/.codex-aw codex app-server` and sends `account/read` with `refreshToken: true` (the app-server's forced refresh), waiting for the reply before closing it, under `flock` on `~/.codex-aw` so two `aw` processes never refresh at once. A refresh killed at its 60 s deadline after the server rotated the token but before Codex saved it loses the template login; log in again. If the token still expires within 24 hours afterwards, or the template has no ChatGPT login, the start fails with the fix (`CODEX_HOME=~/.codex-aw codex login`) in the log. A Claude start never fails over it; its Codex is then just not logged in. So a session starts with at least a day of token. If it runs past expiry, Codex tries to refresh with the empty token, which fails, and its requests fail with "Your access token could not be refreshed…": the session stays open but cannot work, and likely reads as idle rather than stalled (from the Codex source; not checked live). Restart the ticket for a fresh copy.
 
-No trust step: Claude keys folder trust on the git repository root ([docs](https://code.claude.com/docs/en/permissions#project-allow-rules-and-workspace-trust)), here the session's own clone, so trusting `~/agent-ws` or your home does not cover it. Each Claude ticket gets its own config dir, `<workspaceRoot>/<owner>/<name>/<ID>.claude`, which `aw` recreates at every start: symlinks to the template's `settings.json`, `CLAUDE.md`, `AGENTS.md`, `skills` and `plugins` (resolved, so they point at the real files), and a `.claude.json` holding only the template's onboarding and account keys plus `projects["<session clone>"].hasTrustDialogAccepted` (the documented way to trust a folder by hand), so the session starts without the dialog. `~/.claude-aw` is the template: sessions can write only their own dir and read only the template's `settings.json` and `plugins/`, so a session cannot plant hooks, instructions, MCP servers or plugins for other tickets. Anything it leaves in its own dir is gone at the next start and at cleanup.
+No trust step: Claude keys folder trust on the git repository root ([docs](https://code.claude.com/docs/en/permissions#project-allow-rules-and-workspace-trust)), here the session's own clone, so trusting `~/agent-ws` or your home does not cover it. Each Claude ticket gets its own config dir, `<workspaceRoot>/<owner>/<name>/<ID>.claude`, which `aw` recreates at every start: symlinks to the template's `settings.json`, `CLAUDE.md`, `AGENTS.md`, `skills` and `plugins` (resolved, so they point at the real files), and a `.claude.json` holding only your login's onboarding and account keys (from `~/.claude.json`) plus `projects["<session clone>"].hasTrustDialogAccepted` (the documented way to trust a folder by hand), so the session starts without the dialog. `~/.claude-aw` is the template: sessions can write only their own dir and read only the template's `settings.json` and `plugins/`, so a session cannot plant hooks, instructions, MCP servers or plugins for other tickets. Anything it leaves in its own dir is gone at the next start and at cleanup.
 
 Check the sandbox profiles parse:
 
@@ -342,7 +346,7 @@ CLI: `bun aw.ts <run|once|status|watch|tail> [--dry-run] [--json] [--interval s]
 Prove the sandbox boundaries on a throwaway repo first.
 
 - [ ] Inside a sandboxed session, `cat ~/.ssh/id_*`, `ls ~/Work/<other-repo>`, `ls ~/.config` fail.
-- [ ] Writing `~/.claude/CLAUDE.md`, `~/.claude/settings.json` or anything in `~/.claude-aw` fails; your CLAUDE.md, AGENTS.md and skills load.
+- [ ] Writing `~/.claude/CLAUDE.md`, `~/.claude/settings.json` or anything in `~/.claude-aw` fails, and so does reading `~/.claude/.credentials.json`; your CLAUDE.md, AGENTS.md and skills load.
 - [ ] `env | grep -iE 'token|key'` shows only phantom values; `LINEAR_API_KEY` is absent.
 - [ ] `git push -u origin agent/<ID>` and `gh pr create` work, also with an SSH `origin`.
 - [ ] Sandboxed Codex reaches its backend (`chatgpt.com`, `auth.openai.com`).

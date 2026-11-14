@@ -2,9 +2,10 @@ import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { AGENTS, CLAUDE_TOKEN, claudeHome, codexHome, tmpHome } from "./agents";
+import { checkLogin, findBun, readLogin } from "./claude-auth";
 import { repoDir } from "./config";
 import type { Config, Io, Repo, Source, Ticket, Tracker } from "./types";
-import { AW_DIR, GIT, inAw, put, read, remove, write } from "./util";
+import { GIT, inAw, put, read, remove, write } from "./util";
 
 export const render = (tpl: string, vars: Record<string, string>) => tpl.replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? m);
 
@@ -43,18 +44,18 @@ export async function sweepScopes(cfg: Config, io: Io, cgroup = cgroupOf) {
   for (const unit of out.split("\n").map((l) => l.trim().split(/\s+/)[0])) if (unit && !live.has(unit)) await write(io, ["systemctl", "--user", "kill", "--signal=KILL", unit]);
 }
 
-export function launcher(l: Repo, wt: string, promptFile: string, unit: string, awDir = AW_DIR) {
+export function launcher(l: Repo, wt: string, promptFile: string, unit: string, awDir: string, bun: string) {
   const prompt = `"$(cat ${q(promptFile)})"`;
   const nono = l.sandbox === "nono";
   const git = join(l.path, ".git");
-  const own = [...(l.agent === "claude" ? [claudeHome(wt)] : []), codexHome(wt)].map((p): [string, string] => ["--allow", p]);
+  const own = [claudeHome(wt), codexHome(wt)].map((p): [string, string] => ["--allow", p]);
   const tmp = tmpHome(wt);
   const grants: [string, string][] = [["--allow", wt], ["--allow-unix-socket-subtree-bind", wt], ["--allow", tmp], ["--allow-unix-socket-subtree-bind", tmp], ...own, ["--read", join(git, "objects")]];
   const wrap = nono ? nonoRun(`aw-${l.agent}`, awDir, grants, q) : [];
   const [env, cmd] = AGENTS[l.agent].launch(q(wt), prompt, nono);
   // gh exits if it cannot read its config dir; <ID>.gh is never created, so gh runs on defaults plus nono's GH_TOKEN.
-  // A private XDG cache: the host's ~/.cache (Claude's claude-cli-nodejs included) stays out of the sandbox.
-  const gh = nono ? `export GH_CONFIG_DIR=${q(wt)}.gh XDG_CACHE_HOME=${q(join(tmp, "cache"))}\n` : "";
+  // A private XDG cache: the host's ~/.cache (Claude's claude-cli-nodejs included) stays out of the sandbox. AW_BUN runs nono's Claude login capture.
+  const gh = nono ? `export GH_CONFIG_DIR=${q(wt)}.gh XDG_CACHE_HOME=${q(join(tmp, "cache"))} AW_BUN=${q(bun)}\n` : "";
   const scope = ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--unit", q(unit), "--"];
   return `#!/usr/bin/env bash\ncd ${q(wt)} || exit 1\nunset LINEAR_API_KEY\nexport TMPDIR=${q(tmp)} TMP=${q(tmp)} TEMP=${q(tmp)}\n${gh}${env}\nexec ${[...scope, ...wrap, ...cmd].join(" ")}\n`;
 }
@@ -89,7 +90,7 @@ const TEMPLATE = ["settings.json", "CLAUDE.md", "AGENTS.md", "skills", "plugins"
 const ACCOUNT = ["hasCompletedOnboarding", "lastOnboardingVersion", "oauthAccount", "userID"];
 const pick = (o: any, keys: string[]) => Object.fromEntries(keys.filter((k) => o?.[k] !== undefined).map((k) => [k, o[k]]));
 
-// Fresh per start, so nothing a session left there carries over. Trust goes on the session clone.
+// Fresh per start, so nothing a session left there carries over. Account keys come from the host login's ~/.claude.json; trust goes on the session clone.
 export function seedClaude(io: Io, dir: string, root: string) {
   const tpl = join(io.home, ".claude-aw");
   io.log(`${io.dry ? "dry: " : ""}seed ${dir} from ${tpl}`);
@@ -99,7 +100,7 @@ export function seedClaude(io: Io, dir: string, root: string) {
   for (const f of TEMPLATE) if (existsSync(join(tpl, f))) symlinkSync(realpathSync(join(tpl, f)), join(dir, f));
   let o: any = {};
   try {
-    o = JSON.parse(readFileSync(join(tpl, ".claude.json"), "utf8"));
+    o = JSON.parse(readFileSync(join(io.home, ".claude.json"), "utf8"));
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
@@ -203,8 +204,12 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   const branch = `agent/${t.id}`;
   const promptFile = join(dir, `${t.id}.prompt.md`);
   const script = join(dir, `${t.id}.sh`);
+  const nono = r.sandbox === "nono";
   const token = join(io.home, CLAUDE_TOKEN);
-  if (r.agent === "claude" && !existsSync(token)) throw new Error(`${token} is missing: run \`claude setup-token\` and save the token it prints there (chmod 600)`);
+  if (r.agent === "claude" && !nono && !existsSync(token)) throw new Error(`${token} is missing: run \`claude setup-token\` and save the token it prints there (chmod 600)`);
+  const warn = r.agent === "claude" && nono ? checkLogin(readLogin(io.home), Date.now()) : undefined;
+  if (warn) io.log(warn);
+  const bun = nono ? findBun([cfg.workspaceRoot]) : "";
   // No window means any scope left under this name is a stale session, still writing the clone it is about to share.
   await stopScope(cfg, io, r.key, t.id);
   // Claude sessions run Codex only as a helper, so a missing Codex login does not stop them.
@@ -221,7 +226,7 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   await write(io, [...GIT, "-C", r.path, "fetch", "origin", r.baseBranch], undefined, SLOW_SECS);
   if (existsSync(wt)) io.log(`reuse ${wt}`);
   else await cloneSession(io, r, wt, branch);
-  if (r.agent === "claude") seedClaude(io, claudeHome(wt), existsSync(wt) ? realpathSync(wt) : wt);
+  if (r.agent === "claude" || nono) seedClaude(io, claudeHome(wt), existsSync(wt) ? realpathSync(wt) : wt);
   const vars = { id: t.id, title: t.title, body: t.body, url: t.url, branch, base: r.baseBranch, testCmd: r.testCmd, repo: r.key, planStep: r.planStep };
   io.log(`${io.dry ? "dry: " : ""}write ${join(wt, ".aw", ".gitignore")}`);
   if (!io.dry) {
@@ -230,7 +235,7 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
     inAw(wt, (d) => (rmSync(`${d}/.gitignore`, { force: true }), writeFileSync(`${d}/.gitignore`, "*\n", { flag: "wx" })));
   }
   put(io, promptFile, render(readFileSync(r.prompt, "utf8"), vars));
-  put(io, script, launcher(r, wt, promptFile, scopeUnit(cfg, r.key, t.id), awDir), 0o755);
+  put(io, script, launcher(r, wt, promptFile, scopeUnit(cfg, r.key, t.id), awDir, bun), 0o755);
   // Claimed last, so a failed start leaves the ticket ready; `<ID>.claim` goes first, so a claim lost to an error or a crash is retried while the window lives.
   const pending = join(dir, `${t.id}.claim`);
   put(io, pending, new Date().toISOString());

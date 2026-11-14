@@ -24,7 +24,7 @@ const HOOK_STATES = new Set<unknown>(["working", "waiting", "idle", "ended"]);
 const MAX_SESSION = 64 * 1024;
 const MAX_FILE = 4096;
 
-/** A `claude setup-token` token, relative to home; read by the launch script on the host, outside the sandbox. */
+/** A `claude setup-token` token for `sandbox: "none"` lanes, relative to home; read by the launch script on the host. nono lanes get a phantom from nono's proxy instead. */
 export const CLAUDE_TOKEN = ".claude-aw/oauth-token";
 /** The ticket's own Claude config dir, a sidecar of its worktree. */
 export const claudeHome = (wt: string) => `${wt}.claude`;
@@ -119,7 +119,7 @@ const INBOX_SETTINGS = JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "comma
 
 export const AGENTS: Record<Repo["agent"], Agent> = {
   claude: {
-    launch: (wt, prompt) => [`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/${CLAUDE_TOKEN}")" || exit 1\nexport CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR=${claudeHome(wt)} CODEX_HOME=${codexHome(wt)} CLAUDE_CODE_TMPDIR=${tmpHome(wt)}`, ["claude", "--permission-mode", "bypassPermissions", "--settings", `'${INBOX_SETTINGS}'`, prompt]],
+    launch: (wt, prompt, nono) => [`${nono ? "export" : `CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/${CLAUDE_TOKEN}")" || exit 1\nexport CLAUDE_CODE_OAUTH_TOKEN`} CLAUDE_CONFIG_DIR=${claudeHome(wt)} CODEX_HOME=${codexHome(wt)} CLAUDE_CODE_TMPDIR=${tmpHome(wt)}`, ["claude", "--permission-mode", "bypassPermissions", "--settings", `'${INBOX_SETTINGS}'`, prompt]],
     store: (wt) => [claudeHome(wt), "projects"],
     transcripts: (wt) => jsonl(claudeDir(wt)),
     cwd: (o) => o?.cwd,
@@ -130,7 +130,7 @@ export const AGENTS: Record<Repo["agent"], Agent> = {
   },
   codex: {
     // Hook trust is keyed on the config file's path, so every fresh CODEX_HOME would skip the hooks aw seeds from the template.
-    launch: (wt, prompt, nono) => [`export CODEX_HOME=${codexHome(wt)}`, ["codex", ...(nono ? ["--no-daemon"] : []), "--dangerously-bypass-hook-trust", "--sandbox", "danger-full-access", "--ask-for-approval", "never", "-C", wt, prompt]],
+    launch: (wt, prompt, nono) => [`export CODEX_HOME=${codexHome(wt)}${nono ? ` CLAUDE_CONFIG_DIR=${claudeHome(wt)} CLAUDE_CODE_TMPDIR=${tmpHome(wt)}` : ""}`, ["codex", ...(nono ? ["--no-daemon"] : []), "--dangerously-bypass-hook-trust", "--sandbox", "danger-full-access", "--ask-for-approval", "never", "-C", wt, prompt]],
     store: (wt) => [codexHome(wt), "sessions"],
     transcripts: (wt) => jsonl(join(codexHome(wt), "sessions"), true),
     cwd: (o) => o?.type === "session_meta" && o.payload?.cwd,

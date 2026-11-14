@@ -2,6 +2,7 @@
 import { mkdirSync, openSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { hostLogin } from "./src/claude-auth";
 import { parseConfig } from "./src/config";
 import { dashboard, watch } from "./src/dash";
 import { makeTracker, pass } from "./src/pass";
@@ -120,7 +121,18 @@ async function main(argv: string[]) {
     console.error(`another aw run or once holds ${lock}; stop it first`);
     process.exit(1);
   }
+  const nono = Object.values(cfg.repos).filter((r) => r.sandbox === "nono");
+  const refresh = nono.length
+    ? await hostLogin(io, [cfg.workspaceRoot]).catch((e) => {
+        // Codex sessions only run Claude as a helper, so they start without a usable login.
+        if (!nono.some((r) => r.agent === "claude")) return void io.log(`claude login: ${e.message}`);
+        console.error(`claude login: ${e.message}`);
+        process.exit(1);
+      })
+    : undefined;
   if (cmd === "once") return pass(cfg, io);
+  // Its own timer: a pass can block for minutes, longer than Claude's 5-minute refresh window.
+  if (refresh) setInterval(refresh, 60_000);
   for (;;) {
     await pass(cfg, io);
     await Bun.sleep(cfg.pollIntervalMs);

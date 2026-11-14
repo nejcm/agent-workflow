@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { basename, join } from "node:path";
-import type { Run } from "./types";
+import type { Io, Run } from "./types";
 import { AW_DIR, nonEmpty } from "./util";
 
 /** The host login aw keeps fresh, relative to home. */
@@ -9,20 +9,22 @@ const WINDOW_MS = 300_000;
 const DAY_MS = 86_400_000;
 
 const CAPTURE_JS =
-  'try{const c=JSON.parse(require("node:fs").readFileSync(process.env.HOME+"/.claude/.credentials.json","utf8"));const o=c!==null&&typeof c==="object"&&!Array.isArray(c)&&Object.hasOwn(c,"claudeAiOauth")?c.claudeAiOauth:null;const t=o!==null&&typeof o==="object"?o.accessToken:undefined,e=o!==null&&typeof o==="object"?o.expiresAt:undefined;if(typeof t==="string"&&/^[A-Za-z0-9._-]+$/.test(t)&&Number.isSafeInteger(e)&&e>Date.now()+30000){process.stdout.write(t);process.exit(0)}}catch{}process.exit(1)';
+  'try{const f=require("node:fs"),d=process.env.HOME+"/.claude/",w=Date.now()+3000;while(f.existsSync(d+".oauth_refresh.lock")){if(Date.now()>w)process.exit(1);Bun.sleepSync(50)}const c=JSON.parse(f.readFileSync(d+".credentials.json","utf8"));const o=c!==null&&typeof c==="object"&&!Array.isArray(c)&&Object.hasOwn(c,"claudeAiOauth")?c.claudeAiOauth:null;const t=o!==null&&typeof o==="object"?o.accessToken:undefined,e=o!==null&&typeof o==="object"?o.expiresAt:undefined;if(typeof t==="string"&&/^[A-Za-z0-9._-]+$/.test(t)&&Number.isSafeInteger(e)&&e>Date.now()+30000){process.stdout.write(t);process.exit(0)}}catch{}process.exit(1)';
+// -p: bash would import functions and SHELLOPTS from the ticket env. A refresh revokes the old token before Claude saves
+// the new one, under that lock, so the capture waits it out.
 /** nono's credential capture for the anthropic_oauth route; the profiles must hold exactly this argv. */
-export const CAPTURE_COMMAND = ["/bin/sh", "-c", 'cd / && exec /usr/bin/env -i HOME="$HOME" "$AW_BUN" --no-env-file -e "$1"', "sh", CAPTURE_JS];
+export const CAPTURE_COMMAND = ["/bin/sh", "-p", "-c", 'cd / && exec /usr/bin/env -i HOME="$HOME" "$AW_BUN" --no-env-file -e "$1"', "sh", CAPTURE_JS];
 
 const WRAPPER = /\/mise\/(shims|command-wrappers)\//;
 const under = (p: string, dir: string) => p === dir || p.startsWith(`${dir}/`);
 const real = (p: string) => (existsSync(p) ? realpathSync(p) : p);
+const writableBy = (paths: string[], writable: string[]) => paths.some((p) => writable.flatMap((w) => [w, real(w)]).some((w) => under(p, w)));
 
 /** realpath of an executable aw runs on the host; throws for a mise wrapper or a path sessions can write. */
 export function hostExe(name: string, path: string | null | undefined, writable: string[]) {
   if (!path) throw new Error(`${name}: not found`);
   const r = realpathSync(path);
-  const dirs = writable.flatMap((w) => [w, real(w)]);
-  if ([path, r].some((p) => WRAPPER.test(p) || dirs.some((w) => under(p, w))) || basename(r) === "mise") throw new Error(`${name}: ${path} resolves to ${r}, a mise wrapper or a path sessions can write`);
+  if ([path, r].some((p) => WRAPPER.test(p)) || writableBy([path, r], writable) || basename(r) === "mise") throw new Error(`${name}: ${path} resolves to ${r}, a mise wrapper or a path sessions can write`);
   return r;
 }
 
@@ -97,4 +99,19 @@ export function refresher(claude: () => Promise<string>, home: string, log: (msg
   return () => (inFlight ??= check()
     .catch((e) => log(`claude login refresh failed: ${e.message}`))
     .finally(() => (inFlight = undefined)));
+}
+
+/** Startup check of the host login for nono lanes; unless dry, resolves Claude and runs one refresh check, returning it for a timer. */
+export async function hostLogin(io: Io, writable: string[], now = Date.now) {
+  // The refresh runs with aw's dir as cwd, and Claude reads that dir's settings and git config.
+  if (writableBy([AW_DIR, real(AW_DIR)], writable)) throw new Error(`aw's dir ${AW_DIR} is under a path sessions can write`);
+  findBun(writable);
+  const warn = checkLogin(readLogin(io.home), now());
+  if (warn) io.log(warn);
+  if (io.dry) return void io.log("dry: refresh the claude login when it expires within 5 minutes");
+  const claude = cached(() => findClaude(io.run, writable));
+  await claude();
+  const check = refresher(claude, io.home, io.log, now);
+  await check();
+  return check;
 }

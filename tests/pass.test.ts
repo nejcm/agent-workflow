@@ -241,7 +241,7 @@ test("a codex start under nono seeds a Claude config dir for a nested claude, wi
 
 test("codexHooksWarning: names the fix unless the template has one begin then one end marker", () => {
   const cfg = join(root, ".codex-aw/config.toml");
-  expect(codexHooksWarning(root)).toBe(`${cfg} lacks aw's state hooks, so the session never reads idle and gets no answers or PR feedback: run \`scripts/codex-hooks.sh ~/.codex-aw/config.toml\``);
+  expect(codexHooksWarning(root)).toBe(`${cfg} lacks aw's state hooks or their markers are damaged, so the session never reads idle and gets no answers or PR feedback: remove any damaged markers, then run \`scripts/codex-hooks.sh ~/.codex-aw/config.toml\``);
   mkdirSync(join(root, ".codex-aw"));
   const [b, e] = ["# >>> aw state hooks (managed by scripts/codex-hooks.sh)", "# <<< aw state hooks"];
   for (const marks of [[b], [e, b], [b, b, e], [b, e, e]]) {

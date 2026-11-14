@@ -169,7 +169,7 @@ export function codexHooksWarning(home: string) {
   const lines = existsSync(file) ? readFileSync(file, "utf8").split("\n") : [];
   // Same rule as scripts/codex-hooks.sh: exactly one begin line, then exactly one end line.
   const marks = lines.flatMap((l) => (l === "# >>> aw state hooks (managed by scripts/codex-hooks.sh)" ? "b" : l === "# <<< aw state hooks" ? "e" : [])).join("");
-  if (marks !== "be") return `${file} lacks aw's state hooks, so the session never reads idle and gets no answers or PR feedback: run \`scripts/codex-hooks.sh ~/.codex-aw/config.toml\``;
+  if (marks !== "be") return `${file} lacks aw's state hooks or their markers are damaged, so the session never reads idle and gets no answers or PR feedback: remove any damaged markers, then run \`scripts/codex-hooks.sh ~/.codex-aw/config.toml\``;
 }
 
 // Same as seedClaude; `login` is codexLogin's copy, the session's own credential.

@@ -55,8 +55,10 @@ for repo in "$@"; do
 done
 
 todo=0
-CLAUDE_CONFIG_DIR=~/.claude-aw claude auth status 2>/dev/null | grep -q '"loggedIn": true' || { todo=1; echo "TODO: CLAUDE_CONFIG_DIR=~/.claude-aw claude   # then /login"; }
-[ -s ~/.claude-aw/oauth-token ] || { todo=1; echo "TODO: claude setup-token, then save the token to ~/.claude-aw/oauth-token (chmod 600)"; }
+sandboxes=" $(bun -e 'const c = await Bun.file("aw.json").json(); console.log([c.defaults?.sandbox, ...(c.repos ?? []).map((r) => r?.sandbox)].join(" "))' 2>/dev/null || echo nono none) "
+# nono sessions use your own login in ~/.claude through nono's proxy; this is aw's own startup check of it.
+case $sandboxes in *" nono "*) bun -e 'import { checkLogin, readLogin } from "./src/claude-auth"; try { const w = checkLogin(readLogin(process.env.HOME), Date.now()); if (w) console.log(`WARN: ${w}`) } catch (e) { console.log(`TODO: ${e.message}`); process.exit(1) }' || todo=1 ;; esac
+case $sandboxes in *" none "*) [ -s ~/.claude-aw/oauth-token ] || { todo=1; echo "TODO: claude setup-token, then save the token to ~/.claude-aw/oauth-token (chmod 600); needed by sandbox: \"none\" repos"; } ;; esac
 CODEX_HOME=~/.codex-aw codex login status >/dev/null 2>&1 || { todo=1; echo "TODO: CODEX_HOME=~/.codex-aw codex login"; }
 echo "Linear sources: create labels agent, needs-human and host:$host in the team."
 [ "$todo" = 0 ] && echo "Setup done. Next: scripts/run.sh"

@@ -20,10 +20,11 @@ test("render is single-pass so ticket text cannot expand placeholders", () => {
   expect(render("{{title}} / {{body}} / {{nope}}", { title: "{{body}}", body: "b" })).toBe("{{body}} / b / {{nope}}");
 });
 
-test("launcher: claude under nono, token read on the host, never written; the base clone is only read", () => {
+test("launcher: claude under nono drops any inherited token and gets only AW_BUN for nono's capture; the base clone is only read", () => {
   const c = config();
-  const s = launcher(web(c), "/ws/web/gh-1", "/ws/web/gh-1.prompt.md", unit("gh-1"), "/aw");
-  expect(s).toContain(`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-aw/oauth-token")" || exit 1\nexport CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/web/gh-1'.claude CODEX_HOME='/ws/web/gh-1'.codex CLAUDE_CODE_TMPDIR='/ws/web/gh-1'.tmpdir\n`);
+  const s = launcher(web(c), "/ws/web/gh-1", "/ws/web/gh-1.prompt.md", unit("gh-1"), "/aw", "/b/bun");
+  expect(s).not.toContain("oauth-token");
+  expect(s).toContain(`unset LINEAR_API_KEY\nexport TMPDIR='/ws/web/gh-1.tmpdir' TMP='/ws/web/gh-1.tmpdir' TEMP='/ws/web/gh-1.tmpdir'\nunset CLAUDE_CODE_OAUTH_TOKEN\nexport GH_CONFIG_DIR='/ws/web/gh-1'.gh XDG_CACHE_HOME='/ws/web/gh-1.tmpdir/cache' AW_BUN='/b/bun'\nexport CLAUDE_CONFIG_DIR='/ws/web/gh-1'.claude CODEX_HOME='/ws/web/gh-1'.codex CLAUDE_CODE_TMPDIR='/ws/web/gh-1'.tmpdir\n`);
   expect(s).toContain(`unset LINEAR_API_KEY\nexport TMPDIR='/ws/web/gh-1.tmpdir' TMP='/ws/web/gh-1.tmpdir' TEMP='/ws/web/gh-1.tmpdir'\n`);
   expect(s).toContain("--no-rollback-prompt");
   expect(s).toContain(`exec systemd-run --user --scope --quiet --collect --unit '${unit("gh-1")}' -- nono run --no-rollback-prompt --profile '/aw/nono/aw-claude.json' --allow '/ws/web/gh-1' --allow-unix-socket-subtree-bind '/ws/web/gh-1' --allow '/ws/web/gh-1.tmpdir' --allow-unix-socket-subtree-bind '/ws/web/gh-1.tmpdir' --allow '/ws/web/gh-1.claude' --allow '/ws/web/gh-1.codex' --read '${root}/src-web/.git/objects' -- claude --permission-mode`);
@@ -33,10 +34,10 @@ test("launcher: claude under nono, token read on the host, never written; the ba
 
 test("launcher: codex without sandbox keeps the daemon", () => {
   const c = config({ repos: [{ name: "acme/web", agent: "codex", sandbox: "none" }] });
-  const s = launcher(web(c), "/ws/web/gh-2", "/ws/web/gh-2.prompt.md", unit("gh-2"), "/aw");
+  const s = launcher(web(c), "/ws/web/gh-2", "/ws/web/gh-2.prompt.md", unit("gh-2"), "/aw", "");
   expect(s).toContain("export CODEX_HOME='/ws/web/gh-2'.codex");
   expect(s).toContain(`exec systemd-run --user --scope --quiet --collect --unit '${unit("gh-2")}' -- codex --dangerously-bypass-hook-trust --sandbox danger-full-access --ask-for-approval never -C '/ws/web/gh-2' "$(cat '/ws/web/gh-2.prompt.md')"`);
-  expect(launcher(web(config({ repos: [{ name: "acme/web", agent: "codex" }] })), "/w", "/p", "aw-acme:web:w.scope", "/aw")).toContain("-- codex --no-daemon ");
+  expect(launcher(web(config({ repos: [{ name: "acme/web", agent: "codex" }] })), "/w", "/p", "aw-acme:web:w.scope", "/aw", "/b/bun")).toContain("-- codex --no-daemon ");
 });
 
 test("launcher scripts are byte-for-byte stable for each agent, with and without nono", () => {
@@ -48,20 +49,26 @@ export TMPDIR='/ws/it'\''s.tmpdir' TMP='/ws/it'\''s.tmpdir' TEMP='/ws/it'\''s.tm
   const claudeEnv = String.raw`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-aw/oauth-token")" || exit 1
 export CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CODEX_HOME='/ws/it'\''s'.codex CLAUDE_CODE_TMPDIR='/ws/it'\''s'.tmpdir
 `;
+  const claudeNonoEnv = String.raw`export CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CODEX_HOME='/ws/it'\''s'.codex CLAUDE_CODE_TMPDIR='/ws/it'\''s'.tmpdir
+`;
   const nono = (a: string, own = "") => String.raw`nono run --no-rollback-prompt --profile '/aw/nono/aw-${a}.json' --allow '/ws/it'\''s' --allow-unix-socket-subtree-bind '/ws/it'\''s' --allow '/ws/it'\''s.tmpdir' --allow-unix-socket-subtree-bind '/ws/it'\''s.tmpdir' ${own}--read '/src/web/.git/objects' -- `;
   const claude = String.raw`claude --permission-mode bypassPermissions --settings '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"head -c 1048576 >/dev/null; cd \"$CLAUDE_PROJECT_DIR\" && echo $$ > .aw/inbox.pid || exit 0; while [ \"$(cat .aw/inbox.pid 2>/dev/null)\" = $$ ]; do mv .aw/inbox .aw/inbox.$$ 2>/dev/null && { head -c 4096 .aw/inbox.$$ >&2; rm -f .aw/inbox.$$; exit 2; }; sleep 2; done","asyncRewake":true,"timeout":2147483}]}]}}' "$(cat '/ws/p.md')"
 `;
   const codex = (d: string) => String.raw`codex ${d}--dangerously-bypass-hook-trust --sandbox danger-full-access --ask-for-approval never -C '/ws/it'\''s' "$(cat '/ws/p.md')"
 `;
-  const s = (agent: string, sandbox: string) => launcher(web(config({ repos: [{ name: "acme/web", path: "/src/web", agent, sandbox }] })), "/ws/it's", "/ws/p.md", "aw-acme:web:it's.scope", "/aw");
+  const s = (agent: string, sandbox: string) => launcher(web(config({ repos: [{ name: "acme/web", path: "/src/web", agent, sandbox }] })), "/ws/it's", "/ws/p.md", "aw-acme:web:it's.scope", "/aw", sandbox === "nono" ? "/b/it's/bun" : "");
   const scope = String.raw`systemd-run --user --scope --quiet --collect --unit 'aw-acme:web:it'\''s.scope' -- `;
-  const gh = String.raw`export GH_CONFIG_DIR='/ws/it'\''s'.gh XDG_CACHE_HOME='/ws/it'\''s.tmpdir/cache'
+  const box = String.raw`unset CLAUDE_CODE_OAUTH_TOKEN
+export GH_CONFIG_DIR='/ws/it'\''s'.gh XDG_CACHE_HOME='/ws/it'\''s.tmpdir/cache' AW_BUN='/b/it'\''s/bun'
 `;
-  expect(s("claude", "nono")).toBe(`${head}${gh}${claudeEnv}exec ${scope}${nono("claude", String.raw`--allow '/ws/it'\''s.claude' --allow '/ws/it'\''s.codex' `)}${claude}`);
+  const own = String.raw`--allow '/ws/it'\''s.claude' --allow '/ws/it'\''s.codex' `;
+  expect(s("claude", "nono")).toBe(`${head}${box}${claudeNonoEnv}exec ${scope}${nono("claude", own)}${claude}`);
   expect(s("claude", "none")).toBe(`${head}${claudeEnv}exec ${scope}${claude}`);
   const codexEnv = String.raw`export CODEX_HOME='/ws/it'\''s'.codex
 `;
-  expect(s("codex", "nono")).toBe(`${head}${gh}${codexEnv}exec ${scope}${nono("codex", String.raw`--allow '/ws/it'\''s.codex' `)}${codex("--no-daemon ")}`);
+  const codexNonoEnv = String.raw`export CODEX_HOME='/ws/it'\''s'.codex CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CLAUDE_CODE_TMPDIR='/ws/it'\''s'.tmpdir
+`;
+  expect(s("codex", "nono")).toBe(`${head}${box}${codexNonoEnv}exec ${scope}${nono("codex", own)}${codex("--no-daemon ")}`);
   expect(s("codex", "none")).toBe(`${head}${codexEnv}exec ${scope}${codex("")}`);
 });
 
@@ -216,6 +223,18 @@ test("a codex start seeds the ticket's own auth.json, 0600, without the refresh 
   expect(statSync(f).mode & 0o777).toBe(0o600);
   expect(JSON.parse(readFileSync(f, "utf8")).tokens.refresh_token).toBe("");
   expect(readFileSync(f, "utf8")).not.toContain("secret-rt");
+  expect(existsSync(join(root, "acme/web/gh-1.claude"))).toBe(false);
+});
+
+test("a codex start under nono seeds a Claude config dir for a nested claude, without the token file", async () => {
+  login(Date.now() + 5 * DAY);
+  rmSync(join(root, ".claude-aw/oauth-token"));
+  const { tr, calls } = fakeTracker({ ready: [ticket(1)] });
+  const { io } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : a[4] === "--verify" ? { code: 1 } : noPr(a)));
+  await pass(config({ defaults: { agent: "codex", sandbox: "nono", testCmd: "bun test" } }), io, () => tr, "/aw");
+  expect(calls).toEqual(["claim gh-1"]);
+  expect(existsSync(join(root, "acme/web/gh-1.claude/.claude.json"))).toBe(true);
+  expect(readFileSync(join(root, "acme/web/gh-1.sh"), "utf8")).toContain(`AW_BUN='${realpathSync(process.execPath)}'`);
 });
 
 test("seedCodex: a fresh dir with copied config, linked instructions and skills, never the template's auth", () => {
@@ -237,14 +256,31 @@ test("seedCodex: a fresh dir with copied config, linked instructions and skills,
   expect(readFileSync(join(dir, "config.toml"), "utf8")).toBe("config.toml");
 });
 
-test("a claude start without the token file fails before cloning, with the fix in the log", async () => {
+test("an unsandboxed claude start without the token file fails before cloning, with the fix in the log", async () => {
   rmSync(join(root, ".claude-aw/oauth-token"));
   const { tr, calls } = fakeTracker({ ready: [ticket(1)] });
   const { io, cmds, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : noPr(a)));
-  await pass(config(), io, () => tr, "/aw");
+  await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), sandbox: "none" }] }), io, () => tr, "/aw");
   expect(calls).toEqual([]);
   expect(cmds.filter((c) => / clone | worktree add | new-window /.test(c))).toEqual([]);
   expect(logs.join("\n")).toContain(`${root}/.claude-aw/oauth-token is missing: run \`claude setup-token\``);
+});
+
+test("a nono claude start needs the host login, not the token file; a near time limit only warns", async () => {
+  rmSync(join(root, ".claude-aw/oauth-token"));
+  const { tr, calls } = fakeTracker({ ready: [ticket(1)] });
+  const login = (o: object) => writeFileSync(join(root, ".claude/.credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: "a", refreshToken: "r", expiresAt: 1, scopes: ["user:inference"], ...o } }));
+  login({ refreshTokenExpiresAt: Date.now() - 1 });
+  const failed = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : noPr(a)));
+  await pass(config(), failed.io, () => tr, "/aw");
+  expect(calls).toEqual([]);
+  expect(failed.cmds.filter((c) => / clone | new-window /.test(c))).toEqual([]);
+  expect(failed.logs.join("\n")).toContain("the Claude login reached its time limit: run `claude auth login`");
+  login({ refreshTokenExpiresAt: Date.now() + 86_400_000 + 600_000 });
+  const ok = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : a[4] === "--verify" ? { code: 1 } : noPr(a)));
+  await pass(config(), ok.io, () => tr, "/aw");
+  expect(calls).toEqual(["claim gh-1"]);
+  expect(ok.logs.join("\n")).toContain("the Claude login ends in 24h");
 });
 
 test("seedClaude: a fresh dir with template links, account keys and trust only; dry run touches nothing", () => {
@@ -254,7 +290,8 @@ test("seedClaude: a fresh dir with template links, account keys and trust only; 
   writeFileSync(join(tpl, "settings.json"), "{}");
   symlinkSync(join(root, ".claude/skills"), join(tpl, "skills"));
   writeFileSync(join(tpl, ".credentials.json"), "{}");
-  writeFileSync(join(tpl, ".claude.json"), JSON.stringify({ hasCompletedOnboarding: true, oauthAccount: { a: 1 }, userID: "u", mcpServers: { x: {} }, projects: { "/o": { hasTrustDialogAccepted: true, mcpServers: { y: {} } } } }));
+  writeFileSync(join(tpl, ".claude.json"), JSON.stringify({ userID: "template" }));
+  writeFileSync(join(root, ".claude.json"), JSON.stringify({ hasCompletedOnboarding: true, oauthAccount: { a: 1 }, userID: "u", mcpServers: { x: {} }, projects: { "/o": { hasTrustDialogAccepted: true, mcpServers: { y: {} } } } }));
   const dir = join(root, "acme/web/gh-1.claude");
   const { io, logs } = fakeIo();
   seedClaude({ ...io, dry: true }, dir, "/r");

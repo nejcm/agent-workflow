@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CLAUDE_TOKEN, claudeDir } from "../src/agents";
+import { CREDENTIALS } from "../src/claude-auth";
 import { parseConfig } from "../src/config";
 import { canonCache } from "../src/github";
 import type { Config, GitHubSource, Io, LinearSource, Ticket, Tracker } from "../src/types";
@@ -24,6 +25,8 @@ export function useTempRoot() {
     root = mkdtempSync(join(tmpdir(), "aw-test-"));
     mkdirSync(join(root, ".claude-aw"));
     writeFileSync(join(root, CLAUDE_TOKEN), "tok");
+    mkdirSync(join(root, ".claude"));
+    writeFileSync(join(root, CREDENTIALS), JSON.stringify({ claudeAiOauth: { accessToken: "a", refreshToken: "r", expiresAt: Date.now() + 3_600_000, refreshTokenExpiresAt: Date.now() + 7 * 86_400_000, scopes: ["user:inference"] } }));
     canonCache.clear();
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));

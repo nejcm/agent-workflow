@@ -2,7 +2,7 @@
 
 Research for replacing the `claude setup-token` step. Checked 2026-11-14 on this host: Claude Code 2.1.323, nono 0.81.0, Linux. No token values were printed or copied; only expiry/scope metadata was read. Revised after an independent review (see [Review dispositions](#review-dispositions)).
 
-**Status:** Phase 0 gates B1–B6 passed on 2026-11-14 ([results](#phase-0-results)). Phase 2 is implemented (#59). Gates R1–R4 and R6 passed live on 2026-11-14; R5 was blocked (no setup token on the test host), and R1's long session across a refresh was skipped.
+**Status:** Phase 0 gates B1–B6 passed on 2026-11-14 ([results](#phase-0-results)). Phase 2 is implemented (#59). Gates R1–R4 and R6 passed live on 2026-11-14; R5 was blocked (no setup token on the test host), and R1's long session across a forced refresh passed (a stream open at the instant of revocation was not hit).
 
 Evidence labels: **[live]** run on this host (commands below), **[code]** read from the Claude Code 2.1.323 or nono 0.81.0 binary (`strings`) or this repo, **[docs]** official docs, **[inferred]** not checked.
 
@@ -346,7 +346,7 @@ Blocking, Phase 0 (before activation). All passed on 2026-11-14; see [Phase 0 re
 
 On the activation PR, run live on 2026-11-14:
 
-- **R1.** An interactive TUI session (**pass**: ticket, PR, one CI-feedback round), and a long session across a host refresh (**skipped**: no rotation window during the run).
+- **R1.** An interactive TUI session (**pass**: ticket, PR, one CI-feedback round), and a long session across a host refresh (**pass**, 2026-11-14, rotation forced by moving `expiresAt` into the window: the session kept working for 15 more minutes with no API error; a request sent inside the refresh lock got the new token after the capture's lock wait; a 1 req/s in-sandbox probe saw 671/671 200s. Not hit: a stream still open when the old token is revoked, and the refresh came from another host Claude process, not aw's refresher).
 - **R2.** Claude → Codex and Codex → Claude, end to end (**pass**; Codex 0.169 first stopped at its folder-trust prompt).
 - **R3.** Billing appears on claude.ai/settings/usage, not as API spend (**pass** for what is visible: the usage endpoint shows the subscription buckets, and responses carry only subscription rate-limit headers; the web page itself was not checked).
 - **R4.** Stop aw (**pass**): running sessions keep working until the token lapses (≤ 8 h), unless your own Claude use refreshed it. Then the capture exits 1 and nono's proxy answers **503**, which Claude retries for about 190 s and then reports as a server-side error.

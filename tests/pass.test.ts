@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { validRepo } from "../src/config";
 import { canonCache } from "../src/github";
 import { github } from "../src/trackers/github";
-import { authStamp, CODEX_AUTH, codexLogin, codexRefresh, launcher, render, scopeUnit, sweepScopes, seedClaude, seedCodex } from "../src/launcher";
+import { authStamp, CODEX_AUTH, codexHooksWarning, codexLogin, codexRefresh, launcher, render, scopeUnit, sweepScopes, seedClaude, seedCodex } from "../src/launcher";
 import { endedNotice, pass } from "../src/pass";
 import { liveStates, pickAnswer } from "../src/question";
 import type { State } from "../src/state";
@@ -216,9 +216,10 @@ test("a codex start without a usable template login fails before cloning", async
 test("a codex start seeds the ticket's own auth.json, 0600, without the refresh token", async () => {
   login(Date.now() + 5 * DAY);
   const { tr, calls } = fakeTracker({ ready: [ticket(1)] });
-  const { io } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : a[4] === "--verify" ? { code: 1 } : noPr(a)));
+  const { io, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : a[4] === "--verify" ? { code: 1 } : noPr(a)));
   await pass(config({ defaults: { agent: "codex", sandbox: "none", testCmd: "bun test" } }), io, () => tr, "/aw");
   expect(calls).toEqual(["claim gh-1"]);
+  expect(logs.join("\n")).toContain(codexHooksWarning(root)!);
   const f = join(root, "acme/web/gh-1.codex/auth.json");
   expect(statSync(f).mode & 0o777).toBe(0o600);
   expect(JSON.parse(readFileSync(f, "utf8")).tokens.refresh_token).toBe("");
@@ -236,6 +237,19 @@ test("a codex start under nono seeds a Claude config dir for a nested claude, wi
   expect(calls).toEqual(["claim gh-1"]);
   expect(existsSync(join(root, "acme/web/gh-1.claude/.claude.json"))).toBe(true);
   expect(readFileSync(join(root, "acme/web/gh-1.sh"), "utf8")).toContain(`AW_BUN='${realpathSync(process.execPath)}'`);
+});
+
+test("codexHooksWarning: names the fix unless the template has one begin then one end marker", () => {
+  const cfg = join(root, ".codex-aw/config.toml");
+  expect(codexHooksWarning(root)).toBe(`${cfg} lacks aw's state hooks or their markers are damaged, so the session never reads idle and gets no answers or PR feedback: remove any damaged markers, then run \`scripts/codex-hooks.sh ~/.codex-aw/config.toml\``);
+  mkdirSync(join(root, ".codex-aw"));
+  const [b, e] = ["# >>> aw state hooks (managed by scripts/codex-hooks.sh)", "# <<< aw state hooks"];
+  for (const marks of [[b], [e, b], [b, b, e], [b, e, e]]) {
+    writeFileSync(cfg, ['model = "m"', ...marks, ""].join("\n"));
+    expect(codexHooksWarning(root)).toContain("scripts/codex-hooks.sh ~/.codex-aw/config.toml");
+  }
+  writeFileSync(cfg, 'model = "m"\n\n# >>> aw state hooks (managed by scripts/codex-hooks.sh)\n[[hooks.Stop]]\n# <<< aw state hooks\n');
+  expect(codexHooksWarning(root)).toBeUndefined();
 });
 
 test("seedCodex: a fresh dir with copied config, linked instructions and skills, never the template's auth", () => {
@@ -304,6 +318,7 @@ test("a nono claude start needs the host login, not the token file; a near time 
   await pass(config(), ok.io, () => tr, "/aw");
   expect(calls).toEqual(["claim gh-1"]);
   expect(ok.logs.join("\n")).toContain("the Claude login ends in 24h");
+  expect(ok.logs.join("\n")).not.toContain("state hooks");
 });
 
 test("seedClaude: a fresh dir with template links, account keys and trust only; dry run touches nothing", () => {

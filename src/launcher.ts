@@ -162,6 +162,16 @@ export async function codexLogin(io: Io, now = Date.now()) {
   return JSON.stringify({ ...pick(o, LOGIN), tokens: { ...pick(o.tokens, TOKENS), ...(o.tokens.oauth_provenance && { oauth_provenance: pick(o.tokens.oauth_provenance, ["issuer", "client_id"]) }), refresh_token: "" } });
 }
 
+
+/** A warning when the template config lacks aw's Codex state hooks, without which answers and PR feedback are never delivered. */
+export function codexHooksWarning(home: string) {
+  const file = join(home, ".codex-aw/config.toml");
+  const lines = existsSync(file) ? readFileSync(file, "utf8").split("\n") : [];
+  // Same rule as scripts/codex-hooks.sh: exactly one begin line, then exactly one end line.
+  const marks = lines.flatMap((l) => (l === "# >>> aw state hooks (managed by scripts/codex-hooks.sh)" ? "b" : l === "# <<< aw state hooks" ? "e" : [])).join("");
+  if (marks !== "be") return `${file} lacks aw's state hooks or their markers are damaged, so the session never reads idle and gets no answers or PR feedback: remove any damaged markers, then run \`scripts/codex-hooks.sh ~/.codex-aw/config.toml\``;
+}
+
 // Same as seedClaude; `login` is codexLogin's copy, the session's own credential.
 export function seedCodex(io: Io, dir: string, login: string | undefined, root: string) {
   const tpl = join(io.home, ".codex-aw");
@@ -229,6 +239,8 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   await stopScope(cfg, io, r.key, t.id);
   // Claude sessions run Codex only as a helper, so a missing Codex login does not stop them.
   const login = r.agent === "codex" ? await codexLogin(io) : await codexLogin(io).catch(() => undefined);
+  const noHooks = r.agent === "codex" ? codexHooksWarning(io.home) : undefined;
+  if (noHooks) io.log(noHooks);
   await ensureClone(cfg, io, r);
   io.log(`${io.dry ? "dry: " : ""}mkdir ${tmpHome(wt)}`);
   if (!io.dry) {

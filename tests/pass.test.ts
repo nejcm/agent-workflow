@@ -354,6 +354,21 @@ test("parked: no ended-without-PR comment, and a done parked ticket is still cle
   expect(existsSync(join(root, "acme/web/gh-2.source"))).toBe(false);
 });
 
+test("cleanup treats a window already closed by the scope kill as gone, but fails on other tmux errors", async () => {
+  worktree("gh-2");
+  mkdirSync(join(root, "src-web"), { recursive: true });
+  const { tr } = fakeTracker({ done: ["gh-2"] });
+  let err = "no server running";
+  const { io, cmds, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(["acme/web/gh-2"]) : a[1] === "kill-window" ? { code: 1, err } : noPr(a)));
+  await pass(config(), io, () => tr, "/aw");
+  expect(logs.some((l) => l.includes("cleanup acme/web/gh-2 failed") && l.includes("no server running"))).toBe(true);
+  expect(existsSync(join(root, "acme/web/gh-2"))).toBe(true);
+  err = "can't find window: @0";
+  await pass(config(), io, () => tr, "/aw");
+  expect(cmds).toContain(`rm -rf --one-file-system -- ${root}/acme/web/gh-2`);
+  expect(logs.filter((l) => l.includes("failed"))).toHaveLength(1);
+});
+
 test("done: kills window, removes the session clone, files and config dir; keeps them all when the delete fails", async () => {
   const c = config();
   for (const id of ["gh-1", "gh-2", "gh-3"]) {

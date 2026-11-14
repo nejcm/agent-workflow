@@ -20,11 +20,11 @@ test("render is single-pass so ticket text cannot expand placeholders", () => {
   expect(render("{{title}} / {{body}} / {{nope}}", { title: "{{body}}", body: "b" })).toBe("{{body}} / b / {{nope}}");
 });
 
-test("launcher: claude under nono gets no token, only AW_BUN for nono's capture; the base clone is only read", () => {
+test("launcher: claude under nono drops any inherited token and gets only AW_BUN for nono's capture; the base clone is only read", () => {
   const c = config();
   const s = launcher(web(c), "/ws/web/gh-1", "/ws/web/gh-1.prompt.md", unit("gh-1"), "/aw", "/b/bun");
-  expect(s).not.toContain("OAUTH_TOKEN");
-  expect(s).toContain(`XDG_CACHE_HOME='/ws/web/gh-1.tmpdir/cache' AW_BUN='/b/bun'\nexport CLAUDE_CONFIG_DIR='/ws/web/gh-1'.claude CODEX_HOME='/ws/web/gh-1'.codex CLAUDE_CODE_TMPDIR='/ws/web/gh-1'.tmpdir\n`);
+  expect(s).not.toContain("oauth-token");
+  expect(s).toContain(`unset LINEAR_API_KEY\nexport TMPDIR='/ws/web/gh-1.tmpdir' TMP='/ws/web/gh-1.tmpdir' TEMP='/ws/web/gh-1.tmpdir'\nunset CLAUDE_CODE_OAUTH_TOKEN\nexport GH_CONFIG_DIR='/ws/web/gh-1'.gh XDG_CACHE_HOME='/ws/web/gh-1.tmpdir/cache' AW_BUN='/b/bun'\nexport CLAUDE_CONFIG_DIR='/ws/web/gh-1'.claude CODEX_HOME='/ws/web/gh-1'.codex CLAUDE_CODE_TMPDIR='/ws/web/gh-1'.tmpdir\n`);
   expect(s).toContain(`unset LINEAR_API_KEY\nexport TMPDIR='/ws/web/gh-1.tmpdir' TMP='/ws/web/gh-1.tmpdir' TEMP='/ws/web/gh-1.tmpdir'\n`);
   expect(s).toContain("--no-rollback-prompt");
   expect(s).toContain(`exec systemd-run --user --scope --quiet --collect --unit '${unit("gh-1")}' -- nono run --no-rollback-prompt --profile '/aw/nono/aw-claude.json' --allow '/ws/web/gh-1' --allow-unix-socket-subtree-bind '/ws/web/gh-1' --allow '/ws/web/gh-1.tmpdir' --allow-unix-socket-subtree-bind '/ws/web/gh-1.tmpdir' --allow '/ws/web/gh-1.claude' --allow '/ws/web/gh-1.codex' --read '${root}/src-web/.git/objects' -- claude --permission-mode`);
@@ -58,7 +58,8 @@ export CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CODEX_HOME
 `;
   const s = (agent: string, sandbox: string) => launcher(web(config({ repos: [{ name: "acme/web", path: "/src/web", agent, sandbox }] })), "/ws/it's", "/ws/p.md", "aw-acme:web:it's.scope", "/aw", sandbox === "nono" ? "/b/it's/bun" : "");
   const scope = String.raw`systemd-run --user --scope --quiet --collect --unit 'aw-acme:web:it'\''s.scope' -- `;
-  const gh = String.raw`export GH_CONFIG_DIR='/ws/it'\''s'.gh XDG_CACHE_HOME='/ws/it'\''s.tmpdir/cache' AW_BUN='/b/it'\''s/bun'
+  const gh = String.raw`unset CLAUDE_CODE_OAUTH_TOKEN
+export GH_CONFIG_DIR='/ws/it'\''s'.gh XDG_CACHE_HOME='/ws/it'\''s.tmpdir/cache' AW_BUN='/b/it'\''s/bun'
 `;
   const own = String.raw`--allow '/ws/it'\''s.claude' --allow '/ws/it'\''s.codex' `;
   expect(s("claude", "nono")).toBe(`${head}${gh}${claudeNonoEnv}exec ${scope}${nono("claude", own)}${claude}`);

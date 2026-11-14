@@ -54,10 +54,10 @@ export function launcher(l: Repo, wt: string, promptFile: string, unit: string, 
   const wrap = nono ? nonoRun(`aw-${l.agent}`, awDir, grants, q) : [];
   const [env, cmd] = AGENTS[l.agent].launch(q(wt), prompt, nono);
   // gh exits if it cannot read its config dir; <ID>.gh is never created, so gh runs on defaults plus nono's GH_TOKEN.
-  // A private XDG cache: the host's ~/.cache (Claude's claude-cli-nodejs included) stays out of the sandbox. AW_BUN runs nono's Claude login capture.
-  const gh = nono ? `export GH_CONFIG_DIR=${q(wt)}.gh XDG_CACHE_HOME=${q(join(tmp, "cache"))} AW_BUN=${q(bun)}\n` : "";
+  // A private XDG cache: the host's ~/.cache (Claude's claude-cli-nodejs included) stays out of the sandbox.
+  const box = nono ? `unset CLAUDE_CODE_OAUTH_TOKEN\nexport GH_CONFIG_DIR=${q(wt)}.gh XDG_CACHE_HOME=${q(join(tmp, "cache"))} AW_BUN=${q(bun)}\n` : "";
   const scope = ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--unit", q(unit), "--"];
-  return `#!/usr/bin/env bash\ncd ${q(wt)} || exit 1\nunset LINEAR_API_KEY\nexport TMPDIR=${q(tmp)} TMP=${q(tmp)} TEMP=${q(tmp)}\n${gh}${env}\nexec ${[...scope, ...wrap, ...cmd].join(" ")}\n`;
+  return `#!/usr/bin/env bash\ncd ${q(wt)} || exit 1\nunset LINEAR_API_KEY\nexport TMPDIR=${q(tmp)} TMP=${q(tmp)} TEMP=${q(tmp)}\n${box}${env}\nexec ${[...scope, ...wrap, ...cmd].join(" ")}\n`;
 }
 
 export async function windows(cfg: Config, io: Io) {

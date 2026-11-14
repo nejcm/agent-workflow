@@ -148,7 +148,6 @@
       "XDG_CACHE_HOME",
       "CLAUDE_CONFIG_DIR",
       "CLAUDE_CODE_TMPDIR",
-      "CLAUDE_CODE_OAUTH_TOKEN",
       "CODEX_HOME",
       "GH_CONFIG_DIR"
     ]
@@ -227,7 +226,7 @@
         "-c",
         "cd / && exec /usr/bin/env -i HOME=\"$HOME\" \"$AW_BUN\" --no-env-file -e \"$1\"",
         "sh",
-        "try{const f=require(\"node:fs\"),d=process.env.HOME+\"/.claude/\",w=Date.now()+3000;while(f.existsSync(d+\".oauth_refresh.lock\")){if(Date.now()>w)process.exit(1);Bun.sleepSync(50)}const c=JSON.parse(f.readFileSync(d+\".credentials.json\",\"utf8\"));const o=c!==null&&typeof c===\"object\"&&!Array.isArray(c)&&Object.hasOwn(c,\"claudeAiOauth\")?c.claudeAiOauth:null;const t=o!==null&&typeof o===\"object\"?o.accessToken:undefined,e=o!==null&&typeof o===\"object\"?o.expiresAt:undefined;if(typeof t===\"string\"&&/^[A-Za-z0-9._-]+$/.test(t)&&Number.isSafeInteger(e)&&e>Date.now()+30000){process.stdout.write(t);process.exit(0)}}catch{}process.exit(1)"
+        "try{const f=require(\"node:fs\"),d=process.env.HOME+\"/.claude/\",w=Date.now()+3000;while(f.existsSync(d+\".oauth_refresh.lock\")&&Date.now()<w)Bun.sleepSync(50);const c=JSON.parse(f.readFileSync(d+\".credentials.json\",\"utf8\"));const o=c!==null&&typeof c===\"object\"&&!Array.isArray(c)&&Object.hasOwn(c,\"claudeAiOauth\")?c.claudeAiOauth:null;const t=o?.accessToken,e=o?.expiresAt;if(typeof t===\"string\"&&/^[A-Za-z0-9._-]+$/.test(t)&&Number.isSafeInteger(e)&&e>Date.now()+30000){process.stdout.write(t);process.exit(0)}}catch{}process.exit(1)"
       ],
       "timeout_secs": 5,
       "cache_ttl_secs": 0

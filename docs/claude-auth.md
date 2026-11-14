@@ -13,7 +13,7 @@ Evidence labels: **[live]** run on this host (commands below), **[code]** read f
 1. **Source:** the operator's normal login in `~/.claude` (zero setup). aw seeds the per-ticket account keys from `~/.claude.json`, the global config that belongs to that login.
 2. **Inject:** a nono route `anthropic_oauth` for `api.anthropic.com` (MITM, no base URL). The session holds only nono's phantom in `CLAUDE_CODE_OAUTH_TOKEN`.
    - The capture is **read-only**: aw's own `bun` JSON-parses the file. It runs from `/` under `env -i` with `--no-env-file`, and prints the root `claudeAiOauth.accessToken` only if `expiresAt` is a safe integer more than 30 s in the future.
-   - It runs under `/bin/sh -p`, and waits (≤ 3 s) while Claude's refresh lock exists.
+   - It runs under `/bin/sh -p`, and waits (≤ 3 s) while Claude's refresh lock exists, then reads anyway.
    - `cache_ttl_secs: 0` is required, not tunable: a refresh revokes the old access token at once (gate B4). Never raise it.
    - It needs no new host dependency (aw already requires bun).
 3. **Refresh:** a non-dry `aw run` refreshes the login itself.
@@ -76,7 +76,7 @@ Run 2026-11-14 on this host (Claude Code 2.1.323, nono 0.81.0, GNU bash 5.3 as `
 
 Findings folded into Phase 2:
 
-1. **Old token revoked at refresh** (B4). `cache_ttl_secs: 0` is mandatory. There is also a window of up to ~0.6 s in which the server has rotated the token but Claude has not yet written the file; inotify showed Claude holds `<config>/.oauth_refresh.lock` across the network call and the write (lock 53.250 → 53.885, write 53.881). The capture now waits while that lock exists, polling every 50 ms for at most 3 s, then exits 1. That closes the window for aw's refreshes and for your own.
+1. **Old token revoked at refresh** (B4). `cache_ttl_secs: 0` is mandatory. There is also a window of up to ~0.6 s in which the server has rotated the token but Claude has not yet written the file; inotify showed Claude holds `<config>/.oauth_refresh.lock` across the network call and the write (lock 53.250 → 53.885, write 53.881). The capture now waits while that lock exists, polling every 50 ms for at most 3 s, then reads anyway. That narrows the window for aw's refreshes and for your own; a capture that passed the lock check just before a rotation still hands out a token that dies in flight.
 2. **Capture shell imports bash env code** (B5). The capture now runs `/bin/sh -p -c`: privileged mode ignores imported functions, `SHELLOPTS`, `BASHOPTS`, `CDPATH`, `ENV` and `BASH_ENV`. Verified: no markers, output unchanged. None of these vars are in the tmux, systemd-user or session env today, so this is hardening, not a live hole.
 3. **The refresh runner's cwd is load-bearing** (B5). From a clone cwd it opened the clone's `.claude/settings*.json` and `bunfig.toml` and read `.git/config`, even with `--setting-sources ""` (nothing ran). From aw's dir it touched nothing planted. aw keeps cwd = its own dir and refuses to start a nono lane when that dir is under `workspaceRoot`.
 
@@ -189,7 +189,7 @@ nono semantics [nono docs embedded in the binary; https://nono.sh/docs]:
 - **Codex → Claude:** today a Codex lane exports only `CODEX_HOME` (`src/agents.ts:133`), so a nested `claude` would use `~/.claude` without a token. It needs:
   - the launch to export `CLAUDE_CONFIG_DIR=<ID>.claude` and `CLAUDE_CODE_TMPDIR`;
   - `<ID>.claude` seeded and granted for Codex lanes (`src/launcher.ts:50,224`);
-  - in `nono/aw-codex.json`, the route, the capture, and `allow_vars` `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_TMPDIR`.
+  - in `nono/aw-codex.json`, the route, the capture, and `allow_vars` `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_TMPDIR`. nono's injected `CLAUDE_CODE_OAUTH_TOKEN` bypasses `allow_vars` [nono docs], so it stays off the list.
 
   The `codex` network profile already includes `api.anthropic.com` [code].
 - **Billing:** the same OAuth subscription token type as setup-token. In env mode `/cost` shows a `$` figure because `subscriptionType` is unknown (it does today too). Confirm at claude.ai/settings/usage [inferred].
@@ -246,36 +246,36 @@ Nothing changes how sessions authenticate until the activation PR, and that PR l
 
 - **Profiles.** In `nono/aw-claude.json` **and** `nono/aw-codex.json`, add the route from Q2 to `network.credentials`, plus this capture (`timeout_secs: 5`, `cache_ttl_secs: 0`):
   ```json
-  "command": ["/bin/sh","-p","-c","cd / && exec /usr/bin/env -i HOME=\"$HOME\" \"$AW_BUN\" --no-env-file -e \"$1\"","sh","try{const f=require(\"node:fs\"),d=process.env.HOME+\"/.claude/\",w=Date.now()+3000;while(f.existsSync(d+\".oauth_refresh.lock\")){if(Date.now()>w)process.exit(1);Bun.sleepSync(50)}const c=JSON.parse(f.readFileSync(d+\".credentials.json\",\"utf8\"));const o=c!==null&&typeof c===\"object\"&&!Array.isArray(c)&&Object.hasOwn(c,\"claudeAiOauth\")?c.claudeAiOauth:null;const t=o!==null&&typeof o===\"object\"?o.accessToken:undefined,e=o!==null&&typeof o===\"object\"?o.expiresAt:undefined;if(typeof t===\"string\"&&/^[A-Za-z0-9._-]+$/.test(t)&&Number.isSafeInteger(e)&&e>Date.now()+30000){process.stdout.write(t);process.exit(0)}}catch{}process.exit(1)"]
+  "command": ["/bin/sh","-p","-c","cd / && exec /usr/bin/env -i HOME=\"$HOME\" \"$AW_BUN\" --no-env-file -e \"$1\"","sh","try{const f=require(\"node:fs\"),d=process.env.HOME+\"/.claude/\",w=Date.now()+3000;while(f.existsSync(d+\".oauth_refresh.lock\")&&Date.now()<w)Bun.sleepSync(50);const c=JSON.parse(f.readFileSync(d+\".credentials.json\",\"utf8\"));const o=c!==null&&typeof c===\"object\"&&!Array.isArray(c)&&Object.hasOwn(c,\"claudeAiOauth\")?c.claudeAiOauth:null;const t=o?.accessToken,e=o?.expiresAt;if(typeof t===\"string\"&&/^[A-Za-z0-9._-]+$/.test(t)&&Number.isSafeInteger(e)&&e>Date.now()+30000){process.stdout.write(t);process.exit(0)}}catch{}process.exit(1)"]
   ```
   The inline script, readable:
   ```js
   try {
     const f = require("node:fs"), d = process.env.HOME + "/.claude/", w = Date.now() + 3000;
-    while (f.existsSync(d + ".oauth_refresh.lock")) { if (Date.now() > w) process.exit(1); Bun.sleepSync(50); }
+    while (f.existsSync(d + ".oauth_refresh.lock") && Date.now() < w) Bun.sleepSync(50);
     const c = JSON.parse(f.readFileSync(d + ".credentials.json", "utf8"));
     const o = c !== null && typeof c === "object" && !Array.isArray(c) && Object.hasOwn(c, "claudeAiOauth") ? c.claudeAiOauth : null;
-    const t = o !== null && typeof o === "object" ? o.accessToken : undefined, e = o !== null && typeof o === "object" ? o.expiresAt : undefined;
+    const t = o?.accessToken, e = o?.expiresAt;
     if (typeof t === "string" && /^[A-Za-z0-9._-]+$/.test(t) && Number.isSafeInteger(e) && e > Date.now() + 30000) { process.stdout.write(t); process.exit(0); }
   } catch {}
   process.exit(1);
   ```
-  - It waits while Claude's refresh lock exists, for at most 3 s (inside `timeout_secs: 5`), then exits 1. Claude holds the lock from before the token call until after the new credentials are written, and the server revokes the old token at rotation (gates B3, B4), so a read inside it would return a dead token.
+  - It waits while Claude's refresh lock exists, for at most 3 s (inside `timeout_secs: 5`), then reads anyway. Claude holds the lock from before the token call until after the new credentials are written, and the server revokes the old token at rotation (gates B3, B4), so a read inside it would return a dead token. A stale lock (its holder died) must not blackhole every session until the next refresh, and the write is tmp + rename, so the late read is never partial.
   - It is read-only and parses real JSON. Only the root `claudeAiOauth` counts, and `expiresAt` must be a safe integer more than 30 s in the future. Anything else exits 1 with no output.
   - `catch {}` keeps parse errors, which can quote file content, out of stderr; nono audits capture stderr (`credential_capture_stderr` [code]).
   - It ignores the ticket's cwd, `PATH` and bun-specific env (`BUN_OPTIONS`, a clone's `bunfig.toml` and `.env`): `cd /`, `env -i` with only `HOME`, `--no-env-file`, and no imports.
   - `-p` (bash privileged mode) ignores exported functions, `SHELLOPTS`, `BASHOPTS`, `CDPATH`, `ENV` and `BASH_ENV` from the inherited env. Without it, `BASH_FUNC_cd%%` and `SHELLOPTS=xtrace`+`PS4=$(…)` ran code before `env -i` [live, gate B5].
-  - It does **not** neutralise `LD_PRELOAD`. Safe only while the supervisor env comes from aw's launch script (`src/launcher.ts:59`).
+  - It does **not** neutralise `LD_PRELOAD`. Safe only while the supervisor env comes from aw's launch script (`launcher()` in `src/launcher.ts`).
   - `AW_BUN` is exported by the launch script, which aw writes, and it is not in `allow_vars`. aw sets it to `realpath(process.execPath)`, so under the service it is `~/.bun/bin/bun` [live].
   - At start aw rejects that path if it is under a mise `shims` or `command-wrappers` dir or under `workspaceRoot`, the same rule as for `claude`.
   - A global `~/.bunfig.toml` preload is no evidence either way: on bun 1.4.4 it does not run for plain `bun -e` either [live, review5]. Sessions cannot write `$HOME` outside their grants.
   - In `nono/aw-claude.json` and `nono/aw-codex.json`, generate the command with `JSON.stringify` rather than escaping it by hand. A test asserts both profiles and this doc hold exactly `CAPTURE_COMMAND` from `src/claude-auth.ts`.
-  - `aw-codex.json` also needs `allow_vars` `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_TMPDIR`.
-- **Launch** (`src/agents.ts:28,122,133`).
+  - `aw-codex.json` also needs `allow_vars` `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_TMPDIR`. Neither profile lists `CLAUDE_CODE_OAUTH_TOKEN`: nono's injected phantom bypasses `allow_vars`, and listing it would only let an inherited real token through.
+- **Launch** (`src/agents.ts`).
   - For nono lanes, drop the setup-token line; `sandbox: "none"` keeps it.
   - Codex lanes also export `CLAUDE_CONFIG_DIR=<ID>.claude` and `CLAUDE_CODE_TMPDIR`.
   - Both lanes export `AW_BUN`, the path resolved at start, for the capture. It is not in `allow_vars`.
-- **Launcher** (`src/launcher.ts:50,94-106,206,224`).
+- **Launcher** (`src/launcher.ts`).
   - Seed and grant `<ID>.claude` for Codex lanes too.
   - `seedClaude` takes `ACCOUNT` from `~/.claude.json`, and `TEMPLATE` from `~/.claude-aw` as today.
   - nono lanes use the login preflight instead of the token-file check.
@@ -285,31 +285,38 @@ Nothing changes how sessions authenticate until the activation PR, and that PR l
   |---|---|
   | `run` (not dry) | Resolve, preflight, and an **awaited** refresh check before the first pass. Then a `setInterval` of 60 s, independent of `pass()`. On SIGINT/SIGTERM, clear the interval; an in-flight child is bounded by `timeout` (≤ 65 s) |
   | `once` (not dry) | One awaited check before the pass, no timer, so the process exits when the pass is done. Sessions it starts get no further refresh from aw |
-  | `--dry-run` (any command), `status`, `watch`, `tail` | Metadata preflight only: no spawn, no credential writes. Dry run logs what it would do |
+  | `--dry-run` (`run`, `once`) | Metadata preflight only: no spawn, no credential writes. Dry run logs what it would do |
+  | `status`, `watch`, `tail` | Nothing: no preflight, no refresh |
 
   Service stop (`KillMode=process`) kills only bun; a running refresh child ends within its `timeout`.
 - **Setup and docs.**
-  - `scripts/setup.sh:58-59`: check `claude auth status` on the default config, and require the setup-token only if a lane uses `sandbox: "none"`.
+  - `scripts/setup.sh`: check `claude auth status` on the default config, and require the setup-token only if a lane uses `sandbox: "none"`.
   - README setup section and line 5 (Remote Control); `docs/issues.md` item 20.
 - **Tests.**
-  - `tests/pass.test.ts:26,48,241-247`, for both lanes' env, preflight fail/warn, and the `none` token case.
-  - `tests/helpers.ts:26` (metadata-only fixture).
+  - `tests/pass.test.ts`, for both lanes' env, preflight fail/warn, and the `none` token case.
+  - `tests/helpers.ts` (metadata-only fixture).
   - Profile assertions for both routes and the zero TTL.
   - Lifecycle: dry run spawns nothing, `once` exits promptly, no overlap during a slow refresh, and timeout/shutdown leaves no refresher behind.
 - **Pass conditions.** `nono profile validate` on both profiles, typecheck, the focused tests, then gates R1–R6 before relying on it.
 
 <a id="phase-2-as-built"></a>**Phase 2 as built** (differences from the plan above):
 
-- `AW_BUN` is exported on the launch script's nono-only line (`src/launcher.ts`), not per agent. `start` resolves it with `findBun([workspaceRoot])`.
+- `AW_BUN` is exported on the launch script's nono-only line (`src/launcher.ts`), not per agent. `start` resolves it with `findBun([workspaceRoot])`. A session keeps the path it was launched with, so if that bun is removed (say, a mise-managed bun on upgrade), its captures fail until it is restarted.
+- The same nono-only line runs `unset CLAUDE_CODE_OAUTH_TOKEN`, so a setup-token inherited from the tmux or service env never reaches a nono session. The `none` Claude lane still sets it.
 - Codex lanes export `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_TMPDIR`, and get a seeded `<ID>.claude`, only under nono. A `sandbox: "none"` Codex lane has no proxy, so a nested `claude` there keeps using the host's `~/.claude` as before.
 - `nono/aw-codex.json` also reads `~/.claude-aw/settings.json` and `~/.claude-aw/plugins`, the targets of the template links in `<ID>.claude`, as `aw-claude.json` does.
-- Startup (`hostLogin`, `run` and `once`, dry or not, when any lane uses nono): aw's dir must not be under `workspaceRoot`, `AW_BUN` must pass the resolver, and the login preflight runs. A failure exits 1 when a Claude nono lane exists, and is only logged for Codex-only configs, whose sessions use Claude only as a helper. A non-dry run then resolves `claude` and awaits one refresh check.
+- Startup (`hostLogin`, `run` and `once`, dry or not, when any lane uses nono) splits failures by kind:
+  - **Fatal (exit 1) for any nono lane:** aw's dir under `workspaceRoot` (the profiles and the refresh cwd would be session-writable), `AW_BUN` failing the resolver, and, when a login exists and the run is not dry, `claude` failing the resolver.
+  - **Logged only:** login state (missing, no refresh token, no `user:inference`, past its time limit, or a warning). `start()` rejects nono Claude tickets in that state, so Codex and `none` lanes, and reconciling running sessions, keep going, the same as when the login lapses while aw runs. `scripts/run.sh`'s dry-run preflight therefore doesn't fail on login state; `scripts/setup.sh` prints it as a TODO.
+  - With no login file, `claude` is not resolved at start (a Codex-only host may not have it); the refresher resolves it once a login appears.
+  - A non-dry run then awaits one refresh check.
+- The refresher skips the spawn once `refreshTokenExpiresAt` has passed, and logs that once, not every 60 s, until the login is renewed.
 - Each nono Claude start re-runs the login preflight, so a login past its time limit fails the start with the fix in the log; a near limit is logged.
 - `status`, `watch` and `tail` run no preflight and no refresh.
 - No signal handlers were added: SIGINT/SIGTERM end bun, and with it the 60 s timer. A running refresh child is bounded by `timeout` (≤ 65 s).
 - `scripts/setup.sh` runs aw's own `checkLogin` on `~/.claude` instead of `claude auth status`, since the mise wrapper may point `claude` at another account's dir (B1). It asks for the setup-token only when `aw.json` has a `sandbox: "none"` repo, and no longer asks for a `~/.claude-aw` login.
 - `docs/issues.md` doesn't exist in this repo, so there was nothing to update.
-- Not covered by automated tests: a non-dry `hostLogin` (it resolves the host's real `claude`) and the `run` timer itself; gate R6 covers them live.
+- Not covered by automated tests: the `run` timer and the `aw.ts` exit wiring; gate R6 covers them live. `hostLogin` takes a finder (default `findClaude`) so its non-dry path is tested with a fake `claude`.
 
 **Phase 3 (optional).** A phantom `.credentials.json` for Remote Control, then `endpoint_rules` built from the observed paths.
 
@@ -349,7 +356,7 @@ Before rollout, on the activation PR. **Pending**; run them with the operator:
 
 - **The refresh runs unsandboxed `claude` on the host.** Clean env, `--safe-mode` and empty setting sources keep agent-written files out of it. Gate B5 must prove that, and B1 that it is the real binary.
 - **The login has a time limit.** When the `~/.claude` login reaches it, every Claude session 401s until `claude auth login`. A setup-token lasts a year.
-- **A refresh revokes the old access token at once** (gate B4). The capture's lock wait covers the gap between rotation and the credentials write. If the lock is held for more than 3 s (a hung or crashed refresh; Claude treats it as stale after 60 s), the capture returns nothing and that request 401s.
+- **A refresh revokes the old access token at once** (gate B4). The capture's lock wait narrows the gap between rotation and the credentials write, but a capture that passed the check just before a rotation still hands out a token that dies in flight. If the lock is held for more than 3 s (a slow token call, or a stale lock left by a killed refresh, which proper-lockfile clears only when another Claude process next tries to take it), the capture reads the file anyway, so a stale lock costs 3 s per request rather than every request failing.
 - **A 401 mid-turn ends the turn.** Env mode never retries a refresh (`CLAUDE_CODE_OAUTH_401_WAIT_MS` is 0 outside remote sessions [code]), so the turn needs a nudge or a restart. aw downtime longer than the token's remaining life causes this.
 - **Spend while running.** The agent can still spend the subscription through the proxy, on any `api.anthropic.com` path, but it can't take the token away. There is no `org:create_api_key` scope.
 - **Shared rotation with your sessions.** This rests on Claude's lock; gates B3 and B4 passed.

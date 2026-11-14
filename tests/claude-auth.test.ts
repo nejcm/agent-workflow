@@ -11,6 +11,7 @@ afterEach(() => rmSync(t, { recursive: true, force: true }));
 
 const BUN = realpathSync(process.execPath);
 const TOKEN = "sk-ant-oat01-Real_token.value-1";
+const TOKEN2 = "sk-ant-oat01-Saved_under.lock-2";
 const DECOY = "sk-ant-oat01-DECOY";
 const NOW = Date.now();
 const LATER = NOW + 3_600_000;
@@ -162,6 +163,7 @@ function hostile() {
   file(join(clone, "bunfig.toml"), `preload = ["./evil.ts"]\n`);
   file(join(clone, ".env"), "AW_DOTENV=loaded\n");
   for (const b of ["bun", "env", "sh"]) file(join(clone, b), `#!/bin/sh\necho x >> ${marker}\n`, 0o755);
+  file(join(t, "ticket.claude/.credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: DECOY, refreshToken: "r", expiresAt: NOW + 86_400_000 } }));
   const env = { HOME: home, PATH: clone, BUN_OPTIONS: `--preload ${evil}`, AW_BUN: BUN, CLAUDE_CONFIG_DIR: join(t, "ticket.claude") };
   return { home, clone, marker, env };
 }
@@ -220,18 +222,18 @@ test.if(realpathSync("/bin/sh").endsWith("bash"))("control: without -p, bash run
 
 const lock = () => join(t, "home/.claude/.oauth_refresh.lock");
 
-test("capture waits while Claude holds its refresh lock, then reads the saved token", async () => {
+test("capture waits while Claude holds its refresh lock, then reads the token saved under it", async () => {
   mkdirSync(lock(), { recursive: true });
   const start = performance.now();
-  setTimeout(() => rmSync(lock(), { recursive: true }), 500);
-  expect(await capture(valid)).toEqual({ out: TOKEN, err: "", code: 0, ran: false });
+  setTimeout(() => (creds(join(t, "home"), JSON.stringify({ claudeAiOauth: oauth({ accessToken: TOKEN2 }) })), rmSync(lock(), { recursive: true })), 500);
+  expect(await capture(valid)).toEqual({ out: TOKEN2, err: "", code: 0, ran: false });
   expect(performance.now() - start).toBeGreaterThan(450);
 });
 
-test("capture gives up on a stuck refresh lock within 3 s", async () => {
+test("capture reads anyway once a stuck refresh lock outlasts 3 s", async () => {
   mkdirSync(lock(), { recursive: true });
   const start = performance.now();
-  expect(await capture(valid)).toEqual({ out: "", err: "", code: 1, ran: false });
+  expect(await capture(valid)).toEqual({ out: TOKEN, err: "", code: 0, ran: false });
   expect(performance.now() - start).toBeGreaterThan(2900);
   expect(performance.now() - start).toBeLessThan(4500);
 });
@@ -242,24 +244,60 @@ test("both profiles route api.anthropic.com through the capture, uncached; the d
     expect(p.network.credentials).toContain("anthropic_oauth");
     expect(p.network.custom_credentials.anthropic_oauth).toEqual({ upstream: "https://api.anthropic.com", credential_key: "cmd://anthropic_oauth", env_var: "CLAUDE_CODE_OAUTH_TOKEN", credential_format: "Bearer {}" });
     expect(p.credential_capture.anthropic_oauth).toEqual({ command: CAPTURE_COMMAND, timeout_secs: 5, cache_ttl_secs: 0 });
-    expect(p.environment.allow_vars).toEqual(expect.arrayContaining(["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR", "CLAUDE_CODE_OAUTH_TOKEN"]));
-    expect(p.environment.allow_vars).not.toContain("AW_BUN");
+    expect(p.environment.allow_vars).toEqual(expect.arrayContaining(["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR"]));
+    for (const v of ["AW_BUN", "CLAUDE_CODE_OAUTH_TOKEN"]) expect(p.environment.allow_vars).not.toContain(v);
   }
   expect(readFileSync(join(AW_DIR, "docs/claude-auth.md"), "utf8")).toContain(`"command": ${JSON.stringify(CAPTURE_COMMAND)}`);
 });
+
+const hostIo = (home: string, logs: string[], dry: boolean, cmds: string[][] = []) => ({ dry, home, log: (m: string) => logs.push(m), fetch, run: async (a: string[]) => (cmds.push(a), { code: 0, out: "", err: "" }) });
 
 test("hostLogin: a dry run checks metadata only and spawns nothing", async () => {
   const home = join(t, "home");
   const logs: string[] = [];
   const cmds: string[][] = [];
-  const io = { dry: true, home, log: (m: string) => logs.push(m), fetch, run: async (a: string[]) => (cmds.push(a), { code: 0, out: "", err: "" }) };
+  const io = hostIo(home, logs, true, cmds);
   creds(home, login({ expiresAt: NOW, refreshTokenExpiresAt: NOW + 86_400_000 }));
   expect(await hostLogin(io, [join(t, "ws")], () => NOW)).toBeUndefined();
   expect(logs).toEqual(["the Claude login ends in 24h: run `claude auth login` before then", "dry: refresh the claude login when it expires within 5 minutes"]);
   expect(cmds).toEqual([]);
   expect(calls()).toEqual([]);
-  rmSync(join(home, CREDENTIALS));
-  await expect(hostLogin(io, [join(t, "ws")])).rejects.toThrow("run `claude auth login`");
   await expect(hostLogin(io, [dirname(AW_DIR)])).rejects.toThrow("aw's dir");
   await expect(hostLogin(io, [dirname(BUN)])).rejects.toThrow("bun: ");
+});
+
+test("hostLogin: login problems are only logged; without a login it resolves nothing", async () => {
+  const home = join(t, "home");
+  const logs: string[] = [];
+  let finds = 0;
+  const find = async () => (finds++, fakeClaude(0));
+  expect(await hostLogin(hostIo(home, logs, false), [join(t, "ws")], () => NOW, find)).toBeFunction();
+  expect(logs).toEqual([`~/${CREDENTIALS} is missing: run \`claude auth login\``]);
+  expect(finds).toBe(0);
+  expect(calls()).toEqual([]);
+});
+
+test("hostLogin: resolves claude and awaits the first refresh check; a failed resolve rejects", async () => {
+  const home = join(t, "home");
+  const logs: string[] = [];
+  creds(home, login({ expiresAt: NOW + 60_000, refreshTokenExpiresAt: NOW + 7 * 86_400_000 }));
+  const bin = fakeClaude(0, login({ expiresAt: NOW + 8 * 3_600_000 }));
+  expect(await hostLogin(hostIo(home, logs, false), [join(t, "ws")], () => NOW, async () => bin)).toBeFunction();
+  expect(logs).toEqual(["claude login refresh ok, exit 0"]);
+  expect(calls()).toHaveLength(1);
+  await expect(hostLogin(hostIo(home, logs, false), [join(t, "ws")], () => NOW, async () => Promise.reject(new Error("claude: not found")))).rejects.toThrow("claude: not found");
+});
+
+test("refresher stops spawning once the login reaches its time limit, and says so once", async () => {
+  const home = join(t, "home");
+  const logs: string[] = [];
+  creds(home, login({ expiresAt: NOW - 1, refreshTokenExpiresAt: NOW }));
+  const check = refresher(async () => fakeClaude(0), home, (m) => logs.push(m), () => NOW);
+  await check();
+  await check();
+  expect(calls()).toEqual([]);
+  expect(logs).toEqual(["claude login reached its time limit, not refreshing: run `claude auth login`"]);
+  creds(home, login({ expiresAt: NOW - 1, refreshTokenExpiresAt: NOW + 86_400_000 }));
+  await check();
+  expect(calls()).toHaveLength(1);
 });

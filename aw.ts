@@ -121,11 +121,8 @@ async function main(argv: string[]) {
     console.error(`another aw run or once holds ${lock}; stop it first`);
     process.exit(1);
   }
-  const nono = Object.values(cfg.repos).filter((r) => r.sandbox === "nono");
-  const refresh = nono.length
+  const refresh = Object.values(cfg.repos).some((r) => r.sandbox === "nono")
     ? await hostLogin(io, [cfg.workspaceRoot]).catch((e) => {
-        // Codex sessions only run Claude as a helper, so they start without a usable login.
-        if (!nono.some((r) => r.agent === "claude")) return void io.log(`claude login: ${e.message}`);
         console.error(`claude login: ${e.message}`);
         process.exit(1);
       })

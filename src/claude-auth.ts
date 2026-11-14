@@ -9,10 +9,8 @@ const WINDOW_MS = 300_000;
 const DAY_MS = 86_400_000;
 
 const CAPTURE_JS =
-  'try{const f=require("node:fs"),d=process.env.HOME+"/.claude/",w=Date.now()+3000;while(f.existsSync(d+".oauth_refresh.lock")){if(Date.now()>w)process.exit(1);Bun.sleepSync(50)}const c=JSON.parse(f.readFileSync(d+".credentials.json","utf8"));const o=c!==null&&typeof c==="object"&&!Array.isArray(c)&&Object.hasOwn(c,"claudeAiOauth")?c.claudeAiOauth:null;const t=o!==null&&typeof o==="object"?o.accessToken:undefined,e=o!==null&&typeof o==="object"?o.expiresAt:undefined;if(typeof t==="string"&&/^[A-Za-z0-9._-]+$/.test(t)&&Number.isSafeInteger(e)&&e>Date.now()+30000){process.stdout.write(t);process.exit(0)}}catch{}process.exit(1)';
-// -p: bash would import functions and SHELLOPTS from the ticket env. A refresh revokes the old token before Claude saves
-// the new one, under that lock, so the capture waits it out.
-/** nono's credential capture for the anthropic_oauth route; the profiles must hold exactly this argv. */
+  'try{const f=require("node:fs"),d=process.env.HOME+"/.claude/",w=Date.now()+3000;while(f.existsSync(d+".oauth_refresh.lock")&&Date.now()<w)Bun.sleepSync(50);const c=JSON.parse(f.readFileSync(d+".credentials.json","utf8"));const o=c!==null&&typeof c==="object"&&!Array.isArray(c)&&Object.hasOwn(c,"claudeAiOauth")?c.claudeAiOauth:null;const t=o?.accessToken,e=o?.expiresAt;if(typeof t==="string"&&/^[A-Za-z0-9._-]+$/.test(t)&&Number.isSafeInteger(e)&&e>Date.now()+30000){process.stdout.write(t);process.exit(0)}}catch{}process.exit(1)';
+/** nono's capture for the anthropic_oauth route, exactly as in the profiles; -p skips bash env imports, the lock wait a rotation in flight. */
 export const CAPTURE_COMMAND = ["/bin/sh", "-p", "-c", 'cd / && exec /usr/bin/env -i HOME="$HOME" "$AW_BUN" --no-env-file -e "$1"', "sh", CAPTURE_JS];
 
 const WRAPPER = /\/mise\/(shims|command-wrappers)\//;
@@ -87,9 +85,14 @@ const REFRESH = ["-p", "/cost", "--safe-mode", "--setting-sources", "", "--stric
 /** A single-flight check that runs Claude's own refresh of the host login inside its window, with a clean env. */
 export function refresher(claude: () => Promise<string>, home: string, log: (msg: string) => void, now = Date.now) {
   let inFlight: Promise<void> | undefined;
+  let ended = false;
   const check = async () => {
-    const before = readLogin(home)?.expiresAt;
+    const l = readLogin(home);
+    const before = l?.expiresAt;
     if (before === undefined || !needsRefresh(before, now())) return;
+    const over = l!.refreshTokenExpiresAt !== undefined && l!.refreshTokenExpiresAt <= now();
+    if (over && !ended) log("claude login reached its time limit, not refreshing: run `claude auth login`");
+    if ((ended = over)) return;
     // timeout kills the whole child group and still fires if aw dies.
     const argv = ["/usr/bin/timeout", "-k", "5", "60", await claude(), ...REFRESH];
     const code = await Bun.spawn(argv, { cwd: AW_DIR, env: { HOME: home, PATH: "/usr/local/bin:/usr/bin:/bin" }, stdio: ["ignore", "ignore", "ignore"] }).exited;
@@ -101,16 +104,22 @@ export function refresher(claude: () => Promise<string>, home: string, log: (msg
     .finally(() => (inFlight = undefined)));
 }
 
-/** Startup check of the host login for nono lanes; unless dry, resolves Claude and runs one refresh check, returning it for a timer. */
-export async function hostLogin(io: Io, writable: string[], now = Date.now) {
+/** Startup check for nono lanes: throws for an unsafe host, only logs login problems; unless dry, runs one refresh check and returns it for a timer. */
+export async function hostLogin(io: Io, writable: string[], now = Date.now, find = findClaude) {
   // The refresh runs with aw's dir as cwd, and Claude reads that dir's settings and git config.
   if (writableBy([AW_DIR, real(AW_DIR)], writable)) throw new Error(`aw's dir ${AW_DIR} is under a path sessions can write`);
   findBun(writable);
-  const warn = checkLogin(readLogin(io.home), now());
-  if (warn) io.log(warn);
+  const login = readLogin(io.home);
+  try {
+    const warn = checkLogin(login, now());
+    if (warn) io.log(warn);
+  } catch (e) {
+    io.log((e as Error).message);
+  }
   if (io.dry) return void io.log("dry: refresh the claude login when it expires within 5 minutes");
-  const claude = cached(() => findClaude(io.run, writable));
-  await claude();
+  const claude = cached(() => find(io.run, writable));
+  // Without a login, Codex-only hosts may have no claude at all; the refresher resolves it once a login appears.
+  if (login) await claude();
   const check = refresher(claude, io.home, io.log, now);
   await check();
   return check;

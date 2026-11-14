@@ -223,6 +223,7 @@ test("a codex start seeds the ticket's own auth.json, 0600, without the refresh 
   expect(statSync(f).mode & 0o777).toBe(0o600);
   expect(JSON.parse(readFileSync(f, "utf8")).tokens.refresh_token).toBe("");
   expect(readFileSync(f, "utf8")).not.toContain("secret-rt");
+  expect(readFileSync(join(root, "acme/web/gh-1.codex/config.toml"), "utf8")).toContain(`[projects.${JSON.stringify(realpathSync(join(root, "acme/web/gh-1")))}]\ntrust_level = "trusted"`);
   expect(existsSync(join(root, "acme/web/gh-1.claude"))).toBe(false);
 });
 
@@ -244,16 +245,19 @@ test("seedCodex: a fresh dir with copied config, linked instructions and skills,
   writeFileSync(join(root, ".claude/AGENTS.md"), "a");
   symlinkSync(join(root, ".claude/AGENTS.md"), join(tpl, "AGENTS.md"));
   symlinkSync(join(root, ".claude/skills"), join(tpl, "skills"));
-  for (const f of ["config.toml", "auth.json", "history.jsonl"]) writeFileSync(join(tpl, f), f);
+  for (const f of ["auth.json", "history.jsonl"]) writeFileSync(join(tpl, f), f);
+  writeFileSync(join(tpl, "config.toml"), 'model = "m"\n\n[projects."/home/u/x"]\ntrust_level = "trusted"');
   const dir = join(root, "acme/web/gh-1.codex");
   mkdirSync(join(dir, "sessions"), { recursive: true });
-  seedCodex({ ...fakeIo().io, dry: true }, dir, "{}");
+  seedCodex({ ...fakeIo().io, dry: true }, dir, "{}", "/r");
   expect(readdirSync(dir)).toEqual(["sessions"]);
-  seedCodex(fakeIo().io, dir, undefined);
+  seedCodex(fakeIo().io, dir, undefined, '/w/a"b\\c');
   expect(readdirSync(dir).sort()).toEqual(["AGENTS.md", "config.toml", "skills"]);
   expect(realpathSync(join(dir, "skills"))).toBe(realpathSync(join(root, ".claude/skills")));
   expect(lstatSync(join(dir, "config.toml")).isFile()).toBe(true);
-  expect(readFileSync(join(dir, "config.toml"), "utf8")).toBe("config.toml");
+  const cfg = readFileSync(join(dir, "config.toml"), "utf8");
+  expect(cfg).toBe('model = "m"\n\n[projects."/home/u/x"]\ntrust_level = "trusted"\n[projects."/w/a\\"b\\\\c"]\ntrust_level = "trusted"\n');
+  expect((Bun.TOML.parse(cfg) as any).projects).toEqual({ "/home/u/x": { trust_level: "trusted" }, '/w/a"b\\c': { trust_level: "trusted" } });
 });
 
 test("an unsandboxed claude start without the token file fails before cloning, with the fix in the log", async () => {

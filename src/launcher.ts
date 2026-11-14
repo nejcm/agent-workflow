@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { AGENTS, CLAUDE_TOKEN, claudeHome, codexHome, tmpHome } from "./agents";
 import { checkLogin, findBun, readLogin } from "./claude-auth";
@@ -163,7 +163,7 @@ export async function codexLogin(io: Io, now = Date.now()) {
 }
 
 // Same as seedClaude; `login` is codexLogin's copy, the session's own credential.
-export function seedCodex(io: Io, dir: string, login: string | undefined) {
+export function seedCodex(io: Io, dir: string, login: string | undefined, root: string) {
   const tpl = join(io.home, ".codex-aw");
   io.log(`${io.dry ? "dry: " : ""}seed ${dir} from ${tpl}`);
   if (io.dry) return;
@@ -172,6 +172,8 @@ export function seedCodex(io: Io, dir: string, login: string | undefined) {
   for (const f of ["AGENTS.md", "skills"]) if (existsSync(join(tpl, f))) symlinkSync(realpathSync(join(tpl, f)), join(dir, f));
   // Copies, not links: Codex rewrites config.toml in place, and the template stays out of the sandbox.
   for (const f of ["config.toml", "hooks.json"]) if (existsSync(join(tpl, f))) copyFileSync(join(tpl, f), join(dir, f));
+  // JSON string escapes are a subset of TOML basic string escapes.
+  appendFileSync(join(dir, "config.toml"), `\n[projects.${JSON.stringify(root)}]\ntrust_level = "trusted"\n`);
   if (login) writeFileSync(join(dir, "auth.json"), login, { mode: 0o600, flag: "wx" });
 }
 
@@ -215,7 +217,6 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   // Claude sessions run Codex only as a helper, so a missing Codex login does not stop them.
   const login = r.agent === "codex" ? await codexLogin(io) : await codexLogin(io).catch(() => undefined);
   await ensureClone(cfg, io, r);
-  seedCodex(io, codexHome(wt), login);
   io.log(`${io.dry ? "dry: " : ""}mkdir ${tmpHome(wt)}`);
   if (!io.dry) {
     rmSync(tmpHome(wt), { recursive: true, force: true });
@@ -226,7 +227,9 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   await write(io, [...GIT, "-C", r.path, "fetch", "origin", r.baseBranch], undefined, SLOW_SECS);
   if (existsSync(wt)) io.log(`reuse ${wt}`);
   else await cloneSession(io, r, wt, branch);
-  if (r.agent === "claude" || nono) seedClaude(io, claudeHome(wt), existsSync(wt) ? realpathSync(wt) : wt);
+  const root = existsSync(wt) ? realpathSync(wt) : wt;
+  seedCodex(io, codexHome(wt), login, root);
+  if (r.agent === "claude" || nono) seedClaude(io, claudeHome(wt), root);
   const vars = { id: t.id, title: t.title, body: t.body, url: t.url, branch, base: r.baseBranch, testCmd: r.testCmd, repo: r.key, planStep: r.planStep };
   io.log(`${io.dry ? "dry: " : ""}write ${join(wt, ".aw", ".gitignore")}`);
   if (!io.dry) {

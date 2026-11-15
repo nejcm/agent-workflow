@@ -71,10 +71,16 @@ export const winName = (key: string, id: string) => `${key}/${id}`;
 
 /** Clones every allowlisted repo that has no clone yet and still resolves to itself; a failure is logged and retried at its next start. */
 export async function cloneAll(cfg: Config, io: Io) {
-  for (const r of Object.values(cfg.repos)) {
-    const name = existsSync(r.path) ? r.key : await canonical(io, r.key, true);
-    if (name && sameRepo(name, r.key)) await ensureClone(cfg, io, r).catch((e) => io.log(`clone ${r.key} failed: ${e.message}`));
-  }
+  for (const r of Object.values(cfg.repos)) await cloned(cfg, io, r).catch((e) => io.log(`clone ${r.key} failed: ${e.message}`));
+}
+
+/** Clones `r` if it has no clone yet; false, not cloned, if GitHub now resolves it to another repo (logged by `canonical`). */
+export async function cloned(cfg: Config, io: Io, r: Repo) {
+  const name = existsSync(r.path) ? r.key : await canonical(io, r.key, true);
+  if (!name) throw new Error(`${r.key}: GitHub lookup failed`);
+  if (!sameRepo(name, r.key)) return false;
+  await ensureClone(cfg, io, r);
+  return true;
 }
 
 // Clone beside the target and rename, so an interrupted clone never looks finished; never deletes anything.

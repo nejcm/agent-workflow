@@ -41,6 +41,21 @@ test("repo config: every key parsed, every problem listed", () => {
   expect(errors([file("config.yaml", "prompts: [a]\n")])).toContain("prompts: mapping with default and byLabel");
 });
 
+test("repo config: tracker.linear names the project, with an optional team key", () => {
+  expect(parseRepoConfig([file("config.yaml", "tracker:\n  linear:\n    project: Web app\n    team: ENG\n")]).tracker).toEqual({ linear: { project: "Web app", team: "ENG" } });
+  expect(parseRepoConfig([file("config.yaml", "tracker:\n  linear:\n    project: Web app\n")]).tracker).toEqual({ linear: { project: "Web app" } });
+  expect(parseRepoConfig([]).tracker).toBeUndefined();
+  expect(errors([file("config.yaml", "tracker: linear\n")])).toBe("tracker: mapping with linear");
+  expect(errors([file("config.yaml", "tracker:\n  github: {}\n")])).toBe("tracker: mapping with linear");
+  expect(errors([file("config.yaml", "tracker:\n  linear: Web app\n")])).toBe("tracker.linear: mapping with project and team");
+  expect(errors([file("config.yaml", "tracker:\n  linear:\n    team: eng\n    repo: x\n")]).split("\n  ")).toEqual([
+    "tracker.linear: mapping with project and team",
+    "tracker.linear.project: non-empty string, the Linear project's name",
+    "tracker.linear.team: Linear team key, e.g. ENG",
+  ]);
+  expect(errors([file("config.yaml", "tracker:\n  linear:\n    project: 7\n    team: 12\n")])).toContain("tracker.linear.team: Linear team key");
+});
+
 test("repo config: size cap, prompt names, regular files only", () => {
   const big = "x".repeat(64 * 1024 + 1);
   expect(errors([file("prompts/a.md", big)])).toBe("prompts/a.md: over 64 KiB");
@@ -245,12 +260,12 @@ test("tender check validates a working tree's .tender/ and prints the effective 
   expect(check(join(root, "nope"), () => {}, () => {})).toBe(false);
   const out: string[] = [];
   expect(check(root, (s) => out.push(s), (s) => out.push(s))).toBe(true);
-  expect(JSON.parse(out[0]!)).toMatchObject({ agent: "claude", testCmd: null, criticalPaths: expect.arrayContaining([".tender/**", ".github/**"]), prompts: { default: "tender's prompts/default.md", byLabel: {} } });
+  expect(JSON.parse(out[0]!)).toMatchObject({ agent: "claude", testCmd: null, tracker: null, criticalPaths: expect.arrayContaining([".tender/**", ".github/**"]), prompts: { default: "tender's prompts/default.md", byLabel: {} } });
   mkdirSync(join(root, ".tender/prompts"), { recursive: true });
-  writeFileSync(join(root, ".tender/config.yaml"), 'testCmd: make\ncriticalPaths: ["x/**"]\nprompts:\n  byLabel:\n    bug: bug.md\n');
+  writeFileSync(join(root, ".tender/config.yaml"), 'testCmd: make\ncriticalPaths: ["x/**"]\nprompts:\n  byLabel:\n    bug: bug.md\ntracker:\n  linear:\n    project: Web app\n');
   writeFileSync(join(root, ".tender/prompts/bug.md"), "B");
   expect(check(root, (s) => out.push(s))).toBe(true);
-  expect(JSON.parse(out[1]!)).toMatchObject({ testCmd: "make", criticalPaths: expect.arrayContaining(["x/**", ".tender/**"]), prompts: { byLabel: { bug: ".tender/prompts/bug.md" } } });
+  expect(JSON.parse(out[1]!)).toMatchObject({ testCmd: "make", tracker: { linear: { project: "Web app" } }, criticalPaths: expect.arrayContaining(["x/**", ".tender/**"]), prompts: { byLabel: { bug: ".tender/prompts/bug.md" } } });
   symlinkSync(join(root, ".tender/prompts/bug.md"), join(root, ".tender/prompts/evil.md"));
   writeFileSync(join(root, ".tender/prompts/Bad.md"), "x");
   expect(dirEntries(root).map((e) => e.name)).toEqual(["config.yaml", "prompts/Bad.md", "prompts/bug.md", "prompts/evil.md"]);

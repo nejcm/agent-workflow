@@ -24,6 +24,8 @@ export interface RepoConfig {
   criticalPaths: string[];
   testPaths: string[];
   prompts: { default?: string; byLabel: Record<string, string> };
+  /** The Linear project whose tickets go to this repo; `team` is only checked against the ticket's source. */
+  tracker?: { linear?: { project: string; team?: string } };
   files: Record<string, string>;
 }
 

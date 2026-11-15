@@ -14,24 +14,47 @@ const REPO_LINE = /^repo:[ \t]*([^\r\n]*?)[ \t\r]*$/im;
 const repoLabel = (labels: string[]) => labels.find((x) => /^repo:/i.test(x))?.slice(5).trim();
 const repoLine = (t?: string | null) => REPO_LINE.exec(t ?? "")?.[1];
 
-/** Untrusted repo string: ticket `repo:` label, `repo:` line in the description, project `repo:` label, then project summary and overview lines. */
-export function linearRepo(labels: string[], texts: (string | null | undefined)[], projectLabels: string[] = []) {
-  return repoLabel(labels) ?? repoLine(texts[0]) ?? repoLabel(projectLabels) ?? texts.slice(1).map(repoLine).find((x) => x !== undefined);
+/** Untrusted repo string named by the ticket itself: its `repo:` label, else the first `repo:` line of its description. */
+export const linearRepo = (labels: string[], description?: string | null) => repoLabel(labels) ?? repoLine(description);
+
+/** A repo's `tracker.linear` from its `.tender/config.yaml`. */
+export type ProjectClaim = { repo: string; project: string; team?: string };
+
+// Project id to the claim it last resolved to alone, so a project renamed in Linear keeps its repo.
+// shortcut: in memory, so a rename is forgotten on restart; persist it if that bites.
+const knownIds = new Map<string, ProjectClaim>();
+const logged = new Set<string>();
+
+/** The repo whose config claims project `p`: the one it resolved to before while that repo still claims it, else by name (case-insensitive); none if two repos claim it. */
+export function projectRepo(claims: ProjectClaim[], team: string, p: { id: string; name?: string }, log: (m: string) => void) {
+  const once = (key: string, msg: string) => {
+    if (!logged.has(key)) log(msg);
+    logged.add(key);
+  };
+  const known = knownIds.get(p.id);
+  const name = typeof p.name === "string" ? p.name.toLowerCase() : undefined;
+  const hits = claims.filter((c) => c.project.toLowerCase() === name || (c.repo === known?.repo && c.project.toLowerCase() === known.project.toLowerCase()));
+  const repos = hits.map((h) => h.repo).join(", ");
+  if (hits.length > 1) once(`${p.id} ${repos}`, `linear project ${JSON.stringify(String(p.name).slice(0, 100))} is claimed by ${repos}; its tickets need a repo: label or description line`);
+  const hit = hits[0];
+  if (!hit || hits.length > 1) return;
+  knownIds.set(p.id, hit);
+  if (hit.team && hit.team !== team) once(`${p.id} ${hit.repo} ${team}`, `linear project ${JSON.stringify(hit.project)} is claimed by ${hit.repo} for team ${hit.team}, but routes a ${team} ticket`);
+  return hit.repo;
 }
 
 // A label inside a Linear label group is named `<group>:<name>`, so a `repo` group holding `owner/name` reads `repo:owner/name`.
 const labelNames = (c: any): string[] => (c?.nodes ?? []).map((x: any) => (x.parent?.name ? `${x.parent.name}:${x.name}` : x.name));
 
-export const LINEAR_ISSUES = `query($f: IssueFilter) { issues(filter: $f, first: 100) { nodes { id identifier title description url priority labels { nodes { name parent { name } } } project { description content labels { nodes { name parent { name } } } } } } }`;
+export const LINEAR_ISSUES = `query($f: IssueFilter) { issues(filter: $f, first: 100) { nodes { id identifier title description url priority labels { nodes { name parent { name } } } project { id name } } } }`;
 
 export function linearTicket(i: any): Ticket {
   const labels = labelNames(i.labels);
-  const repo = linearRepo(labels, [i.description, i.project?.description, i.project?.content], labelNames(i.project?.labels));
   const priority = [1, 2, 3, 4].includes(i.priority) ? i.priority : undefined;
-  return { id: i.identifier, ref: i.id, title: i.title ?? "", body: i.description ?? "", url: i.url ?? "", labels, repo, priority };
+  return { id: i.identifier, ref: i.id, title: i.title ?? "", body: i.description ?? "", url: i.url ?? "", labels, repo: linearRepo(labels, i.description), priority };
 }
 
-export function linear(l: LinearSource, host: string, io: Io, defaultHost = false): Tracker {
+export function linear(l: LinearSource, host: string, io: Io, defaultHost = false, _repos: string[] = [], claims: () => Promise<ProjectClaim[]> = async () => []): Tracker {
   const gql = async (query: string, variables: object, mutate = false) => {
     if (mutate) io.log(`${io.dry ? "dry: " : ""}linear ${/\{\s*(\w+)/.exec(query)?.[1]} ${JSON.stringify(variables)}`);
     if (mutate && io.dry) return {};
@@ -58,10 +81,19 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
     if (!id) throw new Error(`linear state "${name}" not found in team ${l.team}`);
     return id;
   };
+  const unrouted = new WeakSet<Ticket>();
   const list = async (state: string, labels: string[]): Promise<Ticket[]> => {
     const filter = { team: { key: { eq: l.team } }, state: { name: { eq: state } }, and: labels.map((n) => ({ labels: { some: { name: { eq: n } } } })) };
     const d = await gql(LINEAR_ISSUES, { f: filter });
-    return d.issues.nodes.filter((i: any) => /^[A-Z0-9]+-\d+$/.test(i.identifier)).map(linearTicket);
+    const nodes = d.issues.nodes.filter((i: any) => /^[A-Z0-9]+-\d+$/.test(i.identifier));
+    return Promise.all(
+      nodes.map(async (i: any) => {
+        const t = linearTicket(i);
+        if (t.repo === undefined && typeof i.project?.id === "string")
+          t.repo = await claims().then((c) => projectRepo(c, l.team, i.project, io.log), () => void unrouted.add(t));
+        return t;
+      }),
+    );
   };
   const comment = async (t: Ticket, body: string) => {
     const d = await gql(`mutation($i: CommentCreateInput!) { commentCreate(input: $i) { success } }`, { i: { issueId: t.ref, body: `tender: ${body}` } }, true);
@@ -85,7 +117,8 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
     globalIds: true,
     restartHint: () => `move it to ${l.todo}`,
     describe: () => `linear ${l.team}`,
-    listReady: async () => (await listMine(l.todo, [l.readyLabel])).filter((t) => !hasLabel(t.labels, l.needsHumanLabel)),
+    // Unrouted: some repo's claims could not be read, so the ticket waits rather than start elsewhere or be rejected.
+    listReady: async () => (await listMine(l.todo, [l.readyLabel])).filter((t) => !hasLabel(t.labels, l.needsHumanLabel) && !unrouted.has(t)),
     listInProgress: () => listMine(l.inProgress, [l.readyLabel]),
     listInReview: () => listMine(l.inReview, [l.readyLabel]),
     async closed(id) {

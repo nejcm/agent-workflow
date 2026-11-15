@@ -14,7 +14,7 @@ Move a GitHub issue or Linear ticket to **ready**, and `tender` starts a Claude 
 - **Ready means:** the `agent` label plus `host:<host>`, so a laptop and a VM never take the same ticket. One machine can also take unlabelled tickets (`defaultHost`).
 - **Which repo, in what order:**
   - Repo allowlist, checked against GitHub renames and redirects.
-  - A Linear ticket names its repo with a label, a `repo:` line in the ticket, or its project.
+  - A Linear ticket names its repo with a label or a `repo:` line in the ticket; otherwise its project picks the repo that claims it in `.tender/config.yaml`.
   - Most urgent tickets start first: Linear priority, or a GitHub `priority:*` label.
 - **Limits:** at most `maxConcurrent` sessions in total and per repo.
 
@@ -85,7 +85,7 @@ ticket canceled          ──► kill session, keep the session clone and its 
 ### Which repo a ticket goes to
 
 - **GitHub:** the issue's own repo. A source polls every repo in `repos`.
-- **Linear:** the first of: a ticket label `repo:owner/name`; a line `repo: owner/name` in the ticket description (first such line, at the start of a line); the same line in the ticket's project summary, then its project overview. A ticket that names no repo gets one comment and is skipped.
+- **Linear:** the first of: a ticket label `repo:owner/name`; a line `repo: owner/name` in the ticket description (first such line, at the start of a line); the allowlisted repo whose `.tender/config.yaml` claims the ticket's project (`tracker.linear.project`). The project's own text and labels are not read. A project matches by name (case-insensitive), and also the repo it last resolved to while that repo's claim is unchanged, so renaming it in Linear keeps its repo until `tender` restarts. A project claimed by two repos (by name, or by name and that earlier match) is ambiguous: it is logged once and its tickets need a label or description line. `team` does not affect routing; a match from another team's source is logged once. The map is built from every allowlisted repo's config on its base branch (cloned if missing, fetched once per poll), only when a listed ticket has no label or line. A repo GitHub now resolves to another name, with no clone yet, claims nothing. While any other repo's config cannot be read or is invalid, tickets that rely on their project wait, logged each poll, with no comment. A ticket that names no repo gets one comment and is skipped.
 - The result must match a `name` in `repos` (case-insensitive; the configured spelling is then used everywhere). Otherwise the ticket gets a comment (`tender: repo x is not in the tender allowlist`, `tender: no repo set on this ticket`, or `tender: … is not a valid owner/name`) and is skipped, with no worktree. Repo strings from tickets must match `owner/name` of `[A-Za-z0-9_.-]`, owner not starting with `-` or `.`, no `..`, name not `.` and not ending in `.git`, and only reach `gh`/`git` as argv.
 - GitHub serves a renamed or transferred repo under its old name (asking for `zeit/next.js` returns `vercel/next.js`). So before listing a repo's issues, and before cloning or starting any ticket, `tender` checks `gh repo view <repo> --json nameWithOwner` equals the allowlisted name (case-insensitive). The check before listing is cached for 5 minutes; the one right before cloning or starting a ticket is never cached. On a mismatch the repo is skipped and logged, and a Linear ticket for it gets the rejection comment; a failed lookup skips the repo (or the start) for that poll, without a comment. A failed `gh issue list` likewise skips only that repo for that listing and is logged; the tickets that listing would have returned are not started or reconciled that poll, but are never treated as closed or ended (cleanup asks each ticket's state, and limits count tmux windows).
 - Only Linear tickets are rejected (a GitHub ticket's repo is allowlisted by construction; a redirected one is only logged). A Linear ticket gets at most one rejection comment ever, whatever the reason and from however many sources, recorded in `<workspaceRoot>/.rejected/<ID>` before the comment is posted: a crash in between loses the comment rather than repeating it, and a failed post clears the record so the next poll retries. Starting the ticket later does not clear it.
@@ -212,7 +212,7 @@ for l in agent in-progress in-review needs-human "host:$(hostname -s)"; do gh la
 cp .env.example .env
 ```
 
-A Linear ticket names its GitHub repo with a label `repo:owner/name`, or a line `repo: owner/name` in its description or its project's summary or overview; otherwise it is skipped with one comment (see [Which repo a ticket goes to](#which-repo-a-ticket-goes-to)).
+A Linear ticket names its GitHub repo with a label `repo:owner/name` or a line `repo: owner/name` in its description; otherwise its project picks the repo whose `.tender/config.yaml` has `tracker: { linear: { project: "<name>" } }`. With none, it is skipped with one comment (see [Which repo a ticket goes to](#which-repo-a-ticket-goes-to)).
 
 ### 4. Config
 
@@ -367,6 +367,9 @@ criticalPaths: ["src/billing/**"]
 prompts:
   byLabel:
     "type:bug": bug.md
+tracker:
+  linear:
+    project: Web app
 ```
 
 | key | default | |
@@ -379,8 +382,10 @@ prompts:
 | `testPaths` | `[]` | globs added to the built-in test paths |
 | `prompts.default` | `default.md` if present | a file in `.tender/prompts/` |
 | `prompts.byLabel` | `{}` | ticket label to prompt file; the first entry whose label the ticket has wins, else `prompts.default` |
+| `tracker.linear.project` | none | the Linear project whose tickets come here when they name no repo themselves, see [Which repo a ticket goes to](#which-repo-a-ticket-goes-to) |
+| `tracker.linear.team` | none | a Linear team key, only checked: a ticket routed here from another team's source is logged once |
 
-`tender` reads `.tender/` only from `origin/<base>` in its own clone (`git ls-tree` and `git cat-file` on that commit, fetched before each start and once per poll before merge decisions), never from a session clone, which the agent can write. A repo's config changes only when a commit to the base branch changes it; it is cached per base commit. Each file must be a regular file of at most 64 KiB, prompt files must be named `[a-z0-9-]+.md`, and unknown keys are errors. If it is invalid, that repo starts no tickets: `tender` logs the errors once per base commit and posts one `tender: not started` comment per base commit on the next ticket that would have started (recorded in `<workspaceRoot>/.invalid-config/<owner>/<name>`). `.tender` itself must be a directory, not a symlink. Run `bun tender.ts check [path]` (default `.`) before committing: it validates `<path>/.tender/` from the working tree, prints the repo's settings with defaults filled in (the host's `autoMerge` ceiling and `criticalPaths` from `tender.json` still apply on top), and exits non-zero if it is invalid.
+`tender` reads `.tender/` only from `origin/<base>` in its own clone (`git ls-tree` and `git cat-file` on that commit, fetched before each start and once per poll before merge decisions or Linear project routing), never from a session clone, which the agent can write. A repo's config changes only when a commit to the base branch changes it; it is cached per base commit. Each file must be a regular file of at most 64 KiB, prompt files must be named `[a-z0-9-]+.md`, and unknown keys are errors. If it is invalid, that repo starts no tickets: `tender` logs the errors once per base commit and posts one `tender: not started` comment per base commit on the next ticket that names that repo and would have started (recorded in `<workspaceRoot>/.invalid-config/<owner>/<name>`). Meanwhile Linear tickets that rely on their project wait, with no comment. `.tender` itself must be a directory, not a symlink. Run `bun tender.ts check [path]` (default `.`) before committing: it validates `<path>/.tender/` from the working tree, prints the repo's settings with defaults filled in (the host's `autoMerge` ceiling and `criticalPaths` from `tender.json` still apply on top) and its tracker target (`tracker`, `null` if none), and exits non-zero if it is invalid.
 
 Prompt placeholders: `{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{testCmd}} {{tests}} {{repo}} {{planStep}}`. `{{tests}}` is `` `<testCmd>` ``, or "the project's tests (…)" when `testCmd` is unset; `{{testCmd}}` is then empty.
 

@@ -1,9 +1,9 @@
 import type { Check, Io, Source, Tracker } from "../types";
 import { github, parseGitHub } from "./github";
-import { linear, parseLinear } from "./linear";
+import { linear, parseLinear, type ProjectClaim } from "./linear";
 
 export type Adapter<S extends Source> = {
-  make(s: S, host: string, io: Io, defaultHost: boolean, repos: string[]): Tracker;
+  make(s: S, host: string, io: Io, defaultHost: boolean, repos: string[], claims: () => Promise<ProjectClaim[]>): Tracker;
   /** The source's tracker-specific fields with defaults; every returned key is one the source may set. */
   parse(raw: Record<string, any>, at: string, check: Check): Omit<S, "name" | "tracker" | "readyLabel" | "needsHumanLabel">;
 };

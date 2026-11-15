@@ -5,13 +5,14 @@ import { deliverFeedback, feedbackFields } from "./feedback";
 import { fileFindings } from "./findings";
 import { agentOf } from "./agents";
 import { baseBranch, canonical, findPr, sameRepo } from "./github";
-import { claim, nonoRun, scopeUnit, start, stopScope, sweepScopes, windows, winName } from "./launcher";
+import { claim, cloned, nonoRun, scopeUnit, start, stopScope, sweepScopes, windows, winName } from "./launcher";
 import { autoMerge } from "./merge";
 import { syncPhases } from "./phases";
 import { agentPane, deliverAnswer, liveStates, syncQuestion } from "./question";
 import { combine, loadSession, parseRepoConfig } from "./repo-config";
 import { lastSay, transcript } from "./tail";
 import { type Adapter, TRACKERS } from "./trackers";
+import type { ProjectClaim } from "./trackers/linear";
 import type { Config, Io, Repo, Session, Source, Ticket, Tracker } from "./types";
 import { TENDER_DIR, byPriority, diskRepos, GIT, hasLabel, mtime, put, read, remove, SAFE_ID, SLOW_SECS, strip, subdirs, write } from "./util";
 
@@ -31,7 +32,7 @@ async function step(io: Io, what: string, fn: () => Promise<unknown>) {
   }
 }
 
-const NO_REPO = "no repo set on this ticket: add a `repo:owner/name` label or a `repo: owner/name` line to its description";
+const NO_REPO = "no repo set on this ticket: add a `repo:owner/name` label or a `repo: owner/name` line to its description, or have exactly one repo claim its Linear project in .tender/config.yaml";
 
 const notAllowed = (t: Ticket) => (!t.repo ? NO_REPO : validRepo(t.repo) ? `repo ${t.repo} is not in the tender allowlist` : `repo ${JSON.stringify(t.repo.slice(0, 100))} is not a valid owner/name`);
 
@@ -186,7 +187,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
       if (!parked) await step(io, `findings ${t.id}`, () => fileFindings(w, tr, io, dir));
       const share: { fields: string; pr?: any } | undefined = parked ? undefined : { fields: feedbackFields(r) };
       // Fetched once per repo per pass, so a policy tightened on the base branch applies to PRs already in review.
-      const fresh = r.autoMerge === "off" ? undefined : (sessions.get(key) ?? sessions.set(key, loadSession(io, r)).get(key)!);
+      const fresh = r.autoMerge === "off" ? undefined : sessionOf(io, sessions, r);
       const ses = await fresh?.catch((e) => void io.log(`merge ${t.id} failed: ${e.message}`));
       if (ses && ses.autoMerge !== "off") await step(io, `merge ${t.id}`, () => autoMerge(cfg, ses, w, tr, io, parked, share));
       // Invalid .tender/ or a failed fetch: no decision or comment, but a PR merged by hand still moves the ticket.
@@ -200,19 +201,43 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
 
 export const worktreeIds = (dir: string) => subdirs(dir).filter((d) => SAFE_ID.test(d));
 
-export function makeTracker(s: Source, host: string, io: Io, defaultHost: boolean, repos: string[]) {
-  return (TRACKERS[s.tracker] as Adapter<Source>).make(s, host, io, defaultHost, repos);
+export function makeTracker(s: Source, host: string, io: Io, defaultHost: boolean, repos: string[], claims: () => Promise<ProjectClaim[]> = async () => []) {
+  return (TRACKERS[s.tracker] as Adapter<Source>).make(s, host, io, defaultHost, repos, claims);
 }
+
+const sessionOf = (io: Io, sessions: Map<string, Promise<Session | undefined>>, r: Repo) => sessions.get(r.key) ?? sessions.set(r.key, loadSession(io, r)).get(r.key)!;
 
 const warned = new Set<string>();
 
 export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir = TENDER_DIR, state = liveStates()) {
   if ((await io.run(["tmux", "has-session", "-t", `=${cfg.tmuxSession}`])).code !== 0)
     await write(io, ["tmux", "new-session", "-d", "-s", cfg.tmuxSession]).catch((e) => io.log(`tmux: ${e.message}`));
+  const sessions = new Map<string, Promise<Session | undefined>>();
+  let claimed: Promise<ProjectClaim[]> | undefined;
+  // Only when a ticket needs it, once per pass: every repo's `.tender/` at its freshly fetched base commit; any repo unread fails it all.
+  // Settled before failing, so no clone outlives the map and races a start.
+  const claims = () =>
+    (claimed ??= Promise.allSettled(
+      Object.values(cfg.repos).map(async (r): Promise<ProjectClaim[]> => {
+        try {
+          if (!(await cloned(cfg, io, r))) return [];
+          const s = await sessionOf(io, sessions, r);
+          if (!s) throw new Error("invalid .tender/");
+          return s.tracker?.linear ? [{ repo: r.key, ...s.tracker.linear }] : [];
+        } catch (e) {
+          io.log(`${r.key}: linear project map unavailable, project-routed tickets wait: ${(e as Error).message}`);
+          throw e;
+        }
+      }),
+    ).then((x) => {
+      const failed = x.find((r) => r.status === "rejected");
+      if (failed) throw failed.reason;
+      return x.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
+    }));
   const srcs = new Map(
     cfg.sources.map((s) => {
       const sio = { ...io, log: (m: string) => io.log(`[${s.name}] ${m}`) };
-      return [s.name, { s, io: sio, tr: tracker(s, cfg.host, sio, cfg.defaultHost, Object.keys(cfg.repos)) }];
+      return [s.name, { s, io: sio, tr: tracker(s, cfg.host, sio, cfg.defaultHost, Object.keys(cfg.repos), claims) }];
     }),
   );
   const wins = await windows(cfg, io);
@@ -284,7 +309,6 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
       await step(sio, `ready ${t.id}`, () => startReady(cfg, s, tr, sio, t, wins, running, tenderDir));
     }
   }
-  const sessions = new Map<string, Promise<Session | undefined>>();
   for (const { s, io: sio, tr } of srcs.values()) {
     try {
       await reconcileSource(cfg, s, tr, sio, wins, state, sessions);

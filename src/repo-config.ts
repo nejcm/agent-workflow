@@ -7,7 +7,7 @@ import { GIT, hasLabel, read, SLOW_SECS, TENDER_DIR, write } from "./util";
 
 const MAX_FILE = 64 * 1024;
 const PROMPT = /^[a-z0-9-]+\.md$/;
-const KEYS = ["agent", "testCmd", "planStep", "autoMerge", "criticalPaths", "testPaths", "prompts"];
+const KEYS = ["agent", "testCmd", "planStep", "autoMerge", "criticalPaths", "testPaths", "prompts", "tracker"];
 
 /** A file under `.tender/`, `name` relative to it (`.` for `.tender` itself); `text` only for a regular file within the size cap. */
 export interface Entry {
@@ -55,6 +55,7 @@ export function parseRepoConfig(entries: Entry[]): RepoConfig {
     criticalPaths: raw.criticalPaths === undefined ? [] : raw.criticalPaths,
     testPaths: raw.testPaths === undefined ? [] : raw.testPaths,
     prompts: { default: obj(p) ? p.default : undefined, byLabel: obj(byLabel) ? byLabel : {} },
+    tracker: raw.tracker,
     files,
   };
   check(["claude", "codex"].includes(c.agent), `agent: "claude" | "codex"`);
@@ -66,6 +67,11 @@ export function parseRepoConfig(entries: Entry[]): RepoConfig {
   check(c.prompts.default === undefined || known(c.prompts.default), `prompts.default: ${JSON.stringify(c.prompts.default)} is not a file in .tender/prompts/`);
   check(obj(byLabel), "prompts.byLabel: mapping of label to prompt file");
   for (const [l, f] of Object.entries(c.prompts.byLabel)) check(str(l) && known(f), `prompts.byLabel.${l}: ${JSON.stringify(f)} is not a file in .tender/prompts/`);
+  const lt = obj(c.tracker) ? c.tracker.linear : undefined;
+  check(c.tracker === undefined || (obj(c.tracker) && Object.keys(c.tracker).every((k) => k === "linear")), "tracker: mapping with linear");
+  check(lt === undefined || (obj(lt) && Object.keys(lt).every((k) => ["project", "team"].includes(k))), "tracker.linear: mapping with project and team");
+  if (obj(lt)) check(str(lt.project), "tracker.linear.project: non-empty string, the Linear project's name");
+  if (obj(lt)) check(lt.team === undefined || (str(lt.team) && /^[A-Z0-9]+$/.test(lt.team)), "tracker.linear.team: Linear team key, e.g. ENG");
   if (errs.length) throw new Error(errs.join("\n  "));
   return c;
 }

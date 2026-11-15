@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
 import { allowedRepo } from "../src/config";
-import { LINEAR_ISSUES, linear, linearRepo, linearTicket } from "../src/trackers/linear";
+import { LINEAR_ISSUES, linear, linearRepo, linearTicket, type ProjectClaim, projectRepo } from "../src/trackers/linear";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { makeTracker, pass } from "../src/pass";
-import { config, fakeIo, lin, phase, src, two, useTempRoot, windowsOut, withLinearKey, writePhases } from "./helpers";
+import { config, fakeIo, lin, noPr, phase, root, setBaseSha, src, two, useTempRoot, windowsOut, withLinearKey, writePhases } from "./helpers";
 
 useTempRoot();
 
@@ -24,7 +26,7 @@ test("linear adapter: defaultHost takes unlabelled tickets, not other hosts'", a
     else process.env.LINEAR_API_KEY = prev;
   }
   expect(bodies[0].query).toContain("labels { nodes { name parent { name } } }");
-  expect(bodies[0].query).toContain("project { description content labels");
+  expect(bodies[0].query).toContain("project { id name }");
   expect(JSON.stringify(bodies[0].variables)).not.toContain("host:");
 });
 
@@ -82,54 +84,178 @@ test("linear adapter: phases become child issues that are never picked up as wor
   ]);
 });
 
-test("linear repo resolution: label > description > project summary > project overview", () => {
-  const texts = (d?: string, ps?: string, pc?: string) => [d, ps, pc];
-  expect(linearRepo(["agent", "Repo:acme/web"], texts("repo: acme/api"))).toBe("acme/web");
-  expect(linearRepo(["agent"], texts("intro\r\nrepo:  acme/api \r\nmore", "repo: acme/web"))).toBe("acme/api");
-  expect(linearRepo([], texts("see the repo: acme/api", "repo: acme/web"))).toBe("acme/web");
-  expect(linearRepo([], texts(undefined, "summary", "# Overview\nrepo: acme/api"))).toBe("acme/api");
-  expect(linearRepo([], texts(null as any, ""))).toBeUndefined();
-  expect(linearRepo([], texts())).toBeUndefined();
+test("linear repo resolution: label, then the first repo: line of the description", () => {
+  expect(linearRepo(["agent", "Repo:acme/web"], "repo: acme/api")).toBe("acme/web");
+  expect(linearRepo(["agent"], "intro\r\nrepo:  acme/api \r\nmore")).toBe("acme/api");
+  expect(linearRepo([], "see the repo: acme/api")).toBeUndefined();
+  expect(linearRepo([], null)).toBeUndefined();
+  expect(linearRepo([])).toBeUndefined();
   const c = two();
   for (const bad of ["../x", "acme/..", "a/b;rm -rf", "a/b/c", "a//b", "/a/b", "-x/y", "a/b\nc", "a b/c", ""])
-    expect(allowedRepo(c, linearRepo([], [`repo: ${bad}`]))).toBeUndefined();
-  expect(linearRepo([], ["repo: a/b;rm -rf\nrepo: acme/web"])).toBe("a/b;rm -rf");
+    expect(allowedRepo(c, linearRepo([], `repo: ${bad}`))).toBeUndefined();
+  expect(linearRepo([], "repo: a/b;rm -rf\nrepo: acme/web")).toBe("a/b;rm -rf");
   expect(allowedRepo(c, "ACME/Web")).toBe("acme/web");
 });
 
-test("linear adapter: tickets carry the resolved repo from labels, description and project", async () => {
-  const l = lin(two(), 1);
-  const node = (identifier: string, labels: string[], description: string | null, project: object | null) => ({ id: identifier, identifier, title: "t", description, url: "u", labels: { nodes: labels.map((name) => ({ name })) }, project });
-  const { io } = fakeIo();
-  io.fetch = (async () =>
-    Response.json({
-      data: {
-        issues: {
-          nodes: [
-            node("ENG-1", ["agent", "repo:acme/api"], "repo: acme/web", null),
-            node("ENG-2", ["agent"], "x\nrepo: acme/api", { description: "repo: acme/web", content: null }),
-            node("ENG-3", ["agent"], null, { description: "", content: "repo: ACME/API" }),
-            node("ENG-4", ["agent"], null, null),
-          ],
-        },
-      },
-    })) as any;
-  const got = await withLinearKey(() => linear(l, "box", io, true).listReady());
-  expect(got.map((t) => t.repo)).toEqual(["acme/api", "acme/api", "ACME/API", undefined]);
+const issue = (identifier: string, labels: object[], description: string | null, project: object | null) => ({ id: identifier, identifier, title: "t", description, url: "u", labels: { nodes: labels }, project });
+const named = (...names: string[]) => names.map((name) => ({ name }));
+
+async function listed(nodes: object[], claims: ProjectClaim[], team = "ENG") {
+  const { io, logs } = fakeIo();
+  io.fetch = (async () => Response.json({ data: { issues: { nodes } } })) as any;
+  const asked: number[] = [];
+  const l = lin(config({ sources: [src({ tracker: "linear", team })] }));
+  const got = await withLinearKey(() => linear(l, "box", io, true, [], async () => (asked.push(1), claims)).listReady());
+  return { repos: got.map((t) => t.repo), logs, asked: asked.length };
+}
+
+test("linear routing: ticket label > description line > the repo claiming its project > none", async () => {
+  const web = { id: "p-web", name: "Web app" };
+  const claims = [{ repo: "acme/web", project: "web app" }, { repo: "acme/api", project: "API" }];
+  const r = await listed(
+    [
+      issue("ENG-1", named("agent", "repo:acme/api"), "repo: acme/docs", web),
+      issue("ENG-2", named("agent"), "x\nrepo: acme/api", web),
+      issue("ENG-3", named("agent"), null, web),
+      issue("ENG-4", [{ name: "acme/api", parent: { name: "repo" } }], null, web),
+      issue("ENG-5", named("agent"), "no repo here", null),
+    ],
+    claims,
+  );
+  expect(r.repos).toEqual(["acme/api", "acme/api", "acme/web", "acme/api", undefined]);
+  expect((await listed([issue("ENG-1", named("agent"), "repo: acme/api", web)], claims)).asked).toBe(0);
 });
 
-test("linear repo: project label and label groups", () => {
-  expect(linearRepo([], [undefined, "repo: acme/api"], ["repo:acme/web"])).toBe("acme/web");
-  expect(linearRepo([], ["repo: acme/api"], ["repo:acme/web"])).toBe("acme/api");
-  expect(linearRepo(["repo:acme/api"], [], ["repo:acme/web"])).toBe("acme/api");
-  expect(linearRepo([], [], ["bug"])).toBeUndefined();
-  const node = (labels: object[], projectLabels: object[]) => ({ id: "u", identifier: "PER-1", title: "t", description: null, url: "u", labels: { nodes: labels }, project: { description: "", content: null, labels: { nodes: projectLabels } } });
-  const t = linearTicket(node([{ name: "agent", parent: null }], [{ name: "acme/web", parent: { name: "repo" } }]));
+test("linear routing: a project no repo claims routes nowhere, its own text ignored; team is only checked", async () => {
+  const other = { id: "p-other", name: "Other", description: "repo: acme/web", content: "repo: acme/web", labels: { nodes: named("repo:acme/web") } };
+  expect((await listed([issue("ENG-1", named("agent"), null, other)], [{ repo: "acme/web", project: "Web app" }])).repos).toEqual([undefined]);
+  const ops = await listed([issue("ENG-2", named("agent"), null, { id: "p-ops", name: "Ops" }), issue("ENG-3", named("agent"), null, { id: "p-ops", name: "Ops" })], [{ repo: "acme/api", project: "Ops", team: "OPS" }]);
+  expect(ops.repos).toEqual(["acme/api", "acme/api"]);
+  expect(ops.logs).toEqual(['linear project "Ops" is claimed by acme/api for team OPS, but routes a ENG ticket']);
+  const both = await listed([issue("ENG-4", named("agent"), null, { id: "p-both", name: "Both" })], [{ repo: "acme/web", project: "Both", team: "ENG" }, { repo: "acme/api", project: "Both", team: "OPS" }]);
+  expect(both.repos).toEqual([undefined]);
+});
+
+test("linear routing: a project two repos claim needs an explicit repo, logged once", async () => {
+  const shared = { id: "p-shared", name: "Shared" };
+  const claims = [{ repo: "acme/web", project: "Shared" }, { repo: "acme/api", project: "shared" }];
+  const r = await listed([issue("ENG-1", named("agent"), null, shared), issue("ENG-2", named("agent"), null, shared), issue("ENG-3", named("agent", "repo:acme/api"), null, shared)], claims);
+  expect(r.repos).toEqual([undefined, undefined, "acme/api"]);
+  expect(r.logs).toEqual(['linear project "Shared" is claimed by acme/web, acme/api; its tickets need a repo: label or description line']);
+  expect((await listed([issue("ENG-1", named("agent"), null, shared)], claims)).logs).toEqual([]);
+});
+
+test("linear routing: a renamed project keeps the repo it resolved to while that repo still claims it; a competing claim is ambiguous", async () => {
+  const p = (name: string) => ({ id: "p-store", name });
+  const quiet = () => {};
+  expect(projectRepo([{ repo: "acme/web", project: "Storefront" }], "ENG", p("STOREFRONT"), quiet)).toBe("acme/web");
+  expect(projectRepo([{ repo: "acme/web", project: "Storefront" }], "ENG", p("Shop v2"), quiet)).toBe("acme/web");
+  expect(projectRepo([{ repo: "acme/web", project: "Storefront" }], "ENG", { id: "p-never-seen", name: "Shop v2" }, quiet)).toBeUndefined();
+  expect(projectRepo([{ repo: "acme/web", project: "Shop v2" }, { repo: "acme/api", project: "Storefront" }], "ENG", p("Shop v2"), quiet)).toBe("acme/web");
+  expect(projectRepo([{ repo: "acme/web", project: "Shop v2" }, { repo: "acme/api", project: "Storefront" }], "ENG", p("Shop v2"), quiet)).toBe("acme/web");
+  const logs: string[] = [];
+  expect(projectRepo([{ repo: "acme/web", project: "Shop v2" }, { repo: "acme/api", project: "Shop v3" }], "ENG", p("Shop v3"), (m) => logs.push(m))).toBeUndefined();
+  expect(logs).toEqual(['linear project "Shop v3" is claimed by acme/web, acme/api; its tickets need a repo: label or description line']);
+  const q = (name: string) => ({ id: "p-case", name });
+  expect(projectRepo([{ repo: "acme/web", project: "Storefront" }], "ENG", q("Storefront"), quiet)).toBe("acme/web");
+  expect(projectRepo([{ repo: "acme/web", project: "storefront" }], "ENG", q("Shop"), quiet)).toBe("acme/web");
+  expect(projectRepo([{ repo: "acme/web", project: "STOREFRONT" }, { repo: "acme/api", project: "Shop" }], "ENG", q("Shop"), quiet)).toBeUndefined();
+  expect(LINEAR_ISSUES).toContain("project { id name }");
+});
+
+test("pass: the project map comes from every allowlisted repo's .tender/ on its base branch; allowlist and redirect checks still apply", async () => {
+  const c = config({ maxConcurrent: 4, repos: [{ name: "acme/web", path: join(root, "src-web") }, { name: "acme/api", path: join(root, "src-api") }, { name: "acme/old", path: join(root, "src-old") }], sources: [src({ name: "lin", tracker: "linear", team: "ENG" })] });
+  const yaml: Record<string, string> = { [join(root, "src-web")]: "tracker:\n  linear:\n    project: Web app\n", [join(root, "src-api")]: "tracker:\n  linear:\n    project: API\n    team: ENG\n" };
+  const ready = [issue("ENG-1", named("agent"), null, { id: "p-web2", name: "web APP" }), issue("ENG-2", named("agent"), null, { id: "p-api", name: "API" }), issue("ENG-3", named("agent"), null, { id: "p-none", name: "Nobody" })];
+  mkdirSync(join(root, "src-api"));
+  const comments: string[] = [];
+  const { io, cmds } = fakeIo((a) => {
+    const y = a[0] === "git" ? yaml[a[2]!] : undefined;
+    if (y !== undefined && a[3] === "ls-tree") return { out: a[4] === "-r" ? `100644 blob ${"1".repeat(40)} ${y.length}\t.tender/config.yaml\0` : `040000 tree ${"2".repeat(40)}\t.tender\0` };
+    if (y !== undefined && a[3] === "cat-file") return { out: y };
+    if (a[2] === "view" && a[3] === "acme/api") return { out: '{"nameWithOwner":"evil/api","defaultBranchRef":{"name":"main"}}' };
+    if (a[2] === "view" && a[3] === "acme/old") return { out: '{"nameWithOwner":"acme/new","defaultBranchRef":{"name":"main"}}' };
+    if (a[1] === "list-windows") return windowsOut([]);
+    return a[5] === "--quiet" ? { code: 1 } : noPr(a);
+  });
+  io.fetch = (async (_url: string, init: any) => {
+    const { query, variables } = JSON.parse(init.body);
+    if (query.includes("issues(")) return Response.json({ data: { issues: { nodes: variables.f.state.name.eq === "Todo" ? ready : [] } } });
+    if (query.includes("commentCreate")) return comments.push(`${variables.i.issueId} ${variables.i.body}`), Response.json({ data: { commentCreate: { success: true } } });
+    if (query.includes("workflowStates")) return Response.json({ data: { workflowStates: { nodes: [{ id: "s", name: "In Progress", team: { id: "t" } }] } } });
+    return Response.json({ data: { issueUpdate: { success: true } } });
+  }) as any;
+  await withLinearKey(() => pass(c, io, makeTracker, "/tender"));
+  expect(cmds.filter((x) => x.includes(" new-window ")).map((x) => x.split(" ").at(-2))).toEqual(["acme/web/ENG-1"]);
+  expect(cmds.filter((x) => x.startsWith("gh repo clone ")).map((x) => x.split(" ")[3])).toEqual(["acme/web"]);
+  expect(comments).toEqual([
+    "ENG-1 tender: picked up on box",
+    "ENG-2 tender: repo acme/api now resolves to evil/api on GitHub, which is not in the tender allowlist",
+    "ENG-3 tender: no repo set on this ticket: add a `repo:owner/name` label or a `repo: owner/name` line to its description, or have exactly one repo claim its Linear project in .tender/config.yaml",
+  ]);
+  expect(cmds.filter((x) => / fetch origin main$/.test(x)).map((x) => x.split(" ")[2]).sort()).toEqual([join(root, "src-api"), join(root, "src-web"), join(root, "src-web")]);
+});
+
+test("pass: while any repo's claims cannot be read, project-routed tickets wait without a comment; explicit ones still start", async () => {
+  const c = config({ maxConcurrent: 4, repos: [{ name: "acme/web", path: join(root, "src-web") }, { name: "acme/api", path: join(root, "src-api") }], sources: [src({ name: "lin", tracker: "linear", team: "ENG" })] });
+  const yaml: Record<string, string> = { [join(root, "src-web")]: "tracker:\n  linear:\n    project: Shared\n", [join(root, "src-api")]: "tracker:\n  linear:\n    project: Shared\n" };
+  const ready = [issue("ENG-1", named("agent"), null, { id: "p-shared2", name: "Shared" }), issue("ENG-2", named("agent", "repo:acme/web"), null, { id: "p-shared2", name: "Shared" })];
+  let failApi: "fetch" | "yaml" | undefined = "fetch";
+  const comments: string[] = [];
+  const { io, cmds, logs } = fakeIo((a) => {
+    if (a[0] === "git" && a[2] === join(root, "src-api") && failApi === "fetch" && a[3] === "fetch") return { code: 1, err: "network down" };
+    const y = a[0] === "git" ? (failApi === "yaml" && a[2] === join(root, "src-api") ? "agent: gpt\n" : yaml[a[2]!]) : undefined;
+    if (y !== undefined && a[3] === "ls-tree") return { out: a[4] === "-r" ? `100644 blob ${"1".repeat(40)} ${y.length}\t.tender/config.yaml\0` : `040000 tree ${"2".repeat(40)}\t.tender\0` };
+    if (y !== undefined && a[3] === "cat-file") return { out: y };
+    if (a[1] === "list-windows") return windowsOut([]);
+    return a[5] === "--quiet" ? { code: 1 } : noPr(a);
+  });
+  io.fetch = (async (_url: string, init: any) => {
+    const { query, variables } = JSON.parse(init.body);
+    if (query.includes("issues(")) return Response.json({ data: { issues: { nodes: variables.f.state.name.eq === "Todo" ? ready : [] } } });
+    if (query.includes("commentCreate")) return comments.push(`${variables.i.issueId} ${variables.i.body}`), Response.json({ data: { commentCreate: { success: true } } });
+    if (query.includes("workflowStates")) return Response.json({ data: { workflowStates: { nodes: [{ id: "s", name: "In Progress", team: { id: "t" } }] } } });
+    return Response.json({ data: { issueUpdate: { success: true } } });
+  }) as any;
+  await withLinearKey(() => pass(c, io, makeTracker, "/tender"));
+  expect(cmds.filter((x) => x.includes(" new-window ")).map((x) => x.split(" ").at(-2))).toEqual(["acme/web/ENG-2"]);
+  expect(comments).toEqual(["ENG-2 tender: picked up on box"]);
+  expect(logs.some((l) => l.startsWith("acme/api: linear project map unavailable, project-routed tickets wait:"))).toBe(true);
+  failApi = "yaml";
+  ready.pop();
+  await withLinearKey(() => pass(c, io, makeTracker, "/tender"));
+  expect(comments).toHaveLength(1);
+  expect(logs.some((l) => l.includes("acme/api: linear project map unavailable, project-routed tickets wait: invalid .tender/"))).toBe(true);
+  failApi = undefined;
+  setBaseSha("b".repeat(40));
+  await withLinearKey(() => pass(c, io, makeTracker, "/tender"));
+  expect(comments.at(-1)).toStartWith("ENG-1 tender: no repo set on this ticket");
+  expect(logs.filter((l) => l.includes('linear project "Shared" is claimed by acme/web, acme/api'))).toHaveLength(1);
+});
+
+test("pass: a failed map waits for every clone it started, so an explicit start in that repo does not clone it twice", async () => {
+  const c = config({ maxConcurrent: 4, repos: [{ name: "acme/web", path: join(root, "src-web") }, { name: "acme/api", path: join(root, "src-api") }], sources: [src({ name: "lin", tracker: "linear", team: "ENG" })] });
+  mkdirSync(join(root, "src-api"));
+  const ready = [issue("ENG-1", named("agent"), null, { id: "p-race", name: "Race" }), issue("ENG-2", named("agent", "repo:acme/web"), null, null)];
+  const fake = fakeIo((a) => (a[0] === "git" && a[2] === join(root, "src-api") && a[3] === "fetch" ? { code: 1, err: "network down" } : a[1] === "list-windows" ? windowsOut([]) : a[5] === "--quiet" ? { code: 1 } : noPr(a)));
+  const run = fake.io.run;
+  fake.io.run = async (argv, cwd, secs) => (argv[1] === "repo" && argv[2] === "clone" && (await Bun.sleep(20)), run(argv, cwd, secs));
+  fake.io.fetch = (async (_url: string, init: any) => {
+    const { query, variables } = JSON.parse(init.body);
+    if (query.includes("issues(")) return Response.json({ data: { issues: { nodes: variables.f.state.name.eq === "Todo" ? ready : [] } } });
+    if (query.includes("workflowStates")) return Response.json({ data: { workflowStates: { nodes: [{ id: "s", name: "In Progress", team: { id: "t" } }] } } });
+    return Response.json({ data: { issueUpdate: { success: true }, commentCreate: { success: true } } });
+  }) as any;
+  await withLinearKey(() => pass(c, fake.io, makeTracker, "/tender"));
+  expect(fake.cmds.filter((x) => x.startsWith("gh repo clone acme/web "))).toHaveLength(1);
+  expect(fake.cmds.filter((x) => x.includes(" new-window ")).map((x) => x.split(" ").at(-2))).toEqual(["acme/web/ENG-2"]);
+});
+
+test("linear repo: label groups read as group:name", () => {
+  const t = linearTicket(issue("PER-1", [{ name: "agent", parent: null }, { name: "acme/web", parent: { name: "repo" } }], null, null));
   expect(t.repo).toBe("acme/web");
-  expect(t.labels).toEqual(["agent"]);
-  expect(linearTicket(node([{ name: "acme/api", parent: { name: "repo" } }], [{ name: "acme/web", parent: { name: "repo" } }])).repo).toBe("acme/api");
-  expect(linearTicket(node([], [{ name: "acme/web", parent: { name: "other" } }])).repo).toBeUndefined();
-  expect(LINEAR_ISSUES).toContain("project { description content labels { nodes { name parent { name } } } }");
+  expect(t.labels).toEqual(["agent", "repo:acme/web"]);
+  expect(linearTicket(issue("PER-1", [{ name: "acme/web", parent: { name: "other" } }], null, null)).repo).toBeUndefined();
 });
 
 test("linear adapter: every comment starts with tender:", async () => {

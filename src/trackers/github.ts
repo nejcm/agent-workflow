@@ -39,7 +39,7 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
   const skip = [l.inProgressLabel, l.inReviewLabel, l.needsHumanLabel];
   const edit = (t: Ticket, add: string, rm?: string) => write(io, ["gh", "issue", "edit", t.ref, "--repo", t.repo!, "--add-label", add, ...(rm ? ["--remove-label", rm] : [])]);
   const create = (t: Ticket, title: string, body: string, extra: string[] = []) => write(io, ["gh", "issue", "create", "--repo", t.repo!, ...extra, "--title", title, "--body", body]);
-  const comment = async (t: Ticket, body: string) => { await write(io, ["gh", "issue", "comment", t.ref, "--repo", t.repo!, "--body", `aw: ${body}`]); };
+  const comment = async (t: Ticket, body: string) => { await write(io, ["gh", "issue", "comment", t.ref, "--repo", t.repo!, "--body", `tender: ${body}`]); };
   return {
     globalIds: false,
     restartHint: () => `remove the ${l.inProgressLabel} label`,

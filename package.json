@@ -1,5 +1,5 @@
 {
-  "name": "aw",
+  "name": "tender",
   "private": true,
   "description": "Start sandboxed Claude Code or Codex sessions for ready GitHub issues and Linear tickets",
   "license": "MIT",
@@ -8,9 +8,9 @@
     "start": "scripts/run.sh",
     "once": "scripts/run.sh once",
     "service": "scripts/run.sh service",
-    "status": "bun aw.ts status",
-    "watch": "bun aw.ts watch",
-    "dry": "bun aw.ts once --dry-run",
+    "status": "bun tender.ts status",
+    "watch": "bun tender.ts watch",
+    "dry": "bun tender.ts once --dry-run",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import type { Io, Ticket, Tracker } from "./types";
-import { clean, put, readAw, readIn, strip } from "./util";
+import { clean, put, readRun, readIn, strip } from "./util";
 
 export interface Finding {
   title: string;
@@ -50,7 +50,7 @@ const HASH = /^[0-9a-f]{64}$/;
 const issueUrl = (u: string, origin: string) =>
   u.startsWith(`${origin}/`) && /^\/[\w.-]+\/(?:[\w.-]+\/issues\/\d+|issue\/[A-Za-z0-9]+-\d+(?:\/[\w-]*)?)$/.test(u.slice(origin.length));
 
-// The sidecar is aw-written and outside the sandbox; still, anything off throws, so nothing is filed or posted (fail closed).
+// The sidecar is tender-written and outside the sandbox; still, anything off throws, so nothing is filed or posted (fail closed).
 function readFiled(dir: string, id: string, origin: string): Filed[] {
   const raw = readIn(dir, `${id}.findings`, MAX_FILED_BYTES);
   if (raw === undefined) return [];
@@ -71,7 +71,7 @@ export async function fileFindings(t: Ticket, tr: Tracker, io: Io, dir: string) 
   const origin = new URL(t.url).origin;
   const filed = readFiled(dir, t.id, origin);
   try {
-    const raw = readAw(join(dir, t.id), "findings.json", MAX_FINDINGS_BYTES);
+    const raw = readRun(join(dir, t.id), "findings.json", MAX_FINDINGS_BYTES);
     for (const f of raw === undefined ? [] : parseFindings(raw)) {
       const h = hashOf(f);
       if (filed.some((r) => r.h === h)) continue;
@@ -79,7 +79,7 @@ export async function fileFindings(t: Ticket, tr: Tracker, io: Io, dir: string) 
       const r: Filed = { h, title: f.title, url: null, posted: false };
       filed.push(r);
       put(io, file, JSON.stringify(filed));
-      const body = `${f.body}\n\n---\nFiled by aw from the agent session on ${t.id} (${t.url}): agent-written, not reviewed by a human.`.trimStart();
+      const body = `${f.body}\n\n---\nFiled by tender from the agent session on ${t.id} (${t.url}): agent-written, not reviewed by a human.`.trimStart();
       const url = await tr.createTicket(t, f.title, body);
       if (issueUrl(url, origin)) r.url = url;
       else io.log(`findings ${t.id}: unexpected ticket URL ${clean(url)}, recorded as not confirmed filed`);
@@ -92,16 +92,16 @@ export async function fileFindings(t: Ticket, tr: Tracker, io: Io, dir: string) 
 
 const LINKS = "out-of-scope findings from this session, filed as new tickets (not picked up automatically):";
 
-// The marker line lets a retry see a comment that posted though its response or the sidecar write was lost.
+// The marker line lets a retry see a comment that posted though its response or the sidecar write was lost. Reads aw's pre-rename comments too.
 async function postLinks(t: Ticket, tr: Tracker, io: Io, file: string, filed: Filed[]) {
   const seen = new Set(
-    (await tr.comments(t, 0)).filter((c) => c.body.trimStart().startsWith(`aw: ${LINKS}`)).flatMap((c) => [...c.body.matchAll(/^aw-findings((?: [0-9a-f]{12})+)[ \t]*$/gm)].flatMap((m) => m[1]!.trim().split(" "))),
+    (await tr.comments(t, 0)).filter((c) => ["aw", "tender"].some((p) => c.body.trimStart().startsWith(`${p}: ${LINKS}`))).flatMap((c) => [...c.body.matchAll(/^(?:aw|tender)-findings((?: [0-9a-f]{12})+)[ \t]*$/gm)].flatMap((m) => m[1]!.trim().split(" "))),
   );
   for (const r of filed) if (seen.has(r.h.slice(0, 12))) r.posted = true;
   const pending = filed.filter((r) => !r.posted);
   if (pending.length) {
     const lines = pending.map((r) => `- ${r.url ? `${r.url} ` : "not confirmed filed: "}${unmention(clean(r.title, 120))}`);
-    const marker = `aw-findings ${pending.map((r) => r.h.slice(0, 12)).join(" ")}`;
+    const marker = `tender-findings ${pending.map((r) => r.h.slice(0, 12)).join(" ")}`;
     await tr.comment(t, `${LINKS}\n${lines.join("\n")}\n\n${marker}`);
     for (const r of pending) r.posted = true;
   }

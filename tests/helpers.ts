@@ -8,7 +8,7 @@ import { CREDENTIALS } from "../src/claude-auth";
 import { parseConfig } from "../src/config";
 import { canonCache } from "../src/github";
 import type { Config, GitHubSource, Io, LinearSource, Ticket, Tracker } from "../src/types";
-import { AW_DIR, GIT, hasLabel } from "../src/util";
+import { TENDER_DIR, GIT, hasLabel } from "../src/util";
 
 export let root: string;
 // Called per test file: bun shares this module across files, so top-level hooks would only bind to the first.
@@ -22,8 +22,8 @@ export function session(dir: string, o: object) {
 
 export function useTempRoot() {
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "aw-test-"));
-    mkdirSync(join(root, ".claude-aw"));
+    root = mkdtempSync(join(tmpdir(), "tender-test-"));
+    mkdirSync(join(root, ".claude-tender"));
     writeFileSync(join(root, CLAUDE_TOKEN), "tok");
     mkdirSync(join(root, ".claude"));
     writeFileSync(join(root, CREDENTIALS), JSON.stringify({ claudeAiOauth: { accessToken: "a", refreshToken: "r", expiresAt: Date.now() + 3_600_000, refreshTokenExpiresAt: Date.now() + 7 * 86_400_000, scopes: ["user:inference"] } }));
@@ -43,7 +43,7 @@ export const raw = (over: object = {}) => ({
   sources: [src()],
   ...over,
 });
-export const config = (over: object = {}): Config => parseConfig(raw(over), AW_DIR);
+export const config = (over: object = {}): Config => parseConfig(raw(over), TENDER_DIR);
 export const web = (c: Config) => c.repos["acme/web"]!;
 export const ticket = (n: number, repo = "acme/web"): Ticket => ({ id: `gh-${n}`, ref: String(n), title: `Fix thing ${n}`, body: "body; rm -rf ~ $(whoami)", url: `https://x/${n}`, repo });
 
@@ -126,8 +126,8 @@ export const claudeFile = (wt: string, name: string, ...lines: string[]) => {
 };
 export const writePhases = (id: string, phases: unknown) => {
   worktree(id);
-  mkdirSync(join(root, "acme/web", id, ".aw"), { recursive: true });
-  writeFileSync(join(root, "acme/web", id, ".aw/phases.json"), typeof phases === "string" ? phases : JSON.stringify(phases));
+  mkdirSync(join(root, "acme/web", id, ".tender/run"), { recursive: true });
+  writeFileSync(join(root, "acme/web", id, ".tender/run/phases.json"), typeof phases === "string" ? phases : JSON.stringify(phases));
 };
 export const phase = (key: string, status: unknown, over: object = {}) => ({ key, title: `Do ${key}`, body: "b", status, ...over });
 

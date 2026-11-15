@@ -5,7 +5,7 @@ import { AGENTS, CLAUDE_TOKEN, claudeHome, codexHome, tmpHome } from "./agents";
 import { checkLogin, findBun, readLogin } from "./claude-auth";
 import { repoDir } from "./config";
 import type { Config, Io, Repo, Source, Ticket, Tracker } from "./types";
-import { GIT, inAw, put, read, remove, write } from "./util";
+import { GIT, inDir, inRun, put, read, remove, write } from "./util";
 
 export const render = (tpl: string, vars: Record<string, string>) => tpl.replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? m);
 
@@ -13,10 +13,10 @@ export const render = (tpl: string, vars: Record<string, string>) => tpl.replace
 export const SLOW_SECS = 900;
 const q = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 
-export const nonoRun = (profile: string, awDir: string, grants: [string, string][], quote = (s: string) => s) =>
-  ["nono", "run", "--no-rollback-prompt", "--profile", quote(join(awDir, "nono", `${profile}.json`)), ...grants.flatMap(([flag, path]) => [flag, quote(path)]), "--"];
+export const nonoRun = (profile: string, tenderDir: string, grants: [string, string][], quote = (s: string) => s) =>
+  ["nono", "run", "--no-rollback-prompt", "--profile", quote(join(tenderDir, "nono", `${profile}.json`)), ...grants.flatMap(([flag, path]) => [flag, quote(path)]), "--"];
 
-const scopePrefix = (cfg: Config) => `aw-${createHash("sha256").update(cfg.workspaceRoot).digest("hex").slice(0, 8)}`;
+const scopePrefix = (cfg: Config) => `tender-${createHash("sha256").update(cfg.workspaceRoot).digest("hex").slice(0, 8)}`;
 
 /** The session's systemd user scope, prefixed per workspace; ':' is in no repo key or ticket id, so names never collide. */
 export const scopeUnit = (cfg: Config, key: string, id: string) => `${scopePrefix(cfg)}:${key.replace("/", ":")}:${id}.scope`;
@@ -40,22 +40,22 @@ export async function sweepScopes(cfg: Config, io: Io, cgroup = cgroupOf) {
   // Units first: a scope listed already holds its pane's pid, so a session starting meanwhile is never taken for an orphan.
   const out = await read(io, ["systemctl", "--user", "list-units", "--type=scope", "--plain", "--no-legend", `${scopePrefix(cfg)}:*`]);
   const pids = await read(io, ["tmux", "list-panes", "-s", "-t", `=${cfg.tmuxSession}`, "-F", "#{pane_pid}"]);
-  const live = new Set(pids.split("\n").filter(Boolean).map((pid) => /\/(aw-[^/]+\.scope)$/m.exec(cgroup(pid))?.[1]));
+  const live = new Set(pids.split("\n").filter(Boolean).map((pid) => /\/(tender-[^/]+\.scope)$/m.exec(cgroup(pid))?.[1]));
   for (const unit of out.split("\n").map((l) => l.trim().split(/\s+/)[0])) if (unit && !live.has(unit)) await write(io, ["systemctl", "--user", "kill", "--signal=KILL", unit]);
 }
 
-export function launcher(l: Repo, wt: string, promptFile: string, unit: string, awDir: string, bun: string) {
+export function launcher(l: Repo, wt: string, promptFile: string, unit: string, tenderDir: string, bun: string) {
   const prompt = `"$(cat ${q(promptFile)})"`;
   const nono = l.sandbox === "nono";
   const git = join(l.path, ".git");
   const own = [claudeHome(wt), codexHome(wt)].map((p): [string, string] => ["--allow", p]);
   const tmp = tmpHome(wt);
   const grants: [string, string][] = [["--allow", wt], ["--allow-unix-socket-subtree-bind", wt], ["--allow", tmp], ["--allow-unix-socket-subtree-bind", tmp], ...own, ["--read", join(git, "objects")]];
-  const wrap = nono ? nonoRun(`aw-${l.agent}`, awDir, grants, q) : [];
+  const wrap = nono ? nonoRun(`tender-${l.agent}`, tenderDir, grants, q) : [];
   const [env, cmd] = AGENTS[l.agent].launch(q(wt), prompt, nono);
   // gh exits if it cannot read its config dir; <ID>.gh is never created, so gh runs on defaults plus nono's GH_TOKEN.
   // A private XDG cache: the host's ~/.cache (Claude's claude-cli-nodejs included) stays out of the sandbox.
-  const box = nono ? `unset CLAUDE_CODE_OAUTH_TOKEN\nexport GH_CONFIG_DIR=${q(wt)}.gh XDG_CACHE_HOME=${q(join(tmp, "cache"))} AW_BUN=${q(bun)}\n` : "";
+  const box = nono ? `unset CLAUDE_CODE_OAUTH_TOKEN\nexport GH_CONFIG_DIR=${q(wt)}.gh XDG_CACHE_HOME=${q(join(tmp, "cache"))} TENDER_BUN=${q(bun)}\n` : "";
   const scope = ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--unit", q(unit), "--"];
   return `#!/usr/bin/env bash\ncd ${q(wt)} || exit 1\nunset LINEAR_API_KEY\nexport TMPDIR=${q(tmp)} TMP=${q(tmp)} TEMP=${q(tmp)}\n${box}${env}\nexec ${[...scope, ...wrap, ...cmd].join(" ")}\n`;
 }
@@ -92,7 +92,7 @@ const pick = (o: any, keys: string[]) => Object.fromEntries(keys.filter((k) => o
 
 // Fresh per start, so nothing a session left there carries over. Account keys come from the host login's ~/.claude.json; trust goes on the session clone.
 export function seedClaude(io: Io, dir: string, root: string) {
-  const tpl = join(io.home, ".claude-aw");
+  const tpl = join(io.home, ".claude-tender");
   io.log(`${io.dry ? "dry: " : ""}seed ${dir} from ${tpl}`);
   if (io.dry) return;
   rmSync(dir, { recursive: true, force: true });
@@ -108,19 +108,19 @@ export function seedClaude(io: Io, dir: string, root: string) {
 }
 
 /** The ChatGPT login sessions copy, relative to home; only the host holds and uses its refresh token. */
-export const CODEX_AUTH = ".codex-aw/auth.json";
+export const CODEX_AUTH = ".codex-tender/auth.json";
 const REFRESH_MARGIN = 24 * 3600_000;
 // What an access-token ChatGPT login needs; API keys, PATs, Bedrock keys and anything newer stay on the host.
 const LOGIN = ["auth_mode", "last_refresh"];
 const TOKENS = ["id_token", "access_token", "account_id", "login_owner_id"];
 // app-server's `account/read` with `refreshToken` forces a refresh. flock: two concurrent refreshes of a rotating token invalidate the login.
-// A login changed while waiting ($2 is the stamp aw read) was already refreshed; app-server never holds the lock.
+// A login changed while waiting ($2 is the stamp tender read) was already refreshed; app-server never holds the lock.
 const REFRESH = [
   'export CODEX_HOME="$1"',
   'exec {L}<"$CODEX_HOME" && flock -w 30 "$L" || exit 1',
   `[[ $(stat -c '%i %.9Y' "$CODEX_HOME/auth.json") == "$2" ]] || exit 0`,
   'coproc APP { exec {L}<&- codex app-server 2>/dev/null; }',
-  `printf '%s\\n' '{"method":"initialize","id":0,"params":{"clientInfo":{"name":"aw","version":"1"}}}' '{"method":"initialized"}' '{"method":"account/read","id":1,"params":{"refreshToken":true}}' >&"\${APP[1]}"`,
+  `printf '%s\\n' '{"method":"initialize","id":0,"params":{"clientInfo":{"name":"tender","version":"1"}}}' '{"method":"initialized"}' '{"method":"account/read","id":1,"params":{"refreshToken":true}}' >&"\${APP[1]}"`,
   `while IFS= read -r l <&"\${APP[0]}"; do [[ $l == '{"id":1,'* ]] && { exec {APP[1]}>&-; wait; exit 0; }; done`,
   "exit 1",
 ].join("\n");
@@ -128,7 +128,7 @@ export const authStamp = (file: string) => {
   const s = statSync(file, { bigint: true, throwIfNoEntry: false });
   return s ? `${s.ino} ${s.mtimeNs / 1_000_000_000n}.${String(s.mtimeNs % 1_000_000_000n).padStart(9, "0")}` : "";
 };
-export const codexRefresh = (home: string, seen: string) => ["bash", "-c", REFRESH, "aw-codex-refresh", join(home, ".codex-aw"), seen];
+export const codexRefresh = (home: string, seen: string) => ["bash", "-c", REFRESH, "tender-codex-refresh", join(home, ".codex-tender"), seen];
 
 const expiresAt = (o: any) => {
   try {
@@ -142,7 +142,7 @@ const expiresAt = (o: any) => {
 /** The template's ChatGPT login, allowlisted, with an empty refresh token (Codex rejects a missing one); refreshed on the host first when it expires within a day. */
 export async function codexLogin(io: Io, now = Date.now()) {
   const file = join(io.home, CODEX_AUTH);
-  const fix = `run \`CODEX_HOME=~/.codex-aw codex login\``;
+  const fix = `run \`CODEX_HOME=~/.codex-tender codex login\``;
   const load = () => {
     let o: any;
     try {
@@ -163,18 +163,18 @@ export async function codexLogin(io: Io, now = Date.now()) {
 }
 
 
-/** A warning when the template config lacks aw's Codex state hooks, without which answers and PR feedback are never delivered. */
+/** A warning when the template config lacks tender's Codex state hooks, without which answers and PR feedback are never delivered. */
 export function codexHooksWarning(home: string) {
-  const file = join(home, ".codex-aw/config.toml");
+  const file = join(home, ".codex-tender/config.toml");
   const lines = existsSync(file) ? readFileSync(file, "utf8").split("\n") : [];
   // Same rule as scripts/codex-hooks.sh: exactly one begin line, then exactly one end line.
-  const marks = lines.flatMap((l) => (l === "# >>> aw state hooks (managed by scripts/codex-hooks.sh)" ? "b" : l === "# <<< aw state hooks" ? "e" : [])).join("");
-  if (marks !== "be") return `${file} lacks aw's state hooks or their markers are damaged, so the session never reads idle and gets no answers or PR feedback: remove any damaged markers, then run \`scripts/codex-hooks.sh ~/.codex-aw/config.toml\``;
+  const marks = lines.flatMap((l) => (l === "# >>> tender state hooks (managed by scripts/codex-hooks.sh)" ? "b" : l === "# <<< tender state hooks" ? "e" : [])).join("");
+  if (marks !== "be") return `${file} lacks tender's state hooks or their markers are damaged, so the session never reads idle and gets no answers or PR feedback: remove any damaged markers, then run \`scripts/codex-hooks.sh ~/.codex-tender/config.toml\``;
 }
 
 // Same as seedClaude; `login` is codexLogin's copy, the session's own credential.
 export function seedCodex(io: Io, dir: string, login: string | undefined, root: string) {
-  const tpl = join(io.home, ".codex-aw");
+  const tpl = join(io.home, ".codex-tender");
   io.log(`${io.dry ? "dry: " : ""}seed ${dir} from ${tpl}`);
   if (io.dry) return;
   rmSync(dir, { recursive: true, force: true });
@@ -200,7 +200,7 @@ const trusted = (toml: string, root: string) => {
   }
 };
 
-// Shares the base clone's objects (--shared): the session never writes the base, and aw never prunes it (maintenance.auto=false, gc.pruneExpire=never).
+// Shares the base clone's objects (--shared): the session never writes the base, and tender never prunes it (maintenance.auto=false, gc.pruneExpire=never).
 async function cloneSession(io: Io, r: Repo, wt: string, branch: string) {
   const old = await io.run([...GIT, "-C", r.path, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]);
   const url = (await read(io, [...GIT, "-C", r.path, "remote", "get-url", "origin"])).trim();
@@ -210,7 +210,7 @@ async function cloneSession(io: Io, r: Repo, wt: string, branch: string) {
   const tmp = `${wt}.tmp`;
   if (!io.dry) rmSync(tmp, { recursive: true, force: true });
   try {
-    // file:// only for this copy of aw's own clone; the session clone then pushes to the real origin.
+    // file:// only for this copy of tender's own clone; the session clone then pushes to the real origin.
     await write(io, [...GIT, "-c", "protocol.file.allow=always", "-c", "advice.detachedHead=false", "clone", "-q", "--shared", "--revision", base, "--", r.path, tmp], undefined, SLOW_SECS);
     for (const a of [["remote", "set-url", "origin", url], ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"], ["config", "remote.origin.tagOpt", "--no-tags"], ["update-ref", base, "HEAD"]]) await write(io, [...GIT, "-C", tmp, ...a]);
     // A branch left in the base by a legacy worktree keeps its commits.
@@ -223,7 +223,7 @@ async function cloneSession(io: Io, r: Repo, wt: string, branch: string) {
   if (!io.dry) renameSync(tmp, wt);
 }
 
-export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Tracker, io: Io, awDir: string) {
+export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Tracker, io: Io, tenderDir: string) {
   const dir = repoDir(cfg, r.key);
   const wt = join(dir, t.id);
   const branch = `agent/${t.id}`;
@@ -256,14 +256,15 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   seedCodex(io, codexHome(wt), login, root);
   if (r.agent === "claude" || nono) seedClaude(io, claudeHome(wt), root);
   const vars = { id: t.id, title: t.title, body: t.body, url: t.url, branch, base: r.baseBranch, testCmd: r.testCmd, repo: r.key, planStep: r.planStep };
-  io.log(`${io.dry ? "dry: " : ""}write ${join(wt, ".aw", ".gitignore")}`);
+  io.log(`${io.dry ? "dry: " : ""}write ${join(wt, ".tender", "run", ".gitignore")}`);
   if (!io.dry) {
-    mkdirSync(join(wt, ".aw"), { recursive: true });
+    mkdirSync(join(wt, ".tender"), { recursive: true });
+    inDir(join(wt, ".tender"), (d) => mkdirSync(`${d}/run`, { recursive: true }));
     // Unlink + exclusive create: never write through a symlink or hardlink the agent left there.
-    inAw(wt, (d) => (rmSync(`${d}/.gitignore`, { force: true }), writeFileSync(`${d}/.gitignore`, "*\n", { flag: "wx" })));
+    inRun(wt, (d) => (rmSync(`${d}/.gitignore`, { force: true }), writeFileSync(`${d}/.gitignore`, "*\n", { flag: "wx" })));
   }
   put(io, promptFile, render(readFileSync(r.prompt, "utf8"), vars));
-  put(io, script, launcher(r, wt, promptFile, scopeUnit(cfg, r.key, t.id), awDir, bun), 0o755);
+  put(io, script, launcher(r, wt, promptFile, scopeUnit(cfg, r.key, t.id), tenderDir, bun), 0o755);
   // Claimed last, so a failed start leaves the ticket ready; `<ID>.claim` goes first, so a claim lost to an error or a crash is retried while the window lives.
   const pending = join(dir, `${t.id}.claim`);
   put(io, pending, new Date().toISOString());

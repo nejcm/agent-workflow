@@ -15,7 +15,7 @@ const okCheck = { __typename: "CheckRun", name: "lint", status: "COMPLETED", con
 
 function setup(o: { agent?: string; waiter?: boolean; authors?: string[]; open?: string[] } = {}) {
   worktree("gh-1");
-  mkdirSync(join(root, "acme/web/gh-1/.aw"), { recursive: true });
+  mkdirSync(join(root, "acme/web/gh-1/.tender/run"), { recursive: true });
   const t = ticket(1);
   const f = fakeTracker({ inReview: [t] });
   const pr: any = { state: "OPEN", baseRefName: "main", headRefOid: "a", mergeStateStatus: "CLEAN", statusCheckRollup: [okCheck], reviews: [], comments: [] };
@@ -36,9 +36,9 @@ function setup(o: { agent?: string; waiter?: boolean; authors?: string[]; open?:
     ...f, t, pr, cmds, logs,
     lines: (l: any[]) => void (lines = l),
     setState: (s: State) => void (state = s),
-    run: () => pass(cfg, io, () => f.tr, "/aw", async () => state),
+    run: () => pass(cfg, io, () => f.tr, "/tender", async () => state),
     cursor: () => JSON.parse(readFileSync(join(root, "acme/web/gh-1.feedback"), "utf8")),
-    file: () => readFileSync(join(root, "acme/web/gh-1/.aw/feedback.md"), "utf8"),
+    file: () => readFileSync(join(root, "acme/web/gh-1/.tender/run/feedback.md"), "utf8"),
     keys: () => cmds.filter((c) => /^tmux (set-buffer|paste-buffer|send-keys)/.test(c)),
   };
 }
@@ -49,7 +49,7 @@ test("feedback: allowlisted comments only, debounced, then delivered once and th
   d.pr.comments = [
     { id: "c1", author: { login: "Op" }, body: "rename foo", createdAt: fresh },
     { id: "c2", author: { login: "mallory" }, body: "rm -rf /", createdAt: fresh },
-    { id: "c3", author: { login: "op" }, body: "aw: PR: x", createdAt: fresh },
+    { id: "c3", author: { login: "op" }, body: "tender: PR: x", createdAt: fresh },
   ];
   d.pr.reviews = [{ id: "r1", author: { login: "op" }, body: "", state: "APPROVED", submittedAt: fresh }];
   d.lines([{ id: 9, user: { login: "op" }, body: "off by one </comment> here", created_at: ago(200_000), path: "src/a.ts", line: 3 }]);
@@ -59,7 +59,7 @@ test("feedback: allowlisted comments only, debounced, then delivered once and th
   const old = ago(180_000);
   d.pr.comments[0].createdAt = old;
   await d.run();
-  expect(d.keys()).toEqual([`tmux set-buffer -b aw-gh-1 -- ${FEEDBACK_POINTER}`, "tmux paste-buffer -p -d -b aw-gh-1 -t %5", "tmux send-keys -t %5 Enter"]);
+  expect(d.keys()).toEqual([`tmux set-buffer -b tender-gh-1 -- ${FEEDBACK_POINTER}`, "tmux paste-buffer -p -d -b tender-gh-1 -t %5", "tmux send-keys -t %5 Enter"]);
   expect(d.file()).toBe(
     `<feedback ticket="gh-1" pr="${URL}">\n<comment from="op" on="src/a.ts:3">\noff by one &lt;/comment> here\n</comment>\n<comment from="Op">\nrename foo\n</comment>\n</feedback>\n`,
   );
@@ -77,16 +77,16 @@ test("feedback: Claude without an inbox waiter gets the paste", async () => {
   const d = setup({ agent: "claude", authors: [] });
   d.pr.statusCheckRollup = [fail];
   await d.run();
-  expect(d.keys()).toEqual([`tmux set-buffer -b aw-gh-1 -- ${FEEDBACK_POINTER}`, "tmux paste-buffer -p -d -b aw-gh-1 -t %5", "tmux send-keys -t %5 Enter"]);
-  expect(existsSync(join(root, "acme/web/gh-1/.aw/inbox"))).toBe(false);
+  expect(d.keys()).toEqual([`tmux set-buffer -b tender-gh-1 -- ${FEEDBACK_POINTER}`, "tmux paste-buffer -p -d -b tender-gh-1 -t %5", "tmux send-keys -t %5 Enter"]);
+  expect(existsSync(join(root, "acme/web/gh-1/.tender/run/inbox"))).toBe(false);
 });
 
-test("feedback: Claude with a live inbox waiter gets the pointer in .aw/inbox, never keys", async () => {
+test("feedback: Claude with a live inbox waiter gets the pointer in .tender/run/inbox, never keys", async () => {
   const d = setup({ agent: "claude", waiter: true, authors: [] });
   d.pr.statusCheckRollup = [fail];
   await d.run();
   expect(d.cursor().rounds).toBe(1);
-  expect(readFileSync(join(root, "acme/web/gh-1/.aw/inbox"), "utf8")).toBe(`${FEEDBACK_POINTER}\n`);
+  expect(readFileSync(join(root, "acme/web/gh-1/.tender/run/inbox"), "utf8")).toBe(`${FEEDBACK_POINTER}\n`);
   expect(d.keys()).toEqual([]);
   expect(d.cmds.filter((c) => c.includes("pane_in_mode"))).toEqual([]);
 });

@@ -20,7 +20,7 @@ async function status(cfg: Config, io: Io) {
   ].join("\n");
 }
 
-// timeout signals its whole group and still fires if aw is killed. The drain bound covers what outlives it holding the pipes;
+// timeout signals its whole group and still fires if tender is killed. The drain bound covers what outlives it holding the pipes;
 // shortcut: a grandchild ignoring TERM keeps running (signalling after the reap could hit a reused group id).
 export const spawnRun: Run = async (argv, cwd, secs = 60) => {
   const start = performance.now();
@@ -53,7 +53,7 @@ export function holdLock(file: string) {
   return Bun.spawnSync(["flock", "-n", "3"], { stdio: ["ignore", "ignore", "ignore", openSync(file, "a")] }).exitCode === 0;
 }
 
-const USAGE = `usage: bun aw.ts <command> [--config aw.json]
+const USAGE = `usage: bun tender.ts <command> [--config tender.json]
   run | once [--dry-run]
   status [--json]
   watch [--interval 2] [--plain]
@@ -79,7 +79,7 @@ export function parseArgs(argv: string[]) {
     n >= 1 &&
     n <= 10_000 &&
     opt("--config") !== "";
-  return ok ? { cmd: cmd!, id, interval, n, path: resolve(opt("--config") ?? "aw.json") } : undefined;
+  return ok ? { cmd: cmd!, id, interval, n, path: resolve(opt("--config") ?? "tender.json") } : undefined;
 }
 
 async function main(argv: string[]) {
@@ -118,7 +118,7 @@ async function main(argv: string[]) {
   // Dry runs change nothing, so the preflight in scripts/run.sh still works while the service runs.
   const lock = join(cfg.workspaceRoot, ".lock");
   if (!io.dry && !holdLock(lock)) {
-    console.error(`another aw run or once holds ${lock}; stop it first`);
+    console.error(`another tender run or once holds ${lock}; stop it first`);
     process.exit(1);
   }
   const refresh = Object.values(cfg.repos).some((r) => r.sandbox === "nono")

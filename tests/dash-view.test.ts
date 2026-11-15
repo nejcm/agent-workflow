@@ -178,7 +178,7 @@ test("screen rows are exactly the terminal width at every size, including tiny a
       for (const l of ls) expect(W(l)).toBe(w!);
     }
   const wide = screen(model({ rs, events: evs }), 160, 45, C).lines.map(text);
-  expect(wide[0]).toMatch(/^ aw  box  ◆ 1 waiting .* 12:00:00 · every 2s $/);
+  expect(wide[0]).toMatch(/^ tender  box  ◆ 1 waiting .* 12:00:00 · every 2s $/);
   expect(wide[1]).toMatch(/^╭─ tickets 3 ─+╮╭─ detail ─+╮$/);
   expect(wide[2]).toMatch(/^│▌◆ PER-2 /);
   expect(wide.at(-1)).toMatch(/^ j\/k select  tab transcript  ⏎ maximise  a attach  o open PR  r refresh  \? help  q quit/);

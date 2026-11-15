@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseConfig } from "../src/config";
-import { AW_DIR } from "../src/util";
+import { TENDER_DIR } from "../src/util";
 import { config, raw, root, src, useTempRoot, web } from "./helpers";
 
 useTempRoot();
@@ -10,7 +10,7 @@ useTempRoot();
 test("config: defaults applied and errors listed", () => {
   const c = config();
   expect(c.pollIntervalMs).toBe(60000);
-  expect(c.tmuxSession).toBe("aw");
+  expect(c.tmuxSession).toBe("tender");
   expect(c.maxConcurrent).toBe(2);
   expect(c.stallMinutes).toBe(30);
   for (const v of [0, 1.5, "30"]) expect(() => config({ stallMinutes: v })).toThrow("stallMinutes: positive integer");
@@ -49,8 +49,8 @@ test("config: defaults applied and errors listed", () => {
 });
 
 test("example config validates", () => {
-  const raw = JSON.parse(readFileSync(join(AW_DIR, "aw.example.json"), "utf8"));
-  expect(parseConfig(raw, AW_DIR).sources.length).toBeGreaterThan(0);
+  const raw = JSON.parse(readFileSync(join(TENDER_DIR, "tender.example.json"), "utf8"));
+  expect(parseConfig(raw, TENDER_DIR).sources.length).toBeGreaterThan(0);
 });
 
 test("config: repo overrides of the wrong type are rejected, not replaced by defaults", () => {

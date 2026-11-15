@@ -64,13 +64,13 @@ test("linear adapter: phases become child issues that are never picked up as wor
   }) as any;
   writePhases("ENG-1", [phase("a", "in-progress"), phase("b", "done"), phase("c", "todo")]);
   await withLinearKey(async () => {
-    await pass(c, io, makeTracker, "/aw");
-    await pass(c, io, makeTracker, "/aw");
+    await pass(c, io, makeTracker, "/tender");
+    await pass(c, io, makeTracker, "/tender");
     const tr = linear(lin(c), "box", io, true);
     expect((await tr.listReady()).map((t) => t.id)).toEqual([]);
     expect((await tr.listInProgress()).map((t) => t.id)).toEqual(["ENG-1"]);
     prs = '[{"url":"https://pr/1","state":"OPEN"}]';
-    await pass(c, io, makeTracker, "/aw");
+    await pass(c, io, makeTracker, "/tender");
   });
   expect(mutations).toEqual([
     { teamId: "team-1", parentId: "u-1", stateId: "s-todo", title: "ENG-1: Do a", description: "b" },
@@ -132,7 +132,7 @@ test("linear repo: project label and label groups", () => {
   expect(LINEAR_ISSUES).toContain("project { description content labels { nodes { name parent { name } } } }");
 });
 
-test("linear adapter: every comment starts with aw:", async () => {
+test("linear adapter: every comment starts with tender:", async () => {
   const l = lin(config({ sources: [src({ tracker: "linear", team: "ENG" })] }));
   const bodies: any[] = [];
   const { io } = fakeIo();
@@ -141,7 +141,7 @@ test("linear adapter: every comment starts with aw:", async () => {
     return Response.json({ data: { commentCreate: { success: true } } });
   }) as any;
   await withLinearKey(() => linear(l, "box", io, false).comment({ id: "ENG-1", ref: "u-1", title: "", body: "", url: "" }, "hi"));
-  expect(bodies[0].variables.i).toEqual({ issueId: "u-1", body: "aw: hi" });
+  expect(bodies[0].variables.i).toEqual({ issueId: "u-1", body: "tender: hi" });
 });
 
 test("linear adapter: a comment Linear reports as not successful throws", async () => {
@@ -178,12 +178,12 @@ test("linear adapter: comments are read across pages, so a marker past comment 1
     const { after } = JSON.parse(init.body).variables;
     afters.push(after);
     const n = afters.length;
-    const nodes = Array.from({ length: n < pages ? 100 : 1 }, (_, i) => ({ id: `c${n}-${i}`, body: n === 2 ? "aw: x\n\naw-findings aaaaaaaaaaaa" : "hi", createdAt: "", user: null }));
+    const nodes = Array.from({ length: n < pages ? 100 : 1 }, (_, i) => ({ id: `c${n}-${i}`, body: n === 2 ? "tender: x\n\ntender-findings aaaaaaaaaaaa" : "hi", createdAt: "", user: null }));
     return Response.json({ data: { issue: { comments: { nodes, pageInfo: { hasNextPage: n < pages, endCursor: `p${n}` } } } } });
   }) as any;
   const cs = await withLinearKey(() => linear(l, "box", io, false).comments(t, 0));
   expect(cs).toHaveLength(101);
-  expect(cs.at(-1)!.body).toContain("aw-findings aaaaaaaaaaaa");
+  expect(cs.at(-1)!.body).toContain("tender-findings aaaaaaaaaaaa");
   expect(afters).toEqual([null, "p1"]);
   afters.length = 0;
   pages = 99;

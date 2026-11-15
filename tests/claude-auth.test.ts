@@ -3,10 +3,10 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { CAPTURE_COMMAND, cached, checkLogin, CREDENTIALS, findClaude, hostExe, hostLogin, needsRefresh, readLogin, refresher } from "../src/claude-auth";
-import { AW_DIR } from "../src/util";
+import { TENDER_DIR } from "../src/util";
 
 let t: string;
-beforeEach(() => (t = realpathSync(mkdtempSync(join(tmpdir(), "aw-auth-")))));
+beforeEach(() => (t = realpathSync(mkdtempSync(join(tmpdir(), "tender-auth-")))));
 afterEach(() => rmSync(t, { recursive: true, force: true }));
 
 const BUN = realpathSync(process.execPath);
@@ -42,12 +42,12 @@ test("hostExe returns the realpath and rejects mise wrappers and session-writabl
   expect(() => hostExe("claude", join(t, "ws/claude"), [join(t, "ws")])).toThrow("sessions can write");
 });
 
-test("findClaude asks mise from aw's dir when mise exists, else PATH", async () => {
+test("findClaude asks mise from tender's dir when mise exists, else PATH", async () => {
   const bin = file(join(t, "claude"), "", 0o755);
   const calls: [string[], string | undefined][] = [];
   const run = async (argv: string[], cwd?: string) => (calls.push([argv, cwd]), { code: 0, out: `${bin}\n`, err: "" });
   expect(await findClaude(run, [], (c) => (c === "mise" ? "/usr/bin/mise" : null))).toBe(bin);
-  expect(calls).toEqual([[["mise", "which", "claude"], AW_DIR]]);
+  expect(calls).toEqual([[["mise", "which", "claude"], TENDER_DIR]]);
   expect(await findClaude(run, [], (c) => (c === "claude" ? bin : null))).toBe(bin);
   expect(calls).toHaveLength(1);
   const fail = async () => ({ code: 1, out: "", err: "" });
@@ -103,7 +103,7 @@ function fakeClaude(code: number, writes?: string, secs = 0) {
 }
 const calls = () => (existsSync(join(t, "calls")) ? readdirSync(join(t, "calls")).map((f) => readFileSync(join(t, "calls", f), "utf8")) : []);
 
-test("refresher spawns only inside the window, with a clean env, aw's cwd and the hardened flags", async () => {
+test("refresher spawns only inside the window, with a clean env, tender's cwd and the hardened flags", async () => {
   const home = join(t, "home");
   const logs: string[] = [];
   const bin = fakeClaude(0, login({ expiresAt: NOW + 8 * 3_600_000 }));
@@ -117,7 +117,7 @@ test("refresher spawns only inside the window, with a clean env, aw's cwd and th
   const [call] = calls();
   const env = call!.split("\n---\n")[0]!.split("\n").filter((l) => !/^(PWD|SHLVL|_|OLDPWD)=/.test(l));
   expect(env).toEqual([`HOME=${home}`, "PATH=/usr/local/bin:/usr/bin:/bin"]);
-  expect(call).toContain(`cwd=${AW_DIR}\n`);
+  expect(call).toContain(`cwd=${TENDER_DIR}\n`);
   expect(call!.split("\n").filter((l) => l.startsWith("arg="))).toEqual(["arg=-p", "arg=/cost", "arg=--safe-mode", "arg=--setting-sources", "arg=", "arg=--strict-mcp-config", "arg=--no-session-persistence"]);
   expect(logs).toEqual(["claude login refresh ok, exit 0"]);
 });
@@ -161,10 +161,10 @@ function hostile() {
   const marker = join(t, "PWNED");
   const evil = file(join(clone, "evil.ts"), `require("node:fs").appendFileSync(${JSON.stringify(marker)}, "x"); console.log("PRELOAD-RAN");`);
   file(join(clone, "bunfig.toml"), `preload = ["./evil.ts"]\n`);
-  file(join(clone, ".env"), "AW_DOTENV=loaded\n");
+  file(join(clone, ".env"), "TENDER_DOTENV=loaded\n");
   for (const b of ["bun", "env", "sh"]) file(join(clone, b), `#!/bin/sh\necho x >> ${marker}\n`, 0o755);
   file(join(t, "ticket.claude/.credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: DECOY, refreshToken: "r", expiresAt: NOW + 86_400_000 } }));
-  const env = { HOME: home, PATH: clone, BUN_OPTIONS: `--preload ${evil}`, AW_BUN: BUN, CLAUDE_CONFIG_DIR: join(t, "ticket.claude") };
+  const env = { HOME: home, PATH: clone, BUN_OPTIONS: `--preload ${evil}`, TENDER_BUN: BUN, CLAUDE_CONFIG_DIR: join(t, "ticket.claude") };
   return { home, clone, marker, env };
 }
 
@@ -205,7 +205,7 @@ test.each([
 
 test("control: plain bun -e in the clone runs its preload and loads its .env", async () => {
   const h = hostile();
-  const p = Bun.spawn([BUN, "-e", "console.log(process.env.AW_DOTENV)"], { cwd: h.clone, env: { HOME: h.home, PATH: "/usr/bin:/bin" }, stdio: ["ignore", "pipe", "ignore"] });
+  const p = Bun.spawn([BUN, "-e", "console.log(process.env.TENDER_DOTENV)"], { cwd: h.clone, env: { HOME: h.home, PATH: "/usr/bin:/bin" }, stdio: ["ignore", "pipe", "ignore"] });
   expect(await new Response(p.stdout).text()).toBe("PRELOAD-RAN\nloaded\n");
 });
 
@@ -239,13 +239,13 @@ test("capture reads anyway once a stuck refresh lock outlasts 3 s", async () => 
 });
 
 test("both profiles route api.anthropic.com through the capture, uncached", () => {
-  for (const name of ["aw-claude", "aw-codex"]) {
-    const p = JSON.parse(readFileSync(join(AW_DIR, "nono", `${name}.json`), "utf8"));
+  for (const name of ["tender-claude", "tender-codex"]) {
+    const p = JSON.parse(readFileSync(join(TENDER_DIR, "nono", `${name}.json`), "utf8"));
     expect(p.network.credentials).toContain("anthropic_oauth");
     expect(p.network.custom_credentials.anthropic_oauth).toEqual({ upstream: "https://api.anthropic.com", credential_key: "cmd://anthropic_oauth", env_var: "CLAUDE_CODE_OAUTH_TOKEN", credential_format: "Bearer {}" });
     expect(p.credential_capture.anthropic_oauth).toEqual({ command: CAPTURE_COMMAND, timeout_secs: 5, cache_ttl_secs: 0 });
     expect(p.environment.allow_vars).toEqual(expect.arrayContaining(["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR"]));
-    for (const v of ["AW_BUN", "CLAUDE_CODE_OAUTH_TOKEN"]) expect(p.environment.allow_vars).not.toContain(v);
+    for (const v of ["TENDER_BUN", "CLAUDE_CODE_OAUTH_TOKEN"]) expect(p.environment.allow_vars).not.toContain(v);
   }
 });
 
@@ -261,7 +261,7 @@ test("hostLogin: a dry run checks metadata only and spawns nothing", async () =>
   expect(logs).toEqual(["the Claude login ends in 24h: run `claude auth login` before then", "dry: refresh the claude login when it expires within 5 minutes"]);
   expect(cmds).toEqual([]);
   expect(calls()).toEqual([]);
-  await expect(hostLogin(io, [dirname(AW_DIR)])).rejects.toThrow("aw's dir");
+  await expect(hostLogin(io, [dirname(TENDER_DIR)])).rejects.toThrow("tender's dir");
   await expect(hostLogin(io, [dirname(BUN)])).rejects.toThrow("bun: ");
 });
 

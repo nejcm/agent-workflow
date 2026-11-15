@@ -4,7 +4,7 @@
   "pollIntervalMs": 60000,
   "workspaceRoot": "~/agent-ws",
   "reposRoot": "~/agent-repos",
-  "tmuxSession": "aw",
+  "tmuxSession": "tender",
   "maxConcurrent": 2,
   "defaults": {
     "baseBranch": "main",

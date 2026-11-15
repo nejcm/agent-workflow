@@ -148,7 +148,7 @@ test("an ID in several repos is refused; owner/repo/ID picks one; each segment i
     worktree("PER-8", "web", repo);
     claudeFile(join(root, repo, "PER-8"), "s.jsonl", say(repo));
   }
-  await expect(run("PER-8")).rejects.toThrow("PER-8 is in several repos (acme/web, other/repo); use aw tail <owner/repo>/PER-8");
+  await expect(run("PER-8")).rejects.toThrow("PER-8 is in several repos (acme/web, other/repo); use tender tail <owner/repo>/PER-8");
   expect((await run("other/repo/PER-8")).at(-1)).toEndWith("say    other/repo");
   for (const t of ["../x/PER-8", "acme/web/../PER-8", "a/b/c/PER-8", "-x/y/PER-8", "acme/web/../../x"]) await expect(run(t)).rejects.toThrow(/invalid (repo|ticket id)/);
 });

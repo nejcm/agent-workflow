@@ -11,7 +11,7 @@ import { agentPane, deliverAnswer, liveStates, syncQuestion } from "./question";
 import { lastSay, transcript } from "./tail";
 import { type Adapter, TRACKERS } from "./trackers";
 import type { Config, Io, Repo, Source, Ticket, Tracker } from "./types";
-import { AW_DIR, byPriority, diskRepos, GIT, hasLabel, mtime, put, read, remove, SAFE_ID, strip, subdirs, write } from "./util";
+import { TENDER_DIR, byPriority, diskRepos, GIT, hasLabel, mtime, put, read, remove, SAFE_ID, strip, subdirs, write } from "./util";
 
 const sourceOf = (dir: string, id: string) => {
   const f = join(dir, `${id}.source`);
@@ -31,7 +31,7 @@ async function step(io: Io, what: string, fn: () => Promise<unknown>) {
 
 const NO_REPO = "no repo set on this ticket: add a `repo:owner/name` label or a `repo: owner/name` line to its description";
 
-const notAllowed = (t: Ticket) => (!t.repo ? NO_REPO : validRepo(t.repo) ? `repo ${t.repo} is not in the aw allowlist` : `repo ${JSON.stringify(t.repo.slice(0, 100))} is not a valid owner/name`);
+const notAllowed = (t: Ticket) => (!t.repo ? NO_REPO : validRepo(t.repo) ? `repo ${t.repo} is not in the tender allowlist` : `repo ${JSON.stringify(t.repo.slice(0, 100))} is not a valid owner/name`);
 
 // One comment per ticket whatever the reason, ever. Marked before posting: a crash loses the comment rather than repeating it.
 async function reject(cfg: Config, t: Ticket, tr: Tracker, io: Io, reason: string) {
@@ -47,7 +47,7 @@ async function reject(cfg: Config, t: Ticket, tr: Tracker, io: Io, reason: strin
 }
 
 // GitHub ids are only unique per repo, so the listing repo decides; a Linear ticket keeps the repo it was started in,
-// even one since removed from aw.json (then left alone). Only the source recorded in <ID>.source may act on a worktree.
+// even one since removed from tender.json (then left alone). Only the source recorded in <ID>.source may act on a worktree.
 function workRepo(cfg: Config, s: Source, tr: Tracker, t: Ticket) {
   const started = tr.globalIds ? diskRepos(cfg).find((k) => hasTrace(cfg, k, t.id)) : undefined;
   if (started && !Object.hasOwn(cfg.repos, started)) return;
@@ -62,7 +62,7 @@ const startedElsewhere = (cfg: Config, key: string, id: string, wins: Map<string
   [...wins.keys()].find((n) => n.endsWith(`/${id}`) && n !== winName(key, id))?.slice(0, -id.length - 1) ??
   diskRepos(cfg).find((k) => k !== key && hasTrace(cfg, k, id));
 
-async function startReady(cfg: Config, s: Source, tr: Tracker, io: Io, t: Ticket, wins: Map<string, string>, running: Map<string, number>, awDir: string) {
+async function startReady(cfg: Config, s: Source, tr: Tracker, io: Io, t: Ticket, wins: Map<string, string>, running: Map<string, number>, tenderDir: string) {
   if (!SAFE_ID.test(t.id)) return;
   // GitHub tickets always carry an allowlisted repo, so only Linear tickets are ever rejected.
   const key = allowedRepo(cfg, t.repo);
@@ -80,11 +80,11 @@ async function startReady(cfg: Config, s: Source, tr: Tracker, io: Io, t: Ticket
   const name = await canonical(io, key, true);
   if (!name) return;
   if (!sameRepo(name, key)) {
-    if (tr.globalIds) await step(io, `reject ${t.id}`, () => reject(cfg, t, tr, io, `repo ${key} now resolves to ${name} on GitHub, which is not in the aw allowlist`));
+    if (tr.globalIds) await step(io, `reject ${t.id}`, () => reject(cfg, t, tr, io, `repo ${key} now resolves to ${name} on GitHub, which is not in the tender allowlist`));
     return;
   }
   await step(io, `start ${t.id}`, async () => {
-    await start(cfg, s, r, { ...t, repo: key }, tr, io, awDir);
+    await start(cfg, s, r, { ...t, repo: key }, tr, io, tenderDir);
     wins.set(winName(key, t.id), "new");
     running.set(key, (running.get(key) ?? 0) + 1);
   });
@@ -198,7 +198,7 @@ export function makeTracker(s: Source, host: string, io: Io, defaultHost: boolea
 
 const warned = new Set<string>();
 
-export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = AW_DIR, state = liveStates()) {
+export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir = TENDER_DIR, state = liveStates()) {
   if ((await io.run(["tmux", "has-session", "-t", `=${cfg.tmuxSession}`])).code !== 0)
     await write(io, ["tmux", "new-session", "-d", "-s", cfg.tmuxSession]).catch((e) => io.log(`tmux: ${e.message}`));
   const srcs = new Map(
@@ -246,9 +246,9 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
         }
         const wt = join(dir, id);
         if (!lstatSync(join(wt, ".git"), { throwIfNoEntry: false })?.isDirectory()) throw new Error(`${wt}/.git is not a directory; left in place`);
-        // The session controls its .git (config, filters, commondir), so git checks it sandboxed: read-only, no network, no credentials; aw then deletes without git.
+        // The session controls its .git (config, filters, commondir), so git checks it sandboxed: read-only, no network, no credentials; tender then deletes without git.
         // A planted filter can block git; the runner's deadline kills its whole process group.
-        const box = r.sandbox === "nono" ? nonoRun("aw-check", awDir, [["--read", wt], ["--read", join(r.path, ".git", "objects")]]) : [];
+        const box = r.sandbox === "nono" ? nonoRun("tender-check", tenderDir, [["--read", wt], ["--read", join(r.path, ".git", "objects")]]) : [];
         // A fresh clone has no tags (--revision, tagOpt=--no-tags), so any tag, stash or note is the session's own.
         const checks = [["status", "--porcelain", "--ignore-submodules=none"], ["log", "--format=%h", "--branches", "--not", "--remotes"], ["for-each-ref", "--format=%(refname)", "refs/tags", "refs/stash", "refs/notes"]];
         for (const c of checks) if ((await write(x.io, [...box, ...GIT, "-C", wt, ...c])).trim()) throw new Error(`${wt} has uncommitted, untracked or unpushed work; left in place`);
@@ -273,7 +273,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, awDir = A
     ready.sort((a, b) => byPriority(a.t, b.t));
     for (const { s, io: sio, tr, t } of ready) {
       if (total() >= cfg.maxConcurrent) break;
-      await step(sio, `ready ${t.id}`, () => startReady(cfg, s, tr, sio, t, wins, running, awDir));
+      await step(sio, `ready ${t.id}`, () => startReady(cfg, s, tr, sio, t, wins, running, tenderDir));
     }
   }
   for (const { s, io: sio, tr } of srcs.values()) {

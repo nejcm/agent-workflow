@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { repoDir } from "./config";
 import { canonical, findPr, sameRepo } from "./github";
 import type { Config, Io, Repo, Ticket, Tracker } from "./types";
-import { put, read, readAw, remove, write } from "./util";
+import { put, read, readRun, remove, write } from "./util";
 
 const MAX_MERGE_BYTES = 4 * 1024;
 
@@ -28,7 +28,7 @@ export function parseAssessment(raw: string): Assessment {
 export const CRITICAL_PATHS = [
   ".github/**", "**/Dockerfile*", "docker-compose*", "**/migrations/**", "**/*.sql",
   "package.json", "bun.lock*", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "go.mod", "go.sum", "Cargo.toml", "Cargo.lock", "pyproject.toml", "requirements*.txt",
-  "**/auth/**", "**/*secret*", "**/*.env*", "**/*.pem", "**/*.key", "nono/**", "aw.json", "**/infra/**", "**/terraform/**", "**/deploy/**",
+  "**/auth/**", "**/*secret*", "**/*.env*", "**/*.pem", "**/*.key", "nono/**", "tender.json", "**/infra/**", "**/terraform/**", "**/deploy/**",
   "AGENTS.md", "CLAUDE.md", "**/.claude/**", "**/.codex/**", ".mcp.json", "CLAUDE.local.md", "GEMINI.md", "**/.gemini/**", "**/.cursor/**", ".cursorrules", "uv.lock", "poetry.lock", "Gemfile", "Gemfile.lock", "**/*.tf", "**/k8s/**", "**/helm/**",
   ".npmrc", "bunfig.toml", ".gitmodules", "**/.husky/**", ".pre-commit-config.yaml", "Makefile",
   "conftest.py", "pytest.ini", "jest.config.*", "vitest.config.*", "playwright.config.*",
@@ -66,7 +66,7 @@ export const checkState = (c: any) =>
     ? c.state === "SUCCESS" ? "success" : ["PENDING", "EXPECTED"].includes(c.state) ? "pending" : "failed"
     : c?.status !== "COMPLETED" ? "pending" : c.conclusion === "SUCCESS" ? "success" : ["NEUTRAL", "SKIPPED"].includes(c.conclusion) ? "neutral" : "failed";
 
-/** Whether aw may merge the PR now. The assessment is agent-written and untrusted: it can only hold a merge back. */
+/** Whether tender may merge the PR now. The assessment is agent-written and untrusted: it can only hold a merge back. */
 export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Repo, "autoMerge" | "criticalPaths" | "testPaths" | "baseBranch">, ticketLabels: string[] = []): { merge: boolean | "wait"; reason: string } {
   const no = (reason: string) => ({ merge: false, reason });
   if (s.autoMerge === "off") return no("autoMerge is off");
@@ -93,7 +93,7 @@ export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Re
     if (a?.critical) return no(`agent marked it critical: ${a.reason}`);
     if (a?.confidence === "low") return no(`agent confidence is low: ${a.reason}`);
     if (tier === "medium") {
-      if (!a) return no("medium change without a valid .aw/merge.json");
+      if (!a) return no("medium change without a valid .tender/run/merge.json");
       if (!a.tested || a.confidence !== "high") return no(`medium change needs tested + high confidence from the agent: ${a.reason}`);
       if (!checks.includes("success")) return no("medium change with no successful check");
     }
@@ -104,7 +104,7 @@ export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Re
 
 const PR_FIELDS = "number,url,state,isDraft,isCrossRepository,baseRefName,mergeable,additions,deletions,changedFiles,statusCheckRollup,labels,headRefOid,reviewDecision";
 
-// aw merges, pinned to the head it judged (the agent's token could too; see README). "Not merged" is commented once per head SHA.
+// tender merges, pinned to the head it judged (the agent's token could too; see README). "Not merged" is commented once per head SHA.
 // With `share`, the first view also fetches `share.fields` and lands in `share.pr`, so feedback need not view the PR again.
 export async function autoMerge(cfg: Config, r: Repo, t: Ticket, tr: Tracker, io: Io, parked = false, share?: { fields: string; pr?: any }) {
   const dir = repoDir(cfg, r.key);
@@ -124,10 +124,10 @@ export async function autoMerge(cfg: Config, r: Repo, t: Ticket, tr: Tracker, io
   if (parked) return;
   let a: Assessment | undefined;
   try {
-    const raw = readAw(join(dir, t.id), "merge.json", MAX_MERGE_BYTES);
+    const raw = readRun(join(dir, t.id), "merge.json", MAX_MERGE_BYTES);
     a = raw === undefined ? undefined : parseAssessment(raw);
   } catch (e) {
-    io.log(`merge ${t.id}: .aw/merge.json ignored: ${(e as Error).message}`);
+    io.log(`merge ${t.id}: .tender/run/merge.json ignored: ${(e as Error).message}`);
   }
   // Undefined skips the file gates; only this pre-check may leave it unset.
   pr.files = undefined;

@@ -49,9 +49,9 @@ test("reselect follows the ticket across refreshes, else clamps", () => {
 });
 
 test("attach targets the window id, switches inside tmux and suspends outside", () => {
-  expect(attachCmd("aw", "@3", false)).toEqual({ argv: ["tmux", "select-window", "-t", "@3", ";", "attach-session", "-t", "=aw"], suspend: true });
-  expect(attachCmd("aw", "@3", true)).toEqual({ argv: ["tmux", "select-window", "-t", "@3", ";", "switch-client", "-t", "=aw"], suspend: false });
-  for (const w of [null, "", "acme/web/PER-1", "@3; kill-server", "@3\n", "=aw:@3"]) expect(attachCmd("aw", w, false)).toBeUndefined();
+  expect(attachCmd("tender", "@3", false)).toEqual({ argv: ["tmux", "select-window", "-t", "@3", ";", "attach-session", "-t", "=tender"], suspend: true });
+  expect(attachCmd("tender", "@3", true)).toEqual({ argv: ["tmux", "select-window", "-t", "@3", ";", "switch-client", "-t", "=tender"], suspend: false });
+  for (const w of [null, "", "acme/web/PER-1", "@3; kill-server", "@3\n", "=tender:@3"]) expect(attachCmd("tender", w, false)).toBeUndefined();
 });
 
 test("only GitHub PR links are opened", () => {
@@ -91,14 +91,14 @@ test("watch picks the dashboard only on a TTY without --plain, and falls back wh
   await watch(o(true, true));
   await watch(o(false, false));
   await watch(o(false, true, true));
-  expect(calls).toEqual(["dash", "plain", "plain", "dash", "aw: dashboard unavailable (no native lib), using plain output", "plain"]);
+  expect(calls).toEqual(["dash", "plain", "plain", "dash", "tender: dashboard unavailable (no native lib), using plain output", "plain"]);
 });
 
 // One real run in a throwaway tmux server: j, then q, must exit 0 with the alt screen off and the tty back in cooked mode.
 test.skipIf(!Bun.which("tmux"))("dashboard starts, moves and quits cleanly in a tmux pty", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "awd-"));
+  const dir = mkdtempSync(join(tmpdir(), "tenderd-"));
   const repo = join(import.meta.dir, "..");
-  const tmux = (...a: string[]) => Bun.spawnSync(["tmux", "-L", `awtest-${process.pid}`, ...a], { env: { ...process.env, TMUX: "" } });
+  const tmux = (...a: string[]) => Bun.spawnSync(["tmux", "-L", `tendertest-${process.pid}`, ...a], { env: { ...process.env, TMUX: "" } });
   const out = () => {
     try {
       return readFileSync(join(dir, "out"), "utf8");
@@ -109,8 +109,8 @@ test.skipIf(!Bun.which("tmux"))("dashboard starts, moves and quits cleanly in a 
   try {
     for (const id of ["PER-1", "PER-2"]) mkdirSync(join(dir, "ws/acme/web", id), { recursive: true });
     mkdirSync(join(dir, "bin"));
-    writeFileSync(join(dir, "aw.json"), JSON.stringify({ host: "box", workspaceRoot: join(dir, "ws"), tmuxSession: "awtest-none", defaults: { agent: "claude", sandbox: "none", testCmd: "true", prompt: join(repo, "prompts/default.md") }, repos: ["acme/web"], sources: [{ name: "gh", tracker: "github" }] }));
-    const cmd = `NO_COLOR= HOME=${dir} PATH=${dir}/bin:$PATH ${process.execPath} ${join(repo, "aw.ts")} watch --config ${dir}/aw.json; echo EXIT=$? > ${dir}/out; stty -a >> ${dir}/out; sleep 30`;
+    writeFileSync(join(dir, "tender.json"), JSON.stringify({ host: "box", workspaceRoot: join(dir, "ws"), tmuxSession: "tendertest-none", defaults: { agent: "claude", sandbox: "none", testCmd: "true", prompt: join(repo, "prompts/default.md") }, repos: ["acme/web"], sources: [{ name: "gh", tracker: "github" }] }));
+    const cmd = `NO_COLOR= HOME=${dir} PATH=${dir}/bin:$PATH ${process.execPath} ${join(repo, "tender.ts")} watch --config ${dir}/tender.json; echo EXIT=$? > ${dir}/out; stty -a >> ${dir}/out; sleep 30`;
     expect(tmux("new-session", "-d", "-x", "80", "-y", "20", cmd).exitCode).toBe(0);
     const pane = () => tmux("capture-pane", "-p").stdout.toString();
     const until = async (ok: () => boolean) => {
@@ -135,7 +135,7 @@ test.skipIf(!Bun.which("tmux"))("dashboard starts, moves and quits cleanly in a 
     rmSync(join(dir, "out"));
     tmux("respawn-pane", "-k", cmd);
     expect(await until(() => ready.test(pane()))).toBe(true);
-    const pid = Bun.spawnSync(["pgrep", "-f", `^${process.execPath} ${join(repo, "aw.ts")} watch --config ${dir}/`]).stdout.toString().trim();
+    const pid = Bun.spawnSync(["pgrep", "-f", `^${process.execPath} ${join(repo, "tender.ts")} watch --config ${dir}/`]).stdout.toString().trim();
     expect(pid).toMatch(/^\d+$/);
     process.kill(Number(pid), "SIGTERM");
     await restored("EXIT=143");
@@ -148,7 +148,7 @@ test.skipIf(!Bun.which("tmux"))("dashboard starts, moves and quits cleanly in a 
     const sleeping = () => Bun.spawnSync(["pgrep", "-f", "^sleep 31.7$"]).stdout.toString().trim();
     tmux("send-keys", "a");
     expect(await until(() => sleeping() !== "")).toBe(true);
-    const attached = Bun.spawnSync(["pgrep", "-f", `^${process.execPath} ${join(repo, "aw.ts")} watch --config ${dir}/`]).stdout.toString().trim();
+    const attached = Bun.spawnSync(["pgrep", "-f", `^${process.execPath} ${join(repo, "tender.ts")} watch --config ${dir}/`]).stdout.toString().trim();
     const t0 = Date.now();
     process.kill(Number(attached), "SIGTERM");
     await restored("EXIT=143");
@@ -163,7 +163,7 @@ test.skipIf(!Bun.which("tmux"))("dashboard starts, moves and quits cleanly in a 
 }, 30_000);
 
 test("installed walks up to a hoisted node_modules without resolving the package", () => {
-  const dir = mkdtempSync(join(tmpdir(), "awd-"));
+  const dir = mkdtempSync(join(tmpdir(), "tenderd-"));
   try {
     mkdirSync(join(dir, "a/node_modules/@opentui/core"), { recursive: true });
     mkdirSync(join(dir, "a/b/c"), { recursive: true });

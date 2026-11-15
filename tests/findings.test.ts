@@ -13,11 +13,11 @@ useTempRoot();
 const dir = () => join(root, "acme/web");
 const writeFindings = (id: string, v: unknown) => {
   worktree(id);
-  mkdirSync(join(dir(), id, ".aw"), { recursive: true });
-  writeFileSync(join(dir(), id, ".aw/findings.json"), typeof v === "string" ? v : JSON.stringify(v));
+  mkdirSync(join(dir(), id, ".tender/run"), { recursive: true });
+  writeFileSync(join(dir(), id, ".tender/run/findings.json"), typeof v === "string" ? v : JSON.stringify(v));
 };
 const f = (n: number, over: object = {}) => ({ title: `Bug ${n}`, body: `where ${n}`, ...over });
-const mark = (...ns: number[]) => `\n\naw-findings ${ns.map((n) => createHash("sha256").update(`Bug ${n}\nwhere ${n}`).digest("hex").slice(0, 12)).join(" ")}`;
+const mark = (...ns: number[]) => `\n\ntender-findings ${ns.map((n) => createHash("sha256").update(`Bug ${n}\nwhere ${n}`).digest("hex").slice(0, 12)).join(" ")}`;
 
 test("findings: each is filed once across polls, with one linking comment per batch", async () => {
   const t = ticket(1);
@@ -29,7 +29,7 @@ test("findings: each is filed once across polls, with one linking comment per ba
   writeFindings("gh-1", [f(1), f(2), f(3)]);
   await fileFindings(t, tr, io, dir());
   expect(calls.filter((c) => c.startsWith("file")).map((c) => c.split(" | ")[0])).toEqual(["file gh-1 Bug 1", "file gh-1 Bug 2", "file gh-1 Bug 3"]);
-  expect(calls[0]).toContain("where 1\n\n---\nFiled by aw from the agent session on gh-1 (https://x/1)");
+  expect(calls[0]).toContain("where 1\n\n---\nFiled by tender from the agent session on gh-1 (https://x/1)");
   const comments = calls.filter((c) => c.startsWith("comment"));
   expect(comments).toEqual([
     "comment gh-1 out-of-scope findings from this session, filed as new tickets (not picked up automatically):\n- https://x/acme/web/issues/1 Bug 1\n- https://x/acme/web/issues/2 Bug 2" + mark(1, 2),
@@ -82,9 +82,9 @@ test("findings: a failed linking comment is retried until it posts, even after a
 
   // A crash between create and comment leaves the same unposted record; findings.json may be gone by the next poll.
   writeFileSync(join(dir(), "gh-1.findings"), JSON.stringify([{ h: "a".repeat(64), title: "Bug 2", url: "https://x/acme/web/issues/9", posted: false }]));
-  rmSync(join(dir(), "gh-1/.aw/findings.json"));
+  rmSync(join(dir(), "gh-1/.tender/run/findings.json"));
   await fileFindings(ticket(1), tr, io, dir());
-  expect(calls.filter((c) => c.startsWith("comment")).at(-1)).toBe(`${HEAD}- https://x/acme/web/issues/9 Bug 2\n\naw-findings ${"a".repeat(12)}`);
+  expect(calls.filter((c) => c.startsWith("comment")).at(-1)).toBe(`${HEAD}- https://x/acme/web/issues/9 Bug 2\n\ntender-findings ${"a".repeat(12)}`);
   expect(calls.filter((c) => c.startsWith("file"))).toHaveLength(1);
 });
 
@@ -92,7 +92,7 @@ test("findings: a comment that posted though its response was lost is not posted
   const { tr, calls } = fakeTracker({});
   const comment = tr.comment;
   tr.comment = async (...a) => (await comment(...a), Promise.reject(new Error("response lost")));
-  tr.comments = async () => calls.filter((c) => c.startsWith("comment gh-1 ")).map((c) => ({ id: "1", body: `aw: ${c.slice(13)}`, createdAt: "" }));
+  tr.comments = async () => calls.filter((c) => c.startsWith("comment gh-1 ")).map((c) => ({ id: "1", body: `tender: ${c.slice(13)}`, createdAt: "" }));
   const { io } = fakeIo();
   writeFindings("gh-1", [f(1)]);
   await expect(fileFindings(ticket(1), tr, io, dir())).rejects.toThrow("response lost");
@@ -108,6 +108,16 @@ test("findings: a comment that posted though its response was lost is not posted
   expect(sidecar()[1]).toMatchObject({ title: "Bug 2", posted: false });
 });
 
+test("findings: a linking comment posted under the old aw: prefix and aw-findings marker is not posted again", async () => {
+  const { tr, calls } = fakeTracker({});
+  tr.comments = async () => [{ id: "1", body: `aw: ${HEAD.slice(13)}- https://x/1 Bug 1${mark(1).replace("tender-", "aw-")}`, createdAt: "" }];
+  const { io } = fakeIo();
+  writeFindings("gh-1", [f(1)]);
+  await fileFindings(ticket(1), tr, io, dir());
+  expect(calls.filter((c) => c.startsWith("comment"))).toHaveLength(0);
+  expect(sidecar()[0].posted).toBe(true);
+});
+
 test("findings: a tampered sidecar files and posts nothing, and published titles are re-sanitized", async () => {
   const { tr, calls } = fakeTracker({});
   const { io } = fakeIo();
@@ -120,15 +130,15 @@ test("findings: a tampered sidecar files and posts nothing, and published titles
   writeFileSync(join(dir(), "gh-1.findings"), JSON.stringify(Array(6).fill(rec)));
   await expect(fileFindings(ticket(1), tr, io, dir())).rejects.toThrow("invalid");
   rmSync(join(dir(), "gh-1.findings"));
-  symlinkSync(join(dir(), "gh-1/.aw/findings.json"), join(dir(), "gh-1.findings"));
+  symlinkSync(join(dir(), "gh-1/.tender/run/findings.json"), join(dir(), "gh-1.findings"));
   await expect(fileFindings(ticket(1), tr, io, dir())).rejects.toThrow();
   expect(calls).toEqual([]);
 
   rmSync(join(dir(), "gh-1.findings"));
-  rmSync(join(dir(), "gh-1/.aw/findings.json"));
+  rmSync(join(dir(), "gh-1/.tender/run/findings.json"));
   writeFileSync(join(dir(), "gh-1.findings"), JSON.stringify([{ ...rec, title: "hi @bob https://linear.app/a/profiles/b \x1b[2J a%0Ab%1Bc" }]));
   await fileFindings(ticket(1), tr, io, dir());
-  expect(calls).toEqual([`${HEAD}- not confirmed filed: hi @\u200bbob ${GONE} a%0Ab%1Bc\n\naw-findings ${"a".repeat(12)}`]);
+  expect(calls).toEqual([`${HEAD}- not confirmed filed: hi @\u200bbob ${GONE} a%0Ab%1Bc\n\ntender-findings ${"a".repeat(12)}`]);
 });
 
 test("findings: a legacy sidecar of bare hashes counts as filed and linked", async () => {
@@ -197,14 +207,14 @@ test("findings: filed at the review move and while in review, skipped while park
   const parked = { ...ticket(3), labels: ["needs-human"] };
   const { tr, calls } = fakeTracker({ inProgress: [ticket(1), parked], inReview: [ticket(2), parked] });
   const { io } = fakeIo(pr);
-  await pass(c, io, () => tr, "/aw");
+  await pass(c, io, () => tr, "/tender");
   const filed = calls.filter((x) => /^(file|review)/.test(x)).map((x) => x.split(" | ")[0]);
   expect(filed).toEqual(["file gh-1 Bug 1", "review gh-1 https://pr/1", "review gh-3 https://pr/1", "file gh-2 Bug 1"]);
 });
 
-test("findings: a marker quoted in another aw comment, such as an agent question, does not count as posted", async () => {
+test("findings: a marker quoted in another tender comment, such as an agent question, does not count as posted", async () => {
   const { tr, calls } = fakeTracker({});
-  tr.comments = async () => [{ id: "1", body: `aw: question from agent:\n${mark(1).trim()}`, createdAt: "" }];
+  tr.comments = async () => [{ id: "1", body: `tender: question from agent:\n${mark(1).trim()}`, createdAt: "" }];
   const { io } = fakeIo();
   writeFindings("gh-1", [f(1)]);
   await fileFindings(ticket(1), tr, io, dir());

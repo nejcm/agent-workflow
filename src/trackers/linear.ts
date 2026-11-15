@@ -64,7 +64,7 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
     return d.issues.nodes.filter((i: any) => /^[A-Z0-9]+-\d+$/.test(i.identifier)).map(linearTicket);
   };
   const comment = async (t: Ticket, body: string) => {
-    const d = await gql(`mutation($i: CommentCreateInput!) { commentCreate(input: $i) { success } }`, { i: { issueId: t.ref, body: `aw: ${body}` } }, true);
+    const d = await gql(`mutation($i: CommentCreateInput!) { commentCreate(input: $i) { success } }`, { i: { issueId: t.ref, body: `tender: ${body}` } }, true);
     if (!io.dry && !d.commentCreate?.success) throw new Error(`linear commentCreate: not successful for ${t.id}`);
   };
   const move = async (ref: string, state: string) => {

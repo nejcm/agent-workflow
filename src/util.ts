@@ -2,14 +2,14 @@ import { chmodSync, closeSync, constants as C, existsSync, fstatSync, lstatSync,
 import { dirname, join } from "node:path";
 import type { Config, Io, Ticket } from "./types";
 
-export const AW_DIR = dirname(import.meta.dir);
+export const TENDER_DIR = dirname(import.meta.dir);
 
 export const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
 
 export const subdirs = (d: string) => (existsSync(d) ? readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) : []);
 export const diskRepos = (cfg: Config) => subdirs(cfg.workspaceRoot).filter((o) => !o.startsWith(".")).flatMap((o) => subdirs(join(cfg.workspaceRoot, o)).map((n) => `${o}/${n}`));
 
-// Second layer for aw's own git calls: hook files, fsmonitor, auto-gc and risky transports only, not every config that runs code.
+// Second layer for tender's own git calls: hook files, fsmonitor, auto-gc and risky transports only, not every config that runs code.
 export const GIT = ["git", ...["core.hooksPath=/dev/null", "core.fsmonitor=false", "core.alternateRefsCommand=", "maintenance.auto=false", "protocol.ext.allow=never", "protocol.file.allow=never", "protocol.git.allow=never"].flatMap((c) => ["-c", c])];
 
 export const nonEmpty = (v: unknown): v is string => typeof v === "string" && v.length > 0;
@@ -43,7 +43,7 @@ export function put(io: Io, path: string, data: string, mode = 0o644) {
   renameSync(`${path}.tmp`, path);
 }
 
-// An agent-writable dir: pin it by fd (no symlink) so a swap can't redirect aw elsewhere. Linux only.
+// An agent-writable dir: pin it by fd (no symlink) so a swap can't redirect tender elsewhere. Linux only.
 export function inDir<T>(dir: string, fn: (dir: string) => T): T {
   const d = openSync(dir, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);
   try {
@@ -53,7 +53,8 @@ export function inDir<T>(dir: string, fn: (dir: string) => T): T {
   }
 }
 
-export const inAw = <T>(wt: string, fn: (dir: string) => T) => inDir(join(wt, ".aw"), fn);
+// Both levels pinned: the agent could swap .tender itself for a symlink too.
+export const inRun = <T>(wt: string, fn: (dir: string) => T) => inDir(join(wt, ".tender"), (t) => inDir(`${t}/run`, fn));
 
 export const mtime = (p: string) => {
   try {
@@ -78,7 +79,14 @@ export const ours = (t: Ticket, host: string, defaultHost: boolean) => {
   return hosts.includes(`host:${host.toLowerCase()}`) || (defaultHost && !hosts.length);
 };
 
-export const readAw = (wt: string, file: string, max: number) => readIn(join(wt, ".aw"), file, max);
+export function readRun(wt: string, file: string, max: number) {
+  try {
+    return inDir(join(wt, ".tender"), (t) => readIn(`${t}/run`, file, max));
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw e;
+  }
+}
 
 export function readIn(dir: string, file: string, max: number): string | undefined {
   try {
@@ -100,8 +108,8 @@ export function readIn(dir: string, file: string, max: number): string | undefin
 }
 
 // A fresh temp file renamed over the target: a hard link there is replaced, never written through.
-export function writeAw(wt: string, file: string, text: string) {
-  inAw(wt, (d) => {
+export function writeRun(wt: string, file: string, text: string) {
+  inRun(wt, (d) => {
     const target = `${d}/${file}`;
     const tmp = `${d}/.${file}.tmp`;
     const st = lstatSync(target, { throwIfNoEntry: false });
@@ -117,9 +125,9 @@ export function writeAw(wt: string, file: string, text: string) {
   });
 }
 
-export function removeAw(wt: string, file: string) {
+export function removeRun(wt: string, file: string) {
   try {
-    inAw(wt, (d) => {
+    inRun(wt, (d) => {
       if (!lstatSync(`${d}/${file}`).isFile()) throw new Error(`${file}: must be a regular file`);
       unlinkSync(`${d}/${file}`);
     });

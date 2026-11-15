@@ -23,7 +23,7 @@ test("github adapter: ready requires host label, skips claimed, edits labels", a
   expect(cmds[1]).toContain('-label:"needs-human"');
   await tr.claim((await tr.listReady())[0]!);
   expect(cmds).toContain("gh issue edit 7 --repo acme/web --add-label in-progress");
-  expect(cmds).toContain("gh issue comment 7 --repo acme/web --body aw: picked up on box");
+  expect(cmds).toContain("gh issue comment 7 --repo acme/web --body tender: picked up on box");
   await tr.park({ ...ticket(7), repo: "acme/web" });
   expect(cmds.at(-1)).toBe("gh issue edit 7 --repo acme/web --add-label needs-human");
   const { io: io2, cmds: cmds2 } = fakeIo(() => ({ out: JSON.stringify({ labels: [{ name: "NEEDS-HUMAN" }] }) }));
@@ -59,7 +59,7 @@ test("github adapter: claim survives a failed pickup comment, not a failed label
   const { io, cmds, logs } = fakeIo((a) => (a[2] === "comment" || (failEdit && a[2] === "edit") ? { code: 1 } : undefined));
   const tr = github(l, "box", io, false, ["acme/web"]);
   await tr.claim({ ...ticket(7), repo: "acme/web" });
-  expect(cmds).toEqual(["gh issue edit 7 --repo acme/web --add-label in-progress", "gh issue comment 7 --repo acme/web --body aw: picked up on box"]);
+  expect(cmds).toEqual(["gh issue edit 7 --repo acme/web --add-label in-progress", "gh issue comment 7 --repo acme/web --body tender: picked up on box"]);
   expect(logs).toContain("gh-7: picked-up comment failed: gh issue comment: boom");
   failEdit = true;
   await expect(tr.claim({ ...ticket(7), repo: "acme/web" })).rejects.toThrow("gh issue edit: boom");
@@ -72,7 +72,7 @@ test("github adapter: polls every repo of the source and tags tickets with it", 
   expect(tickets.map((t) => `${t.repo}#${t.id}`)).toEqual(["acme/web#gh-12", "acme/api#gh-12"]);
   expect(cmds.filter((x) => x.startsWith("gh issue list")).map((x) => x.split(" ")[4])).toEqual(["acme/web", "acme/api"]);
   await github(gh(c), "box", io, false, []).comment(tickets[1]!, "hi");
-  expect(cmds.at(-1)).toBe("gh issue comment 12 --repo acme/api --body aw: hi");
+  expect(cmds.at(-1)).toBe("gh issue comment 12 --repo acme/api --body tender: hi");
 });
 
 test("github adapter: a repo whose listing fails is skipped and logged, the others still listed", async () => {
@@ -128,13 +128,13 @@ test("github adapter: phases become sub-issues that are never picked up as work"
     }
   });
   writePhases("gh-1", [phase("a", "in-progress"), phase("b", "done")]);
-  await pass(c, io, makeTracker, "/aw");
+  await pass(c, io, makeTracker, "/tender");
   expect(cmds).toContain("gh issue create --repo acme/web --parent 1 --title gh-1: Do a --body b");
   expect(cmds).toContain("gh issue edit 2 --repo acme/web --add-label in-progress");
   expect(cmds).toContain("gh issue edit 3 --repo acme/web --add-label in-progress");
   expect(issues[1]!.labels).toEqual(["in-progress"]);
   const before = cmds.length;
-  await pass(c, io, makeTracker, "/aw");
+  await pass(c, io, makeTracker, "/tender");
   const second = cmds.slice(before);
   expect(second.filter((x) => /issue (create|edit|close|comment)|new-window/.test(x))).toEqual([]);
   const tr = github(gh(c), "box", io, true, ["acme/web"]);
@@ -142,7 +142,7 @@ test("github adapter: phases become sub-issues that are never picked up as work"
   expect(await tr.listReady()).toEqual([]);
   prs = '[{"url":"https://pr/1","state":"OPEN"}]';
   const at = cmds.length;
-  await pass(c, io, makeTracker, "/aw");
+  await pass(c, io, makeTracker, "/tender");
   expect(cmds.slice(at).filter((x) => /issue (create|edit|close)/.test(x))).toEqual(["gh issue close 3 --repo acme/web", "gh issue edit 1 --repo acme/web --add-label in-review --remove-label in-progress"]);
   expect((await tr.listInReview()).map((t) => t.id)).toEqual(["gh-1"]);
 });
@@ -178,10 +178,10 @@ test("trackers: done closes the GitHub issue, moves the Linear ticket to the fir
 });
 
 test("github adapter: comments parsed from gh issue view, author is the login", async () => {
-  const out = { comments: [{ id: "IC_1", body: "aw: picked up", createdAt: "2026-01-01T10:00:00Z", author: { login: "op" } }, { id: "IC_2", body: "yes", createdAt: "2026-01-01T11:00:00Z", author: null }] };
+  const out = { comments: [{ id: "IC_1", body: "tender: picked up", createdAt: "2026-01-01T10:00:00Z", author: { login: "op" } }, { id: "IC_2", body: "yes", createdAt: "2026-01-01T11:00:00Z", author: null }] };
   const { io, cmds } = fakeIo((a) => (a[2] === "view" ? { out: JSON.stringify(out) } : undefined));
   expect(await github(gh(), "box", io, false, []).comments(ticket(7), 0)).toEqual([
-    { id: "IC_1", body: "aw: picked up", createdAt: "2026-01-01T10:00:00Z", author: "op" },
+    { id: "IC_1", body: "tender: picked up", createdAt: "2026-01-01T10:00:00Z", author: "op" },
     { id: "IC_2", body: "yes", createdAt: "2026-01-01T11:00:00Z", author: undefined },
   ]);
   expect(cmds).toEqual(["gh issue view 7 --repo acme/web --json comments"]);

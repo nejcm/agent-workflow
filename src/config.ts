@@ -3,11 +3,11 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Config, Repo, Source } from "./types";
 import { TRACKERS } from "./trackers";
-import { AW_DIR } from "./util";
+import { TENDER_DIR } from "./util";
 
 const NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
-// Owner may not start with "-" (flag to gh/git) or "." (aw's own dirs in workspaceRoot); keys map 1:1 to <owner>/<name> dirs.
+// Owner may not start with "-" (flag to gh/git) or "." (tender's own dirs in workspaceRoot); keys map 1:1 to <owner>/<name> dirs.
 const REPO = /^[A-Za-z0-9_][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+$/;
 export const validRepo = (s: unknown) => typeof s === "string" && REPO.test(s) && !s.includes("..") && !s.endsWith("/.") && !/\.git$/i.test(s);
 /** Canonical allowlist key for an untrusted repo string, or undefined. */
@@ -29,7 +29,7 @@ export function parseConfig(raw: any, base: string): Config {
   check(typeof defaultHost === "boolean", "defaultHost: boolean");
   const pollIntervalMs = raw.pollIntervalMs ?? 60000;
   check(Number.isInteger(pollIntervalMs) && pollIntervalMs >= 5000, "pollIntervalMs: integer >= 5000");
-  const tmuxSession = raw.tmuxSession ?? "aw";
+  const tmuxSession = raw.tmuxSession ?? "tender";
   check(NAME.test(tmuxSession), "tmuxSession: [a-z0-9-]");
   const maxConcurrent = raw.maxConcurrent ?? 2;
   check(posInt(maxConcurrent), "maxConcurrent: positive integer");
@@ -60,7 +60,7 @@ export function parseConfig(raw: any, base: string): Config {
       agent: v.agent,
       sandbox: v.sandbox,
       testCmd: v.testCmd,
-      prompt: expand(str(v.prompt) ? v.prompt : join(AW_DIR, "prompts/default.md"), base),
+      prompt: expand(str(v.prompt) ? v.prompt : join(TENDER_DIR, "prompts/default.md"), base),
       planStep: v.planStep === undefined ? "Plan and implement the ticket." : v.planStep,
       maxConcurrent: v.maxConcurrent,
       autoMerge: v.autoMerge === undefined ? "off" : v.autoMerge,

@@ -218,7 +218,7 @@ export function chips(rs: Row[], P: Palette, compact: boolean): Line {
 
 export function header(rs: Row[], host: string, at: string, every: number, n: number, P: Palette): Line {
   const bg = { bg: P.head };
-  const mark: Span = P.mono ? { t: " aw ", b: true, r: true } : { t: " aw ", fg: P.ink, bg: P.accent, b: true };
+  const mark: Span = P.mono ? { t: " tender ", b: true, r: true } : { t: " tender ", fg: P.ink, bg: P.accent, b: true };
   const h = s(P, "dim", ` ${clean(host, 40)} `, bg);
   const time = [s(P, "fg", `${at} `, bg), s(P, "dim", `· every ${every}s `, bg)];
   for (const [left, right] of [

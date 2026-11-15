@@ -13,12 +13,14 @@ useTempRoot();
 const at = Date.parse("2026-01-01T10:00:00Z");
 const c = (id: string, createdAt: string, author: string | undefined, body = "go with B"): TicketComment => ({ id, body, createdAt, author });
 
-test("pickAnswer: first listed, non-aw comment strictly after the question", () => {
+test("pickAnswer: first listed, non-tender comment strictly after the question", () => {
   const authors = ["Octocat", "lead@acme.com"];
   expect(pickAnswer([], at, authors)).toBeUndefined();
   expect(pickAnswer([c("early", "2026-01-01T09:59:59Z", "octocat"), c("equal", "2026-01-01T10:00:00.000Z", "octocat")], at, authors)).toBeUndefined();
   expect(pickAnswer([c("x", "2026-01-01T10:01:00Z", "mallory")], at, authors)).toBeUndefined();
   expect(pickAnswer([c("x", "2026-01-01T10:01:00Z", undefined)], at, authors)).toBeUndefined();
+  expect(pickAnswer([c("x", "2026-01-01T10:01:00Z", "octocat", "tender: question from agent")], at, authors)).toBeUndefined();
+  expect(pickAnswer([c("x", "2026-01-01T10:01:00Z", "octocat", "  TENDER: picked up")], at, authors)).toBeUndefined();
   expect(pickAnswer([c("x", "2026-01-01T10:01:00Z", "octocat", "aw: question from agent")], at, authors)).toBeUndefined();
   expect(pickAnswer([c("x", "2026-01-01T10:01:00Z", "octocat", "  AW: picked up")], at, authors)).toBeUndefined();
   expect(pickAnswer([c("x", "garbage", "octocat")], at, authors)).toBeUndefined();
@@ -32,8 +34,8 @@ test("pickAnswer: first listed, non-aw comment strictly after the question", () 
 });
 
 const ask = (text: string) => {
-  mkdirSync(join(root, "acme/web/gh-1/.aw"), { recursive: true });
-  writeFileSync(join(root, "acme/web/gh-1/.aw/question.md"), text);
+  mkdirSync(join(root, "acme/web/gh-1/.tender/run"), { recursive: true });
+  writeFileSync(join(root, "acme/web/gh-1/.tender/run/question.md"), text);
 };
 const sidecar = () => join(root, "acme/web/gh-1.question");
 const setup = (open = ["acme/web/gh-1"], o: { dry?: boolean; pr?: boolean } = {}) => {
@@ -41,7 +43,7 @@ const setup = (open = ["acme/web/gh-1"], o: { dry?: boolean; pr?: boolean } = {}
   const f = fakeTracker({ inProgress: [ticket(1)] });
   const pr = (a: string[]) => (a[1] === "pr" ? { out: '[{"url":"https://github.com/acme/web/pull/1","state":"OPEN"}]' } : undefined);
   const { io, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(open) : o.pr ? pr(a) : noPr(a)), o.dry);
-  return { ...f, logs, run: () => pass(config(), io, () => f.tr, "/aw") };
+  return { ...f, logs, run: () => pass(config(), io, () => f.tr, "/tender") };
 };
 
 test("question: posted once per content, again when it changes", async () => {
@@ -120,9 +122,9 @@ test("question: CRLF and CR line endings are posted as LF", async () => {
 });
 
 const answerAt = (postedAt: number, body = "Use Postgres", author = "Op") => ({ id: "c9", body, createdAt: new Date(postedAt + 1000).toISOString(), author });
-const answered = () => join(root, "acme/web/gh-1/.aw/answer.md");
-const question = () => join(root, "acme/web/gh-1/.aw/question.md");
-const inbox = () => join(root, "acme/web/gh-1/.aw/inbox");
+const answered = () => join(root, "acme/web/gh-1/.tender/run/answer.md");
+const question = () => join(root, "acme/web/gh-1/.tender/run/question.md");
+const inbox = () => join(root, "acme/web/gh-1/.tender/run/inbox");
 
 function deliver(opts: { agent?: string; authors?: string[]; open?: string[]; dry?: boolean; respond?: (a: string[]) => { code?: number; out?: string } | undefined } = {}) {
   worktree("gh-1");
@@ -137,7 +139,7 @@ function deliver(opts: { agent?: string; authors?: string[]; open?: string[]; dr
   let state: State = "idle";
   const states: string[] = [];
   const order: string[] = [];
-  const run = () => pass(cfg, io, () => f.tr, "/aw", async (_r, _d, id) => (states.push(id), state));
+  const run = () => pass(cfg, io, () => f.tr, "/tender", async (_r, _d, id) => (states.push(id), state));
   return {
     ...f, cmds, logs, reads, states, order, run,
     answer: (c?: TicketComment) => void (answer = c),
@@ -167,7 +169,7 @@ test("answer: nothing without an answer, nothing until idle, then delivered once
   await d.run();
   expect(d.sidecar()).toEqual({ hash: expect.any(String), postedAt, answerId: "c9", answeredAt: postedAt + 1000 });
   expect(readFileSync(answered(), "utf8")).toBe('<answer from="Op" ticket="gh-1">\nUse Postgres\n</answer>\n');
-  expect(d.keys()).toEqual([`tmux set-buffer -b aw-gh-1 -- ${POINTER}`, "tmux paste-buffer -p -d -b aw-gh-1 -t %5", "tmux send-keys -t %5 Enter"]);
+  expect(d.keys()).toEqual([`tmux set-buffer -b tender-gh-1 -- ${POINTER}`, "tmux paste-buffer -p -d -b tender-gh-1 -t %5", "tmux send-keys -t %5 Enter"]);
   expect(existsSync(question())).toBe(false);
   const reads = d.reads.length;
   await d.run();
@@ -183,7 +185,7 @@ test("answer: nothing without an answer, nothing until idle, then delivered once
 
 const waiter = (live: boolean) => (a: string[]) => (a[0] === "systemctl" && a[2] === "show" ? { out: "/app.slice/s.scope\n" } : a[0] === "pgrep" ? { code: live ? 0 : 1 } : undefined);
 
-test("answer: Claude with a live inbox waiter in its scope gets the pointer in .aw/inbox, never keys, without looking up a pane", async () => {
+test("answer: Claude with a live inbox waiter in its scope gets the pointer in .tender/run/inbox, never keys, without looking up a pane", async () => {
   const d = deliver({ agent: "claude", respond: waiter(true) });
   ask("Which DB?");
   await d.run();
@@ -198,7 +200,7 @@ test("answer: Claude with a live inbox waiter in its scope gets the pointer in .
   expect(d.cmds.filter((c) => c.includes("pane_in_mode"))).toEqual([]);
   expect(d.keys()).toEqual([]);
   expect(existsSync(question())).toBe(false);
-  expect(d.cmds).toContainEqual(expect.stringMatching(/^systemctl --user show -P ControlGroup aw-[0-9a-f]{8}:acme:web:gh-1\.scope$/));
+  expect(d.cmds).toContainEqual(expect.stringMatching(/^systemctl --user show -P ControlGroup tender-[0-9a-f]{8}:acme:web:gh-1\.scope$/));
   expect(d.cmds).toContain(`pgrep -f --cgroup /app.slice/s.scope ${INBOX_WAITER}`);
 });
 
@@ -210,7 +212,7 @@ test("answer: Claude without a waiter (launched before the hook, or its last tur
   await d.run();
   expect(d.sidecar().answerId).toBe("c9");
   expect(existsSync(inbox())).toBe(false);
-  expect(d.keys()).toEqual([`tmux set-buffer -b aw-gh-1 -- ${POINTER}`, "tmux paste-buffer -p -d -b aw-gh-1 -t %5", "tmux send-keys -t %5 Enter"]);
+  expect(d.keys()).toEqual([`tmux set-buffer -b tender-gh-1 -- ${POINTER}`, "tmux paste-buffer -p -d -b tender-gh-1 -t %5", "tmux send-keys -t %5 Enter"]);
 });
 
 test("answer: answerId is recorded before answer.md, keys after it", async () => {
@@ -288,7 +290,7 @@ test("answer: window gone or dry-run delivers nothing", async () => {
   dry.answer(answerAt(1));
   await dry.run();
   expect(dry.keys()).toEqual([]);
-  expect(dry.logs).toEqual(expect.arrayContaining([`[web] dry: tmux set-buffer -b aw-gh-1 -- ${POINTER}`, "[web] dry: tmux paste-buffer -p -d -b aw-gh-1 -t %5", "[web] dry: tmux send-keys -t %5 Enter"]));
+  expect(dry.logs).toEqual(expect.arrayContaining([`[web] dry: tmux set-buffer -b tender-gh-1 -- ${POINTER}`, "[web] dry: tmux paste-buffer -p -d -b tender-gh-1 -t %5", "[web] dry: tmux send-keys -t %5 Enter"]));
   expect(JSON.parse(readFileSync(sidecar(), "utf8")).answerId).toBeUndefined();
   expect(existsSync(answered())).toBe(false);
   expect(existsSync(question())).toBe(true);
@@ -336,7 +338,7 @@ test("answer: a window started this pass (no @id yet) gets nothing until the nex
   ask("Which DB?");
   writeFileSync(sidecar(), JSON.stringify({ hash: new Bun.CryptoHasher("sha256").update("Which DB?").digest("hex"), postedAt: 1 }));
   f.tr.comments = async () => [answerAt(1)];
-  await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), feedbackAuthors: ["op"] }] }), io, () => f.tr, "/aw", async () => "idle");
+  await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), feedbackAuthors: ["op"] }] }), io, () => f.tr, "/tender", async () => "idle");
   expect(cmds.some((c) => c.startsWith("tmux new-window"))).toBe(true);
   expect(cmds.some((c) => c.startsWith("tmux send-keys"))).toBe(false);
   expect(JSON.parse(readFileSync(sidecar(), "utf8")).answerId).toBeUndefined();
@@ -354,7 +356,7 @@ test("answer: a pane in copy mode is skipped before answerId is recorded, then d
   expect(d.cmds).toContain("tmux list-panes -t @0 -F #{pane_id} #{pane_in_mode} #{pane_start_command}");
   mode = "0";
   await d.run();
-  expect(d.keys()).toEqual([`tmux set-buffer -b aw-gh-1 -- ${POINTER}`, "tmux paste-buffer -p -d -b aw-gh-1 -t %5", "tmux send-keys -t %5 Enter"]);
+  expect(d.keys()).toEqual([`tmux set-buffer -b tender-gh-1 -- ${POINTER}`, "tmux paste-buffer -p -d -b tender-gh-1 -t %5", "tmux send-keys -t %5 Enter"]);
 });
 
 test("answer: a failed paste leaves answerId set and sends no Enter; the still-open question is asked again, the paste never repeated", async () => {
@@ -366,7 +368,7 @@ test("answer: a failed paste leaves answerId set and sends no Enter; the still-o
   expect(d.sidecar().answerId).toBe("c9");
   await d.run();
   expect(d.calls).toHaveLength(2);
-  expect(d.keys()).toEqual([`tmux set-buffer -b aw-gh-1 -- ${POINTER}`, "tmux paste-buffer -p -d -b aw-gh-1 -t %5"]);
+  expect(d.keys()).toEqual([`tmux set-buffer -b tender-gh-1 -- ${POINTER}`, "tmux paste-buffer -p -d -b tender-gh-1 -t %5"]);
   expect(existsSync(question())).toBe(true);
   expect(d.logs.some((l) => l.includes("answer gh-1 failed"))).toBe(true);
 });

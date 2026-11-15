@@ -101,7 +101,7 @@ export async function watch(o: { plain: boolean; tty: boolean; dash: () => Promi
     try {
       return await o.dash();
     } catch (e) {
-      (o.warn ?? console.error)(`aw: dashboard unavailable (${clean(String((e as Error)?.message ?? e), 160)}), using plain output`);
+      (o.warn ?? console.error)(`tender: dashboard unavailable (${clean(String((e as Error)?.message ?? e), 160)}), using plain output`);
     }
   return o.fallback();
 }

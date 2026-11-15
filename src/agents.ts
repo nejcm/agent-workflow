@@ -2,7 +2,7 @@ import { lstatSync, opendirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Live, State } from "./state";
 import type { Repo } from "./types";
-import { clean, inDir, readAw, readIn } from "./util";
+import { clean, inDir, readRun, readIn } from "./util";
 
 export type Lookup = (wt: string, since: number, now: number) => Live | undefined;
 
@@ -25,7 +25,7 @@ const MAX_SESSION = 64 * 1024;
 const MAX_FILE = 4096;
 
 /** A `claude setup-token` token for `sandbox: "none"` lanes, relative to home; read by the launch script on the host. nono lanes get a phantom from nono's proxy instead. */
-export const CLAUDE_TOKEN = ".claude-aw/oauth-token";
+export const CLAUDE_TOKEN = ".claude-tender/oauth-token";
 /** The ticket's own Claude config dir, a sidecar of its worktree. */
 export const claudeHome = (wt: string) => `${wt}.claude`;
 /** The ticket's own CODEX_HOME, a sidecar of its worktree; Claude sessions get one too, to run Codex. */
@@ -98,11 +98,11 @@ export function claudeSessions(dir: string): unknown[] {
   });
 }
 
-/** `<wt>/.aw/codex-state.json` as written by aw's Codex hooks, if well-formed and recorded since `since` (ms). */
+/** `<wt>/.tender/run/codex-state.json` as written by tender's Codex hooks, if well-formed and recorded since `since` (ms). */
 export function codexState(wt: string, since: number, now: number): Live | undefined {
   let o: any;
   try {
-    o = JSON.parse(readAw(wt, "codex-state.json", MAX_FILE) ?? "");
+    o = JSON.parse(readRun(wt, "codex-state.json", MAX_FILE) ?? "");
   } catch {
     return undefined;
   }
@@ -112,7 +112,7 @@ export function codexState(wt: string, since: number, now: number): Live | undef
 }
 
 // nudge()'s reader: asyncRewake wakes even an idle prompt on exit 2, and the newest waiter retires older ones. Timeout just under 2^31 ms.
-export const INBOX_HOOK = 'head -c 1048576 >/dev/null; cd "$CLAUDE_PROJECT_DIR" && echo $$ > .aw/inbox.pid || exit 0; while [ "$(cat .aw/inbox.pid 2>/dev/null)" = $$ ]; do mv .aw/inbox .aw/inbox.$$ 2>/dev/null && { head -c 4096 .aw/inbox.$$ >&2; rm -f .aw/inbox.$$; exit 2; }; sleep 2; done';
+export const INBOX_HOOK = 'head -c 1048576 >/dev/null; cd "$CLAUDE_PROJECT_DIR" && echo $$ > .tender/run/inbox.pid || exit 0; while [ "$(cat .tender/run/inbox.pid 2>/dev/null)" = $$ ]; do mv .tender/run/inbox .tender/run/inbox.$$ 2>/dev/null && { head -c 4096 .tender/run/inbox.$$ >&2; rm -f .tender/run/inbox.$$; exit 2; }; sleep 2; done';
 /** pgrep -f pattern for a running waiter; anchored, as Claude's own argv carries the hook text too. */
 export const INBOX_WAITER = "^[^ ]*sh -c head -c 1048576 .*inbox\\.pid";
 const INBOX_SETTINGS = JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: INBOX_HOOK, asyncRewake: true, timeout: 2147483 }] }] } });
@@ -129,7 +129,7 @@ export const AGENTS: Record<Repo["agent"], Agent> = {
     },
   },
   codex: {
-    // Hook trust is keyed on the config file's path, so every fresh CODEX_HOME would skip the hooks aw seeds from the template.
+    // Hook trust is keyed on the config file's path, so every fresh CODEX_HOME would skip the hooks tender seeds from the template.
     launch: (wt, prompt, nono) => [`export CODEX_HOME=${codexHome(wt)}${nono ? ` CLAUDE_CONFIG_DIR=${claudeHome(wt)} CLAUDE_CODE_TMPDIR=${tmpHome(wt)}` : ""}`, ["codex", ...(nono ? ["--no-daemon"] : []), "--dangerously-bypass-hook-trust", "--sandbox", "danger-full-access", "--ask-for-approval", "never", "-C", wt, prompt]],
     store: (wt) => [codexHome(wt), "sessions"],
     transcripts: (wt) => jsonl(join(codexHome(wt), "sessions"), true),

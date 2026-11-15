@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Io, Ticket, Tracker } from "./types";
-import { put, readAw } from "./util";
+import { put, readRun } from "./util";
 
 export type PhaseStatus = "todo" | "in-progress" | "done";
 export interface Phase {
@@ -35,7 +35,7 @@ export function parsePhases(raw: string): Phase[] {
 const MAX_PHASES_BYTES = 64 * 1024;
 
 export function readPhases(wt: string): Phase[] | undefined {
-  const raw = readAw(wt, "phases.json", MAX_PHASES_BYTES);
+  const raw = readRun(wt, "phases.json", MAX_PHASES_BYTES);
   return raw === undefined ? undefined : parsePhases(raw);
 }
 

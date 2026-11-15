@@ -5,12 +5,12 @@ import { join } from "node:path";
 import { AGENTS, INBOX_WAITER, type Lookup } from "./agents";
 import { resolve, type State } from "./state";
 import type { Io, Repo, Ticket, TicketComment, Tracker } from "./types";
-import { mtime, put, read, readAw, removeAw, write, writeAw } from "./util";
+import { mtime, put, read, readRun, removeRun, write, writeRun } from "./util";
 
 const MAX_QUESTION_BYTES = 64 * 1024;
 const MAX_QUESTION_CHARS = 8000;
 const MAX_ANSWER_CHARS = 8000;
-export const POINTER = "Your question was answered by the operator: read .aw/answer.md";
+export const POINTER = "Your question was answered by the operator: read .tender/run/answer.md";
 
 export interface QuestionSidecar {
   hash: string;
@@ -20,13 +20,13 @@ export interface QuestionSidecar {
   answeredAt?: number;
 }
 
-/** A comment by a listed author (case-insensitive) that aw did not post. */
+/** A comment by a listed author (case-insensitive) that tender (or aw, its old name) did not post. */
 export function byOperator(authors: string[]) {
   const allowed = new Set(authors.map((a) => a.toLowerCase()));
-  return (c: TicketComment) => !!c.author && allowed.has(c.author.toLowerCase()) && !/^\s*aw:/i.test(c.body);
+  return (c: TicketComment) => !!c.author && allowed.has(c.author.toLowerCase()) && !/^\s*(aw|tender):/i.test(c.body);
 }
 
-/** The operator's answer: the earliest comment after postedAt (ms epoch) by a listed author that aw did not post. */
+/** The operator's answer: the earliest comment after postedAt (ms epoch) by a listed author that tender did not post. */
 export function pickAnswer(comments: TicketComment[], postedAt: number, authors: string[]): TicketComment | undefined {
   const ok = byOperator(authors);
   return comments
@@ -41,7 +41,7 @@ export function readQuestionSidecar(file: string): QuestionSidecar | undefined {
   return o;
 }
 
-const readQuestion = (wt: string) => readAw(wt, "question.md", MAX_QUESTION_BYTES)?.replace(/\r\n?/g, "\n").trim();
+const readQuestion = (wt: string) => readRun(wt, "question.md", MAX_QUESTION_BYTES)?.replace(/\r\n?/g, "\n").trim();
 const hashOf = (text: string) => createHash("sha256").update(text).digest("hex");
 
 /** A posted question still waiting for its answer; an unreadable sidecar counts as none. */
@@ -69,7 +69,7 @@ export async function syncQuestion(t: Ticket, tr: Tracker, io: Io, dir: string, 
   await tr.comment(t, `question from agent:\n\n${text}`);
 }
 
-/** Per pass: a worktree's live state as `aw status` resolves it, or with `raw` the feed's own (a stale `working` stays); each feed is prepared at most once, on first use. */
+/** Per pass: a worktree's live state as `tender status` resolves it, or with `raw` the feed's own (a stale `working` stays); each feed is prepared at most once, on first use. */
 export function liveStates(home = homedir(), prepare = (a: Repo["agent"], wts: string[]) => AGENTS[a].live(home, wts)) {
   const feeds = new Map<string, Promise<Lookup>>();
   return async (r: Repo, dir: string, id: string, now = Date.now(), raw = false): Promise<State> => {
@@ -89,16 +89,16 @@ export async function agentPane(io: Io, win: string, script: string) {
 
 // A bracketed paste: Codex reads fast typed keys as a paste and turns the Enter after them into a newline.
 export async function paste(io: Io, id: string, pane: string, line: string) {
-  await write(io, ["tmux", "set-buffer", "-b", `aw-${id}`, "--", line]);
-  await write(io, ["tmux", "paste-buffer", "-p", "-d", "-b", `aw-${id}`, "-t", pane]);
+  await write(io, ["tmux", "set-buffer", "-b", `tender-${id}`, "--", line]);
+  await write(io, ["tmux", "paste-buffer", "-p", "-d", "-b", `tender-${id}`, "-t", pane]);
   await write(io, ["tmux", "send-keys", "-t", pane, "Enter"]);
 }
 
-/** A pane gets the line pasted; null (a live Claude waiter) gets it through `.aw/inbox`, read even at an idle prompt. */
+/** A pane gets the line pasted; null (a live Claude waiter) gets it through `.tender/run/inbox`, read even at an idle prompt. */
 export async function nudge(io: Io, id: string, wt: string, pane: string | null, line: string) {
   if (pane) return paste(io, id, pane, line);
   io.log(`${io.dry ? "dry: " : ""}inbox ${id}: ${line}`);
-  if (!io.dry) writeAw(wt, "inbox", `${line}\n`);
+  if (!io.dry) writeRun(wt, "inbox", `${line}\n`);
 }
 
 /** null when a Claude inbox waiter runs in the session's scope; otherwise the launcher's pane, undefined if missing or in copy mode. */
@@ -128,10 +128,10 @@ export async function deliverAnswer(r: Repo, t: Ticket, tr: Tracker, io: Io, dir
   if (pane === undefined) return;
   put(io, file, JSON.stringify({ ...q, answerId: a.id, answeredAt: Date.parse(a.createdAt) } satisfies QuestionSidecar));
   const wt = join(dir, t.id);
-  io.log(`${io.dry ? "dry: " : ""}answer ${t.id} from ${a.author} to ${wt}/.aw/answer.md`);
-  if (!io.dry) writeAw(wt, "answer.md", answerFrame(a, t.id));
+  io.log(`${io.dry ? "dry: " : ""}answer ${t.id} from ${a.author} to ${wt}/.tender/run/answer.md`);
+  if (!io.dry) writeRun(wt, "answer.md", answerFrame(a, t.id));
   await nudge(io, t.id, wt, pane, POINTER);
   // A question rewritten since it was posted is a new round; leave it for syncQuestion.
   const text = readQuestion(wt);
-  if (!io.dry && text && hashOf(text) === q.hash) removeAw(wt, "question.md");
+  if (!io.dry && text && hashOf(text) === q.hash) removeRun(wt, "question.md");
 }

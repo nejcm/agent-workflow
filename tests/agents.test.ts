@@ -9,9 +9,9 @@ useTempRoot();
 const NOW = 1_000_000_000;
 const wt = (id: string) => join(root, "acme/web", id);
 const agent = (o: object) => ({ pid: 1, cwd: "/w/a", kind: "interactive", startedAt: 1, sessionId: "s", name: "n", status: "busy", ...o });
-const stateAt = (id: string) => join(wt(id), ".aw", "codex-state.json");
+const stateAt = (id: string) => join(wt(id), ".tender/run", "codex-state.json");
 const hookFile = (id: string, o: unknown) => {
-  mkdirSync(join(wt(id), ".aw"), { recursive: true });
+  mkdirSync(join(wt(id), ".tender/run"), { recursive: true });
   writeFileSync(stateAt(id), typeof o === "string" ? o : JSON.stringify(o));
 };
 
@@ -56,7 +56,7 @@ test("parseAgents skips malformed records and neutralizes hostile strings", () =
   expect(m.get("/w/r")!.waitingFor).toBeNull();
 });
 
-test("codexState reads a fresh, well-formed <wt>/.aw/codex-state.json only", () => {
+test("codexState reads a fresh, well-formed <wt>/.tender/run/codex-state.json only", () => {
   const ok = { state: "waiting", ts: NOW - 5000 };
   hookFile("A", ok);
   expect(codexState(wt("A"), NOW - 60_000, NOW)).toEqual({ state: "waiting", since: NOW - 5000, waitingFor: "permission" });
@@ -68,17 +68,22 @@ test("codexState reads a fresh, well-formed <wt>/.aw/codex-state.json only", () 
   expect(codexState(wt("missing"), 0, NOW)).toBeUndefined();
 });
 
-test("codexState skips a symlinked .aw, a symlinked or FIFO state file", () => {
+test("codexState skips a symlinked .tender or .tender/run, a symlinked or FIFO state file", () => {
   const real = join(root, "real");
   mkdirSync(real);
   writeFileSync(join(real, "codex-state.json"), JSON.stringify({ state: "idle", ts: NOW }));
-  mkdirSync(wt("L1"), { recursive: true });
-  symlinkSync(real, join(wt("L1"), ".aw"));
+  mkdirSync(join(wt("L1"), ".tender"), { recursive: true });
+  symlinkSync(real, join(wt("L1"), ".tender/run"));
   expect(codexState(wt("L1"), 0, NOW)).toBeUndefined();
-  mkdirSync(join(wt("L2"), ".aw"), { recursive: true });
+  mkdirSync(join(root, "parent/run"), { recursive: true });
+  writeFileSync(join(root, "parent/run/codex-state.json"), JSON.stringify({ state: "idle", ts: NOW }));
+  mkdirSync(wt("L0"), { recursive: true });
+  symlinkSync(join(root, "parent"), join(wt("L0"), ".tender"));
+  expect(codexState(wt("L0"), 0, NOW)).toBeUndefined();
+  mkdirSync(join(wt("L2"), ".tender/run"), { recursive: true });
   symlinkSync(join(real, "codex-state.json"), stateAt("L2"));
   expect(codexState(wt("L2"), 0, NOW)).toBeUndefined();
-  mkdirSync(join(wt("F"), ".aw"), { recursive: true });
+  mkdirSync(join(wt("F"), ".tender/run"), { recursive: true });
   expect(Bun.spawnSync(["mkfifo", stateAt("F")]).exitCode).toBe(0);
   expect(codexState(wt("F"), 0, NOW)).toBeUndefined();
 });
@@ -103,20 +108,20 @@ test("claudeSessions reads live <pid>.json records only, never through a symlink
 
 const hook = (dir: string) => Bun.spawn(["sh", "-c", INBOX_HOOK], { stdin: new Blob(["{}"]), stdout: "ignore", stderr: "pipe", env: { ...process.env, CLAUDE_PROJECT_DIR: dir } });
 
-test("inbox hook: exits 2 with the inbox line and consumes it; exits 0 outside an aw clone or once a newer waiter starts", async () => {
+test("inbox hook: exits 2 with the inbox line and consumes it; exits 0 outside a tender clone or once a newer waiter starts", async () => {
   const wt = join(root, "wt");
-  mkdirSync(join(wt, ".aw"), { recursive: true });
-  writeFileSync(join(wt, ".aw/inbox"), "read .aw/answer.md\n");
+  mkdirSync(join(wt, ".tender/run"), { recursive: true });
+  writeFileSync(join(wt, ".tender/run/inbox"), "read .tender/run/answer.md\n");
   const fire = hook(wt);
   expect(await fire.exited).toBe(2);
-  expect(await new Response(fire.stderr).text()).toBe("read .aw/answer.md\n");
-  expect(existsSync(join(wt, ".aw/inbox"))).toBe(false);
+  expect(await new Response(fire.stderr).text()).toBe("read .tender/run/answer.md\n");
+  expect(existsSync(join(wt, ".tender/run/inbox"))).toBe(false);
   const none = hook(join(root, "none"));
   expect(await none.exited).toBe(0);
   await new Response(none.stderr).text();
   const old = hook(wt);
-  while (readFileSync(join(wt, ".aw/inbox.pid"), "utf8").trim() !== String(old.pid)) await Bun.sleep(20);
-  writeFileSync(join(wt, ".aw/inbox.pid"), "1\n");
+  while (readFileSync(join(wt, ".tender/run/inbox.pid"), "utf8").trim() !== String(old.pid)) await Bun.sleep(20);
+  writeFileSync(join(wt, ".tender/run/inbox.pid"), "1\n");
   expect(await old.exited).toBe(0);
   expect(await new Response(old.stderr).text()).toBe("");
 });

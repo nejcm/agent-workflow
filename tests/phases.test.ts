@@ -34,12 +34,12 @@ test("phases: created once, status synced forward only, survives restart", async
   const { tr, calls } = fakeTracker({ inProgress: [ticket(1)] });
   const { io, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(["acme/web/gh-1"]) : noPr(a)));
   writePhases("gh-1", [phase("a", "in-progress"), phase("b", "todo")]);
-  await pass(c, io, () => tr, "/aw");
-  await pass(c, io, () => tr, "/aw");
+  await pass(c, io, () => tr, "/tender");
+  await pass(c, io, () => tr, "/tender");
   expect(calls).toEqual(["create gh-1 gh-1: Do a", "set sub-1 in-progress", "create gh-1 gh-1: Do b"]);
   calls.length = 0;
   writePhases("gh-1", [phase("a", "todo"), phase("b", "done"), phase("c", "todo")]);
-  await pass(c, io, () => tr, "/aw");
+  await pass(c, io, () => tr, "/tender");
   expect(calls).toEqual(["set sub-3 in-progress", "create gh-1 gh-1: Do c"]);
   expect(logs.some((l) => l.includes("phase gh-1/a: ignoring in-progress -> todo"))).toBe(true);
   expect(JSON.parse(readFileSync(join(root, "acme/web/gh-1.phases.json"), "utf8"))).toEqual({
@@ -56,10 +56,10 @@ test("phases: done is held at in-progress until the PR exists, then closed befor
   let prs = "[]";
   const { io } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(["acme/web/gh-1"]) : a[1] === "pr" ? { out: prs } : undefined));
   writePhases("gh-1", [phase("a", "done")]);
-  await pass(c, io, () => tr, "/aw");
+  await pass(c, io, () => tr, "/tender");
   expect(calls).toEqual(["create gh-1 gh-1: Do a", "set sub-1 in-progress"]);
   prs = '[{"url":"https://pr/1","state":"OPEN"}]';
-  await pass(c, io, () => tr, "/aw");
+  await pass(c, io, () => tr, "/tender");
   expect(calls.slice(2)).toEqual(["set sub-1 done", "review gh-1 https://pr/1"]);
 });
 
@@ -69,8 +69,8 @@ test("phases: tickets in review keep syncing until the final sync succeeds", asy
   const { io } = fakeIo(noPr);
   writePhases("gh-1", [phase("a", "done"), phase("b", "done")]);
   writeFileSync(join(root, "acme/web/gh-1.phases.json"), JSON.stringify({ a: { ref: "sub-a", status: "in-progress" } }));
-  await pass(c, io, () => tr, "/aw");
-  await pass(c, io, () => tr, "/aw");
+  await pass(c, io, () => tr, "/tender");
+  await pass(c, io, () => tr, "/tender");
   expect(calls).toEqual(["set sub-a done", "create gh-1 gh-1: Do b", "set sub-2 done"]);
 });
 
@@ -80,7 +80,7 @@ test("phases: a sub-ticket created before a lost sidecar write is adopted, not d
   subs.push({ ref: "sub-other", title: "gh-1: Something else" }, { ref: "sub-old", title: "gh-1: Do a" });
   const { io } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(["acme/web/gh-1"]) : noPr(a)));
   writePhases("gh-1", [phase("a", "in-progress"), phase("b", "todo")]);
-  await pass(c, io, () => tr, "/aw");
+  await pass(c, io, () => tr, "/tender");
   expect(calls).toEqual(["set sub-old in-progress", "create gh-1 gh-1: Do b"]);
 });
 
@@ -92,25 +92,26 @@ test("phases: bad or symlinked file is logged and the parent still moves to revi
   worktree("gh-2");
   mkdirSync(join(root, "outside"));
   writeFileSync(join(root, "outside/phases.json"), JSON.stringify([phase("a", "todo")]));
-  symlinkSync(join(root, "outside"), join(root, "acme/web/gh-2/.aw"));
+  mkdirSync(join(root, "acme/web/gh-2/.tender"));
+  symlinkSync(join(root, "outside"), join(root, "acme/web/gh-2/.tender/run"));
   writePhases("gh-3", "[]");
-  rmSync(join(root, "acme/web/gh-3/.aw/phases.json"));
-  symlinkSync(join(root, "outside/phases.json"), join(root, "acme/web/gh-3/.aw/phases.json"));
-  await pass(c, io, () => tr, "/aw");
+  rmSync(join(root, "acme/web/gh-3/.tender/run/phases.json"));
+  symlinkSync(join(root, "outside/phases.json"), join(root, "acme/web/gh-3/.tender/run/phases.json"));
+  await pass(c, io, () => tr, "/tender");
   expect(logs.some((l) => l.includes("phases gh-1 failed: phases.json: must be a regular file"))).toBe(true);
   expect(logs.some((l) => l.includes("phases gh-2 failed: ENOTDIR"))).toBe(true);
   expect(logs.some((l) => l.includes("phases gh-3 failed: ELOOP"))).toBe(true);
   expect(calls).toEqual(["review gh-1 https://pr/1", "review gh-2 https://pr/1", "review gh-3 https://pr/1"]);
 });
 
-test("phases: start git-ignores .aw; cleanup removes the sidecar", async () => {
+test("phases: start git-ignores .tender/run; cleanup removes the sidecar", async () => {
   const c = config();
   const { tr } = fakeTracker({ ready: [ticket(1)], done: ["gh-2"] });
   worktree("gh-2");
   writeFileSync(join(root, "acme/web/gh-2.phases.json"), "{}");
   const { io } = fakeIo(noPr);
-  await pass(c, io, () => tr, "/aw");
-  expect(readFileSync(join(root, "acme/web/gh-1/.aw/.gitignore"), "utf8")).toBe("*\n");
+  await pass(c, io, () => tr, "/tender");
+  expect(readFileSync(join(root, "acme/web/gh-1/.tender/run/.gitignore"), "utf8")).toBe("*\n");
   expect(existsSync(join(root, "acme/web/gh-2.phases.json"))).toBe(false);
 });
 
@@ -119,9 +120,9 @@ test("phases: a FIFO phases file is rejected without blocking the poller", async
   const { tr } = fakeTracker({ inProgress: [ticket(1)] });
   const { io, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(["acme/web/gh-1"]) : noPr(a)));
   worktree("gh-1");
-  mkdirSync(join(root, "acme/web/gh-1/.aw"), { recursive: true });
-  expect(Bun.spawnSync(["mkfifo", join(root, "acme/web/gh-1/.aw/phases.json")]).exitCode).toBe(0);
-  await pass(c, io, () => tr, "/aw");
+  mkdirSync(join(root, "acme/web/gh-1/.tender/run"), { recursive: true });
+  expect(Bun.spawnSync(["mkfifo", join(root, "acme/web/gh-1/.tender/run/phases.json")]).exitCode).toBe(0);
+  await pass(c, io, () => tr, "/tender");
   expect(logs.some((l) => l.includes("phases gh-1 failed: phases.json: must be a regular file"))).toBe(true);
 });
 
@@ -129,7 +130,7 @@ test("phases: dry-run creates nothing and writes no sidecar", async () => {
   const c = config();
   const { io, cmds, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(["acme/web/gh-1"]) : a[2] === "list" ? { out: JSON.stringify([{ number: 1, title: "t", body: "", url: "u", labels: [] }]) } : a[1] === "api" ? { out: "[]" } : noPr(a)), true);
   writePhases("gh-1", [phase("a", "done")]);
-  await pass(c, io, makeTracker, "/aw");
+  await pass(c, io, makeTracker, "/tender");
   expect(cmds.filter((x) => /issue (create|edit|close)/.test(x))).toEqual([]);
   expect(logs.some((l) => l.includes("dry: gh issue create --repo acme/web --parent 1"))).toBe(true);
   expect(logs.some((l) => l.includes("dry: gh issue close  --repo acme/web"))).toBe(true);

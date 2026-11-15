@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "aw",
+      "name": "tender",
       "dependencies": {
         "@opentui/core": "0.8.4",
       },

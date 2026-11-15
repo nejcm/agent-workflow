@@ -4,14 +4,14 @@ import { checkState } from "./merge";
 import { byOperator, deliveryPane, nudge } from "./question";
 import type { State } from "./state";
 import type { Io, Repo, Ticket, TicketComment, Tracker } from "./types";
-import { put, read, writeAw } from "./util";
+import { put, read, writeRun } from "./util";
 
 const DEBOUNCE_MS = 2 * 60_000;
 export const MAX_ROUNDS = 3;
 const MAX_RUNS = 3;
 const LOG_LINES = 80;
 const MAX_ITEM_CHARS = 8000;
-export const FEEDBACK_POINTER = "There is new feedback on your PR: read .aw/feedback.md";
+export const FEEDBACK_POINTER = "There is new feedback on your PR: read .tender/run/feedback.md";
 
 export interface FeedbackCursor {
   /** GitHub time of the newest delivered comment. */
@@ -102,7 +102,7 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
     "</feedback>\n",
   ].join("\n");
   const wt = join(dir, t.id);
-  io.log(`${io.dry ? "dry: " : ""}feedback ${t.id} round ${cur.rounds + 1} to ${wt}/.aw/feedback.md`);
-  if (!io.dry) writeAw(wt, "feedback.md", text);
+  io.log(`${io.dry ? "dry: " : ""}feedback ${t.id} round ${cur.rounds + 1} to ${wt}/.tender/run/feedback.md`);
+  if (!io.dry) writeRun(wt, "feedback.md", text);
   await nudge(io, t.id, wt, pane, FEEDBACK_POINTER);
 }

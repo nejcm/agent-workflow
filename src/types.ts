@@ -78,7 +78,7 @@ export interface Tracker {
   globalIds: boolean;
   /** How a human requeues a ticket whose session ended, e.g. "remove the in-progress label". */
   restartHint(): string;
-  /** One-line summary for `aw status`. */
+  /** One-line summary for `tender status`. */
   describe(): string;
   listReady(): Promise<Ticket[]>;
   listInProgress(): Promise<Ticket[]>;

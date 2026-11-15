@@ -13,9 +13,9 @@ const NOW = T * 1000;
 const wt = (id: string) => join(root, "acme/web", id);
 const codex = () => config({ defaults: { agent: "codex", sandbox: "nono", testCmd: "bun test" } });
 const launched = (id: string) => (worktree(id), writeFileSync(join(root, "acme/web", `${id}.sh`), ""), utimesSync(join(root, "acme/web", `${id}.sh`), T - 60, T - 60));
-const stateAt = (id: string) => join(wt(id), ".aw", "codex-state.json");
+const stateAt = (id: string) => join(wt(id), ".tender/run", "codex-state.json");
 const hookFile = (id: string, o: unknown) => {
-  mkdirSync(join(wt(id), ".aw"), { recursive: true });
+  mkdirSync(join(wt(id), ".tender/run"), { recursive: true });
   writeFileSync(stateAt(id), typeof o === "string" ? o : JSON.stringify(o));
 };
 
@@ -61,7 +61,7 @@ test("codex rows read the hook file; one from before the launch is ignored", asy
 const script = join(import.meta.dir, "..", "scripts", "codex-hooks.sh");
 const hooks = (file: string) => Bun.spawnSync(["bash", script, file]);
 
-test("codex-hooks.sh adds one aw block, is idempotent, keeps user content and refuses damaged markers", () => {
+test("codex-hooks.sh adds one tender block, is idempotent, keeps user content and refuses damaged markers", () => {
   const file = join(root, "config.toml");
   const user = 'model = "x"\n\n[projects."/p"]\ntrust_level = "trusted"\n';
   writeFileSync(file, user);
@@ -78,10 +78,10 @@ test("codex-hooks.sh adds one aw block, is idempotent, keeps user content and re
   expect(hooks(file).exitCode).toBe(0);
   const again = readFileSync(file, "utf8");
   expect(again).toContain('extra = "kept"');
-  expect(again.match(/>>> aw state hooks/g)!.length).toBe(1);
+  expect(again.match(/>>> tender state hooks/g)!.length).toBe(1);
   expect(again).not.toContain("timeout = 9");
 
-  const [b, e] = ["# >>> aw state hooks (managed by scripts/codex-hooks.sh)", "# <<< aw state hooks"];
+  const [b, e] = ["# >>> tender state hooks (managed by scripts/codex-hooks.sh)", "# <<< tender state hooks"];
   for (const bad of [user + `${b}\nmine = 1\n`, user + `${e}\nkeep = 2\n${b}\nmine = 1\n`, user + `${b}\n${e}\n${b}\n${e}\n`, `hooks = {}\n${user}`]) {
     writeFileSync(file, bad);
     expect(hooks(file).exitCode).toBe(1);
@@ -90,24 +90,30 @@ test("codex-hooks.sh adds one aw block, is idempotent, keeps user content and re
   expect(readdirSync(root).filter((f) => f.startsWith("config.toml."))).toEqual([]);
 });
 
-test("the installed hook command writes only into a real <cwd>/.aw and aw accepts it", () => {
+test("the installed hook command writes only into a real <cwd>/.tender/run and tender accepts it", () => {
   const file = join(root, "config.toml");
   hooks(file);
   const parsed = Bun.TOML.parse(readFileSync(file, "utf8")) as any;
   const run = (event: string, cwd: string) => Bun.spawnSync(["sh", "-c", parsed.hooks[event][0].hooks[0].command], { cwd, stdin: Buffer.from('{"session_id":"s"}') }).exitCode;
-  mkdirSync(join(wt("PER-9"), ".aw"), { recursive: true });
+  mkdirSync(join(wt("PER-9"), ".tender/run"), { recursive: true });
   for (const [event, state] of [["UserPromptSubmit", "working"], ["PermissionRequest", "waiting"]]) {
     expect(run(event!, wt("PER-9"))).toBe(0);
     expect(codexState(wt("PER-9"), Date.now() - 5000, Date.now())?.state).toBe(state as any);
   }
-  expect(readdirSync(join(wt("PER-9"), ".aw"))).toEqual(["codex-state.json"]);
+  expect(readdirSync(join(wt("PER-9"), ".tender/run"))).toEqual(["codex-state.json"]);
 
   mkdirSync(wt("PER-10"), { recursive: true });
   expect(run("Stop", wt("PER-10"))).toBe(0);
-  expect(existsSync(join(wt("PER-10"), ".aw"))).toBe(false);
+  expect(existsSync(join(wt("PER-10"), ".tender/run"))).toBe(false);
   const outside = join(root, "outside");
   mkdirSync(outside);
-  symlinkSync(outside, join(wt("PER-10"), ".aw"));
+  mkdirSync(join(wt("PER-10"), ".tender"));
+  symlinkSync(outside, join(wt("PER-10"), ".tender/run"));
   expect(run("Stop", wt("PER-10"))).toBe(0);
   expect(readdirSync(outside)).toEqual([]);
+  mkdirSync(join(outside, "run"));
+  mkdirSync(wt("PER-11"), { recursive: true });
+  symlinkSync(outside, join(wt("PER-11"), ".tender"));
+  expect(run("Stop", wt("PER-11"))).toBe(0);
+  expect(readdirSync(join(outside, "run"))).toEqual([]);
 });

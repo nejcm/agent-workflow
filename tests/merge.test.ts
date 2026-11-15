@@ -54,8 +54,8 @@ test("merge decision: size tiers and their boundaries", () => {
   expect(m({ additions: 150, deletions: 0, changedFiles: 5, statusCheckRollup: [] })).toEqual({ merge: true, reason: "small change" });
   expect(m({ additions: 100, deletions: 50, changedFiles: 5 }, assess()).reason).toBe("small change; agent: small fix, tests pass");
   expect(m({ additions: 100, changedFiles: 1 }, assess({ tested: false, confidence: "medium" })).merge).toBe(true);
-  expect(m({ additions: 151, deletions: 0, changedFiles: 1 }).reason).toBe("medium change without a valid .aw/merge.json");
-  expect(m({ additions: 1, deletions: 0, changedFiles: 6 }).reason).toBe("medium change without a valid .aw/merge.json");
+  expect(m({ additions: 151, deletions: 0, changedFiles: 1 }).reason).toBe("medium change without a valid .tender/run/merge.json");
+  expect(m({ additions: 1, deletions: 0, changedFiles: 6 }).reason).toBe("medium change without a valid .tender/run/merge.json");
   expect(m({ additions: 500, deletions: 0, changedFiles: 15 }, assess())).toEqual({ merge: true, reason: "medium change; agent: small fix, tests pass" });
   expect(m({ ...medium, statusCheckRollup: [ok, { status: "QUEUED" }] }, assess()).merge).toBe("wait");
   expect(m({ ...medium, statusCheckRollup: [] }, assess()).reason).toBe("medium change with no successful check");
@@ -67,7 +67,7 @@ test("merge decision: size tiers and their boundaries", () => {
 
 test("critical paths: built-ins, case-insensitive, any depth without a slash, config extends", () => {
   for (const p of [".github/workflows/ci.yml", "Dockerfile", "svc/Dockerfile.dev", "docker-compose.yml", "db/migrations/001.sql", "q.SQL", "package.json", "web/package.json", "bun.lockb", "go.sum",
-    "requirements-dev.txt", "src/auth/login.ts", "config/client_secret.json", ".env", "app/.env.local", "certs/x.pem", "id.key", "nono/aw-claude.json", "aw.json", "infra/main.tf", "ops/terraform/x", "deploy/run.sh", "SRC/Auth/x.ts"])
+    "requirements-dev.txt", "src/auth/login.ts", "config/client_secret.json", ".env", "app/.env.local", "certs/x.pem", "id.key", "nono/tender-claude.json", "tender.json", "infra/main.tf", "ops/terraform/x", "deploy/run.sh", "SRC/Auth/x.ts"])
     expect([p, isCritical(p)]).toEqual([p, true]);
   for (const p of ["src/a.ts", "README.md", "docs/github.md", "src/authors.ts", "nono.md", "src/nono/x.ts", "keys.ts"]) expect([p, isCritical(p)]).toEqual([p, false]);
   expect(isCritical("src/billing/pay.ts")).toBe(false);
@@ -119,7 +119,7 @@ test("auto-merge pass: merges only when enabled, pinned to the head; not-merged 
     const { tr, calls } = fakeTracker({ inReview: [ticket(1)] });
     const { io, cmds, logs } = fakeIo(respond, dry);
     worktree("gh-1");
-    await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge }] }), io, () => tr, "/aw");
+    await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge }] }), io, () => tr, "/tender");
     return { calls, merges: [...cmds, ...logs].filter((x) => x.includes("gh pr merge")), cmds };
   };
 
@@ -165,7 +165,7 @@ test("auto-merge pass: parked tickets only get the merged-by-hand recovery; a fr
     if (parked) f.tr.parked = parked;
     const { io, cmds } = fakeIo((a) => (a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"OPEN"}]' } : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(facts) } : undefined));
     worktree("gh-1");
-    await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "all" }] }), io, () => f.tr, "/aw");
+    await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "all" }] }), io, () => f.tr, "/tender");
     return { calls: f.calls, merges: cmds.filter((x) => x.startsWith("gh pr merge")) };
   };
   expect(await run(["Needs-Human"])).toEqual({ calls: [], merges: [] });
@@ -185,13 +185,13 @@ test("auto-merge pass: a held marker for an older head is cleared while the new 
   for (const [sha, kept] of [["a".repeat(40), false], ["b".repeat(40), true]] as const) {
     writeFileSync(marker, sha);
     const { tr, calls } = fakeTracker({ inReview: [ticket(1)] });
-    await pass(c, fakeIo(respond).io, () => tr, "/aw");
+    await pass(c, fakeIo(respond).io, () => tr, "/tender");
     expect([existsSync(marker), calls]).toEqual([kept, []]);
   }
   facts.state = "MERGED";
   const { tr, calls } = fakeTracker({ inReview: [ticket(1)] });
   writeFileSync(marker, "a".repeat(40));
-  await pass(c, fakeIo(respond).io, () => tr, "/aw");
+  await pass(c, fakeIo(respond).io, () => tr, "/tender");
   expect([existsSync(marker), calls]).toEqual([false, ["done gh-1"]]);
 });
 
@@ -201,19 +201,19 @@ test("auto-merge pass: medium needs the agent's merge.json; a symlinked one is i
   const respond = (a: string[]) => (a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"OPEN"}]' } : a[2] === "view" && a[1] === "pr" ? { out: JSON.stringify(a.at(-1) === "state" ? { state: "MERGED" } : facts) }
     : a[1] === "api" ? { out: facts.files!.map((f) => JSON.stringify(f)).join("\n") } : undefined);
   worktree("gh-1");
-  mkdirSync(join(root, "acme/web/gh-1/.aw"));
+  mkdirSync(join(root, "acme/web/gh-1/.tender/run"), { recursive: true });
   writeFileSync(join(root, "outside.json"), JSON.stringify(assess()));
-  symlinkSync(join(root, "outside.json"), join(root, "acme/web/gh-1/.aw/merge.json"));
+  symlinkSync(join(root, "outside.json"), join(root, "acme/web/gh-1/.tender/run/merge.json"));
   const a = fakeTracker({ inReview: [ticket(1)] });
   const x = fakeIo(respond);
-  await pass(c, x.io, () => a.tr, "/aw");
-  expect(x.logs.some((l) => l.includes("merge gh-1: .aw/merge.json ignored: ELOOP"))).toBe(true);
-  expect(a.calls).toEqual(["comment gh-1 not auto-merged: medium change without a valid .aw/merge.json"]);
-  rmSync(join(root, "acme/web/gh-1/.aw/merge.json"));
-  writeFileSync(join(root, "acme/web/gh-1/.aw/merge.json"), JSON.stringify(assess()));
+  await pass(c, x.io, () => a.tr, "/tender");
+  expect(x.logs.some((l) => l.includes("merge gh-1: .tender/run/merge.json ignored: ELOOP"))).toBe(true);
+  expect(a.calls).toEqual(["comment gh-1 not auto-merged: medium change without a valid .tender/run/merge.json"]);
+  rmSync(join(root, "acme/web/gh-1/.tender/run/merge.json"));
+  writeFileSync(join(root, "acme/web/gh-1/.tender/run/merge.json"), JSON.stringify(assess()));
   const b = fakeTracker({ inReview: [ticket(1)] });
   const y = fakeIo(respond);
-  await pass(c, y.io, () => b.tr, "/aw");
+  await pass(c, y.io, () => b.tr, "/tender");
   expect(y.cmds.some((l) => l.startsWith("gh pr merge 7"))).toBe(true);
   expect(b.calls).toEqual(["comment gh-1 auto-merged https://github.com/acme/web/pull/7: medium change; agent: small fix, tests pass", "done gh-1"]);
 });
@@ -252,7 +252,7 @@ test("auto-merge pass: a head that moves before the merge re-check drops a held 
   worktree("gh-1");
   const marker = join(root, "acme/web/gh-1.merge");
   writeFileSync(marker, "a".repeat(40));
-  await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "all" }] }), io, () => tr, "/aw");
+  await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "all" }] }), io, () => tr, "/tender");
   expect([existsSync(marker), calls, cmds.some((x) => x.startsWith("gh pr merge"))]).toEqual([false, [], false]);
 });
 
@@ -265,7 +265,7 @@ test("auto-merge pass: re-checks the PR right before merging, confirms it merged
       : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(a.at(-1) === "state" ? { state } : views.shift()) }
       : a[1] === "repo" && a[2] === "view" ? { out: JSON.stringify({ nameWithOwner: owner }) } : undefined);
     worktree("gh-1");
-    await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "all" }] }), io, () => tr, "/aw");
+    await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "all" }] }), io, () => tr, "/tender");
     return { calls, logs, merged: cmds.some((x) => x.startsWith("gh pr merge")) };
   };
   for (const now of [{ baseRefName: "release" }, { headRefOid: "b".repeat(40) }, { isDraft: true }, { state: "CLOSED" }])
@@ -285,7 +285,7 @@ test("in review: .pr comes from autoMerge's lookup, else its own lookup each pol
   const respond = (a: string[]) => (a[1] === "pr" && a[2] === "list" ? { out: JSON.stringify([{ url, state: "OPEN" }]) } : a[1] === "pr" ? { out: JSON.stringify({ ...prFacts(), number: 7, url, headRefOid: "a" }) } : undefined);
   const run = async (autoMerge: string, dry = false) => {
     const x = fakeIo(respond, dry);
-    await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge }] }), x.io, () => fakeTracker({ inReview: [ticket(1)] }).tr, "/aw");
+    await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge }] }), x.io, () => fakeTracker({ inReview: [ticket(1)] }).tr, "/tender");
     return { lookups: x.cmds.filter((c) => c.startsWith("gh pr list")).length, writes: x.logs.filter((l) => l.endsWith(`write ${f}`)).length };
   };
   worktree("gh-1");
@@ -311,7 +311,7 @@ test("in review: gh calls per ticket per poll; feedback reuses auto-merge's view
     : a[1] === "api" ? { out: "[]" } : undefined;
   const run = async (autoMerge: string, feedbackAuthors: string[], win: boolean) => {
     const x = fakeIo((a) => (a[1] === "list-windows" ? { out: win ? "@0 acme/web/gh-1" : "" } : respond(a)));
-    await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge, feedbackAuthors }] }), x.io, () => fakeTracker({ inReview: [ticket(1)] }).tr, "/aw", async () => "idle");
+    await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge, feedbackAuthors }] }), x.io, () => fakeTracker({ inReview: [ticket(1)] }).tr, "/tender", async () => "idle");
     return x.cmds.filter((c) => c.startsWith("gh "));
   };
   const list = "gh pr list --repo acme/web --head agent/gh-1 --state all --json url,state";
@@ -339,11 +339,11 @@ test("in review: a PR merged or closed during the merge recheck gets no feedback
       : a[1] === "repo" ? { out: JSON.stringify({ nameWithOwner: "acme/web" }) }
       : a[1] === "api" ? { out: "[]" } : undefined);
     const { tr, calls } = fakeTracker({ inReview: [ticket(1)] });
-    await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "all", feedbackAuthors: ["op"] }] }), io, () => tr, "/aw", async () => "idle");
+    await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "all", feedbackAuthors: ["op"] }] }), io, () => tr, "/tender", async () => "idle");
     return { calls, pasted: cmds.some((c) => c.startsWith("tmux set-buffer")) };
   };
   worktree("gh-1");
-  mkdirSync(join(root, "acme/web/gh-1/.aw"), { recursive: true });
+  mkdirSync(join(root, "acme/web/gh-1/.tender/run"), { recursive: true });
   const merged = await run(["OPEN", "OPEN", "MERGED", "MERGED"]);
   expect(merged.calls).toContain("done gh-1");
   expect(merged.pasted).toBe(false);

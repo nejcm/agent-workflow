@@ -22,7 +22,7 @@ const errors = (entries: Entry[]) => {
 };
 
 test("repo config: no files means built-in defaults", () => {
-  expect(parseRepoConfig([])).toEqual({ agent: "claude", testCmd: undefined, planStep: "Plan and implement the ticket.", autoMerge: undefined, criticalPaths: [], testPaths: [], prompts: { default: undefined, byLabel: {} }, files: {} });
+  expect(parseRepoConfig([])).toEqual({ agent: "claude", testCmd: undefined, planStep: "Plan and implement the ticket.", autoMerge: undefined, criticalPaths: [], testPaths: [], trust: [], escapeHatches: [], prompts: { default: undefined, byLabel: {} }, files: {} });
   expect(parseRepoConfig([file("config.yaml", "")]).agent).toBe("claude");
 });
 
@@ -56,6 +56,17 @@ test("repo config: tracker.linear names the project, with an optional team key",
   expect(errors([file("config.yaml", "tracker:\n  linear:\n    project: 7\n    team: 12\n")])).toContain("tracker.linear.team: Linear team key");
 });
 
+test("repo config: trust rules and escapeHatches regexes, capped in count and length", () => {
+  const c = parseRepoConfig([file("config.yaml", 'trust:\n  - { paths: ["docs/**", "**/*.md"], autoMerge: all }\n  - { paths: ["**/auth/**"], autoMerge: off }\nescapeHatches: ["pragma: no cover", "^\\\\s*debugger"]\n')]);
+  expect(c.trust).toEqual([{ paths: ["docs/**", "**/*.md"], autoMerge: "all" }, { paths: ["**/auth/**"], autoMerge: "off" }]);
+  expect(c.escapeHatches).toEqual(["pragma: no cover", "^\\s*debugger"]);
+  for (const y of ["trust: docs\n", "trust:\n  - { paths: [], autoMerge: all }\n", "trust:\n  - { paths: [docs/**], autoMerge: yes }\n", "trust:\n  - { paths: [docs/**], autoMerge: all, why: x }\n", "trust:\n  - docs/**\n"])
+    expect(errors([file("config.yaml", y)])).toStartWith("trust: list of { paths: [glob, …], autoMerge:");
+  const many = Array.from({ length: 21 }, (_, i) => `x${i}`);
+  for (const v of [many, ["("], [""], ["x".repeat(201)], "x", [1]]) expect(errors([file("config.yaml", `escapeHatches: ${JSON.stringify(v)}\n`)])).toBe("escapeHatches: at most 20 valid regexes of at most 200 chars");
+  expect(parseRepoConfig([file("config.yaml", `escapeHatches: ${JSON.stringify(many.slice(2).concat("x".repeat(200)))}\n`)]).escapeHatches).toHaveLength(20);
+});
+
 test("repo config: size cap, prompt names, regular files only", () => {
   const big = "x".repeat(64 * 1024 + 1);
   expect(errors([file("prompts/a.md", big)])).toBe("prompts/a.md: over 64 KiB");
@@ -82,6 +93,7 @@ test("combine: autoMerge is the lower of the repo's request and the host's ceili
   expect(combine(host("shadow"), "main", repo("autoMerge: all\n")).autoMerge).toBe("shadow");
   expect(combine(host("all"), "main", repo("")).autoMerge).toBe("all");
   expect(combine(host("off"), "main", repo("autoMerge: all\n")).autoMerge).toBe("off");
+  expect(combine(host("intelligent"), "main", repo("autoMerge: shadow\n")).ceiling).toBe("intelligent");
   const s = combine(host("all"), "dev", repo('autoMerge: intelligent\ncriticalPaths: ["src/billing/**"]\n'));
   expect(s).toMatchObject({ baseBranch: "dev", sandbox: "nono", agent: "claude" });
   const pr = (filename: string): PrFacts => ({ state: "OPEN", isDraft: false, isCrossRepository: false, baseRefName: "dev", mergeable: "MERGEABLE", additions: 1, deletions: 0, changedFiles: 1, statusCheckRollup: [], labels: [], files: [{ filename, status: "modified", additions: 1, deletions: 0 }] }) as any;

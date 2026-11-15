@@ -1,11 +1,13 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { repoDir } from "./config";
+import { AUTO_MERGE, repoDir } from "./config";
 import { canonical, findPr, sameRepo } from "./github";
-import type { Config, Io, Session, Ticket, Tracker } from "./types";
+import { hatchInWorker } from "./hatch";
+import type { AutoMerge, Config, Io, Session, Ticket, Tracker } from "./types";
 import { put, read, readRun, remove, write } from "./util";
 
 const MAX_MERGE_BYTES = 4 * 1024;
+const MAX_DIFF_BYTES = 2 * 1024 * 1024;
 
 export interface Assessment {
   tested: boolean;
@@ -31,7 +33,7 @@ export function parseAssessment(raw: string): Assessment {
 export const CRITICAL_PATHS = [
   ".github/**", "**/Dockerfile*", "docker-compose*", "**/migrations/**", "**/*.sql",
   "package.json", "bun.lock*", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "go.mod", "go.sum", "Cargo.toml", "Cargo.lock", "pyproject.toml", "requirements*.txt",
-  "**/auth/**", "**/*secret*", "**/*.env*", "**/*.pem", "**/*.key", "nono/**", "tender.json", ".tender/**", "**/infra/**", "**/terraform/**", "**/deploy/**",
+  "**/auth/**", "**/*secret*", "**/*.env*", "**/*.pem", "**/*.key", "nono/**", "tender.json", ".tender/**", "**/.agents/**", "**/SKILL.md", "**/infra/**", "**/terraform/**", "**/deploy/**",
   "AGENTS.md", "CLAUDE.md", "**/.claude/**", "**/.codex/**", ".mcp.json", "CLAUDE.local.md", "GEMINI.md", "**/.gemini/**", "**/.cursor/**", ".cursorrules", "uv.lock", "poetry.lock", "Gemfile", "Gemfile.lock", "**/*.tf", "**/k8s/**", "**/helm/**",
   ".npmrc", "bunfig.toml", ".gitmodules", "**/.husky/**", ".pre-commit-config.yaml", "Makefile",
   "conftest.py", "pytest.ini", "jest.config.*", "vitest.config.*", "playwright.config.*",
@@ -45,6 +47,19 @@ const globRe = (g: string) =>
 export const isCritical = (path: string, extra: string[] = []) => [...CRITICAL_PATHS, ...extra].some((g) => globRe(g).test(path));
 export const isTest = (path: string, extra: string[] = []) => [...TEST_PATHS, ...extra].some((g) => globRe(g).test(path));
 
+type Trust = Pick<Session, "autoMerge" | "ceiling" | "trust">;
+type PrFile = NonNullable<PrFacts["files"]>[number];
+const rank = (m: AutoMerge) => AUTO_MERGE.indexOf(m);
+const paths = (f: PrFile) => [f.filename, ...(f.previous_filename ? [f.previous_filename] : [])];
+const rule = (s: Trust, path: string) => s.trust.find((t) => t.paths.some((g) => globRe(g).test(path)));
+
+/** The lowest mode across the PR's files and old paths, capped by the host; without files, the highest any file could get. */
+export function prMode(s: Trust, files?: PrFile[]): AutoMerge {
+  const ranks = (files ?? []).flatMap(paths).map((p) => rank(rule(s, p)?.autoMerge ?? s.autoMerge));
+  const r = !files ? Math.max(rank(s.autoMerge), ...s.trust.map((t) => rank(t.autoMerge))) : ranks.length ? Math.min(...ranks) : rank(s.autoMerge);
+  return AUTO_MERGE[Math.min(r, rank(s.ceiling))]!;
+}
+
 export interface PrFacts {
   state: string;
   isDraft: boolean;
@@ -54,8 +69,10 @@ export interface PrFacts {
   additions: number;
   deletions: number;
   changedFiles: number;
-  /** From the REST files endpoint, fetched only for gated modes. */
+  /** From the REST files endpoint, fetched only when everything else would merge. */
   files?: { filename: string; previous_filename?: string | null; status: string; additions: number; deletions: number }[];
+  /** From the diff, read once the file gates pass: why it holds back, or "" if nothing does; undefined skips the gate. */
+  hatch?: string;
   statusCheckRollup: any[];
   labels: { name: string }[];
   reviewDecision?: string;
@@ -70,9 +87,11 @@ export const checkState = (c: any) =>
     : c?.status !== "COMPLETED" ? "pending" : c.conclusion === "SUCCESS" ? "success" : ["NEUTRAL", "SKIPPED"].includes(c.conclusion) ? "neutral" : "failed";
 
 /** Whether tender may merge the PR now. The assessment is agent-written and untrusted: it can only hold a merge back. */
-export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Session, "autoMerge" | "criticalPaths" | "testPaths" | "baseBranch">, ticketLabels: string[] = []): { merge: boolean | "wait"; reason: string } {
+export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Session, "autoMerge" | "ceiling" | "trust" | "criticalPaths" | "testPaths" | "baseBranch">, ticketLabels: string[] = []): { merge: boolean | "wait"; reason: string } {
   const no = (reason: string) => ({ merge: false, reason });
-  if (s.autoMerge === "off") return no("autoMerge is off");
+  const mode = prMode(s, pr.files);
+  const offAt = pr.files?.flatMap(paths).find((p) => rule(s, p)?.autoMerge === "off");
+  if (mode === "off") return no(offAt ? `trust sets ${offAt} to off` : "autoMerge is off");
   if (pr.isCrossRepository) return no("PR is from a fork");
   if (pr.baseRefName !== s.baseBranch) return no(`PR targets ${pr.baseRefName}, not ${s.baseBranch}`);
   if (pr.state !== "OPEN") return no(`PR is ${pr.state}`);
@@ -85,11 +104,12 @@ export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Se
   if (failed) return no(`${failed} check(s) failed`);
   const lines = pr.additions + pr.deletions;
   const tier = lines <= 150 && pr.changedFiles <= 5 ? "small" : lines <= 500 && pr.changedFiles <= 15 ? "medium" : "large";
-  if ((s.autoMerge === "intelligent" || s.autoMerge === "shadow") && pr.files) {
+  if (pr.files) {
     if (pr.files.length !== pr.changedFiles) return no(`file list has ${pr.files.length} of ${pr.changedFiles} files`);
-    const paths = (f: NonNullable<PrFacts["files"]>[number]) => [f.filename, ...(f.previous_filename ? [f.previous_filename] : [])];
     const hit = pr.files.flatMap(paths).find((p) => isCritical(p, s.criticalPaths));
     if (hit) return no(`touches critical path ${hit}`);
+  }
+  if (pr.files && mode !== "all") {
     const rewritten = pr.files.find((f) => (f.deletions > 0 || ["removed", "renamed"].includes(f.status)) && paths(f).some((p) => isTest(p, s.testPaths)));
     if (rewritten) return no(`changes existing test ${rewritten.filename} (${rewritten.status}, ${rewritten.deletions} deletions)`);
     if (tier === "large") return no(`too large (${lines} lines, ${pr.changedFiles} files)`);
@@ -102,15 +122,16 @@ export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Se
       if (!checks.includes("success")) return no("medium change with no successful check");
     }
   }
+  if (pr.hatch) return no(pr.hatch);
   if (pr.mergeable !== "MERGEABLE" || checks.includes("pending")) return { merge: "wait", reason: "checks pending or mergeability unknown" };
-  return { merge: true, reason: s.autoMerge === "all" ? "autoMerge all" : `${tier} change${a ? `; agent: ${a.reason}` : ""}` };
+  return { merge: true, reason: mode === "all" ? "autoMerge all" : `${tier} change${a ? `; agent: ${a.reason}` : ""}` };
 }
 
 /** Whether a PR is ready for a human to merge, from GitHub's view alone; nothing the agent writes counts. */
 export const prReady = (pr: PrFacts) =>
   pr.state === "OPEN" && !pr.isDraft && pr.mergeable === "MERGEABLE" && pr.reviewDecision !== "CHANGES_REQUESTED" && pr.statusCheckRollup.every((c) => ["success", "neutral"].includes(checkState(c)));
 
-export const PR_FIELDS = "number,url,state,isDraft,isCrossRepository,baseRefName,mergeable,additions,deletions,changedFiles,statusCheckRollup,labels,headRefOid,reviewDecision";
+export const PR_FIELDS = "number,url,state,isDraft,isCrossRepository,baseRefName,baseRefOid,mergeable,additions,deletions,changedFiles,statusCheckRollup,labels,headRefOid,reviewDecision";
 
 // tender merges, pinned to the head it judged (the agent's token could too; see README). "Not merged" is commented once per head SHA.
 // With `share`, the first view also fetches `share.fields` and lands in `share.pr`, so feedback need not view the PR again.
@@ -138,30 +159,37 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
   } catch (e) {
     io.log(`merge ${t.id}: .tender/run/merge.json ignored: ${(e as Error).message}`);
   }
-  // Undefined skips the file gates; only this pre-check may leave it unset.
+  // Undefined skips the file gates and judges by the highest mode trust allows; only this pre-check may leave it unset.
   pr.files = undefined;
   let d = mergeDecision(pr, a, r, t.labels);
   // File gates only refuse, so the files are fetched only when everything else would merge.
-  const fetch = d.merge === true && (r.autoMerge === "intelligent" || (r.autoMerge === "shadow" && !held));
+  const fetch = d.merge === true && (prMode(r) !== "shadow" || !held);
   if (fetch) {
     // REST, not `gh pr view --json files`: it has a rename's old path and is not capped at 100 files.
     const out = await read(io, ["gh", "api", "--paginate", `repos/${r.key}/pulls/${n}/files?per_page=100`, "--jq", ".[] | {filename, previous_filename, status, additions, deletions}"]);
     pr.files = out.split("\n").filter(Boolean).map((l) => JSON.parse(l));
     d = mergeDecision(pr, a, r, t.labels);
+    if (d.merge === true) {
+      pr.hatch = await prHatch(io, r.key, pr, r.escapeHatches);
+      d = mergeDecision(pr, a, r, t.labels);
+    }
   }
-  if (d.merge === "wait" || (held && (!d.merge || r.autoMerge === "shadow"))) {
+  const mode = prMode(r, pr.files);
+  if (d.merge === "wait" || (held && (!d.merge || mode === "shadow"))) {
     // Shared only when nothing was awaited since the view, so feedback never reads a stale one.
     if (share && !fetch) share.pr = pr;
     return pr;
   }
-  if (d.merge && r.autoMerge !== "shadow") {
+  if (d.merge && mode !== "shadow") {
     if (!(await ours())) return;
     // gh pr merge can pin the head but not the base, so a retarget after this fresh view still races.
     const now = await view();
-    // Files are a function of the head, which is checked next.
+    // Files and diff are a function of the head and base, which are checked next.
     now.files = pr.files;
+    now.hatch = pr.hatch;
     // A marker kept as `held` names the old head.
     if (now.headRefOid !== pr.headRefOid) return remove(io, f);
+    if (now.baseRefOid !== pr.baseRefOid) return;
     if (mergeDecision(now, a, r, t.labels).merge !== true) return;
     // The listing may predate a human parking it; a failed read throws, so no merge.
     if (await tr.parked(t)) return;
@@ -179,6 +207,25 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
     throw e;
   }
   return pr;
+}
+
+export const hatchCache = new Map<string, { key: string; hatch: string }>();
+
+// Pinned to both SHAs, so a head pushed after the view cannot land in the cache under it; `head` bounds what is buffered.
+async function prHatch(io: Io, repo: string, pr: any, extra: string[]) {
+  const range = `${pr.baseRefOid}...${pr.headRefOid}`;
+  const key = `${range}\0${extra.join("\0")}`;
+  const hit = hatchCache.get(`${repo}#${pr.number}`);
+  if (hit?.key === key) return hit.hatch;
+  const script = 'set -o pipefail; gh api -H "Accept: application/vnd.github.diff" "$1" | head -c "$2"';
+  const r = await io.run(["bash", "-c", script, "bash", `repos/${repo}/compare/${range}`, String(MAX_DIFF_BYTES + 1)]);
+  const over = Buffer.byteLength(r.out) > MAX_DIFF_BYTES;
+  if (r.code !== 0 && !over) throw new Error(`gh api compare: ${r.err.trim() || `exit ${r.code}`}`);
+  const hatch = over ? `diff is over ${MAX_DIFF_BYTES / 1024 / 1024} MB` : await hatchInWorker(r.out, extra);
+  hatchCache.delete(`${repo}#${pr.number}`);
+  hatchCache.set(`${repo}#${pr.number}`, { key, hatch });
+  if (hatchCache.size > 256) hatchCache.delete(hatchCache.keys().next().value!);
+  return hatch;
 }
 
 export const viewPr = async (io: Io, repo: string, n: string, fields = PR_FIELDS) => JSON.parse(await read(io, ["gh", "pr", "view", n, "--repo", repo, "--json", fields]));

@@ -24,6 +24,10 @@ export interface RepoConfig {
   autoMerge?: AutoMerge;
   criticalPaths: string[];
   testPaths: string[];
+  /** The first rule whose globs match a file sets its mode; capped by the host's `autoMerge`. */
+  trust: { paths: string[]; autoMerge: AutoMerge }[];
+  /** Regexes for added lines that hold a merge back, on top of the built-in ones. */
+  escapeHatches: string[];
   prompts: { default?: string; byLabel: Record<string, string> };
   /** The Linear project whose tickets go to this repo; `team` is only checked against the ticket's source. */
   tracker?: { linear?: { project: string; team?: string } };
@@ -31,7 +35,7 @@ export interface RepoConfig {
 }
 
 /** Host and repo settings combined for one start or merge decision. */
-export type Session = Omit<Repo, "baseBranch"> & Omit<RepoConfig, "autoMerge"> & { baseBranch: string };
+export type Session = Omit<Repo, "baseBranch"> & Omit<RepoConfig, "autoMerge"> & { baseBranch: string; ceiling: AutoMerge };
 
 export type AutoMerge = "off" | "shadow" | "intelligent" | "all";
 

@@ -1,9 +1,11 @@
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type PrFacts, isCritical, isTest, mergeDecision, parseAssessment } from "../src/merge";
+import { addedLines, ESCAPE_HATCHES, escapeHatch, hatchInWorker } from "../src/hatch";
+import { type PrFacts, isCritical, isTest, mergeDecision, parseAssessment, prMode } from "../src/merge";
 import { pass } from "../src/pass";
-import { config, fakeIo, fakeTracker, root, ticket, useTempRoot, web, windowsOut, worktree } from "./helpers";
+import { configCache } from "../src/repo-config";
+import { config, fakeIo, fakeTracker, repoFiles, root, ticket, useTempRoot, web, windowsOut, worktree } from "./helpers";
 
 useTempRoot();
 
@@ -17,8 +19,9 @@ const prFacts = (over: Partial<PrFacts> = {}): PrFacts => {
   };
 };
 const assess = (over: object = {}) => ({ tested: true, confidence: "high" as const, critical: false, reviewed: true, reviewer: "gpt-5", reason: "small fix, tests pass", ...over });
-const smart = { autoMerge: "intelligent" as const, criticalPaths: [], testPaths: [], baseBranch: "main" };
+const smart = { autoMerge: "intelligent" as const, ceiling: "all" as const, trust: [], escapeHatches: [], criticalPaths: [], testPaths: [], baseBranch: "main" };
 const medium = { additions: 200, deletions: 100, changedFiles: 8 };
+const filesOut = (pr: PrFacts) => ({ out: pr.files!.map((f) => JSON.stringify(f)).join("\n") });
 
 test("merge decision: hard blockers hold back any size and any mode but off", () => {
   const m = (pr: Partial<PrFacts>, a?: object, s: object = smart, labels: string[] = []) => mergeDecision(prFacts(pr), a as any, { ...smart, ...s }, labels);
@@ -44,9 +47,11 @@ test("merge decision: hard blockers hold back any size and any mode but off", ()
   expect(m({}, assess({ confidence: "low" })).reason).toMatch(/^agent confidence is low/);
 });
 
-test("merge decision: all mode has no size, path or assessment gates", () => {
-  const d = mergeDecision(prFacts({ additions: 5000, changedFiles: 90, files: [file("package.json")], statusCheckRollup: [] }), assess({ critical: true, confidence: "low" }), { ...smart, autoMerge: "all" });
-  expect(d).toEqual({ merge: true, reason: "autoMerge all" });
+test("merge decision: all mode has no size, test or assessment gates; critical paths still hold it back", () => {
+  const all = { ...smart, autoMerge: "all" as const };
+  const big = { additions: 5000, statusCheckRollup: [] };
+  expect(mergeDecision(prFacts({ ...big, files: [file("src/a.ts"), file("tests/a.test.ts", { deletions: 9 })] }), assess({ critical: true, confidence: "low" }), all)).toEqual({ merge: true, reason: "autoMerge all" });
+  expect(mergeDecision(prFacts({ ...big, files: [file("package.json")] }), undefined, all).reason).toBe("touches critical path package.json");
 });
 
 test("merge decision: size tiers and their boundaries", () => {
@@ -115,7 +120,7 @@ test("merge assessment: strict shape", () => {
 });
 
 test("auto-merge pass: merges only when enabled, pinned to the head; not-merged comment once per SHA", async () => {
-  let facts: any = { ...prFacts(), number: 7, url: "https://github.com/acme/web/pull/7", headRefOid: "a".repeat(40) };
+  let facts: any = { ...prFacts(), number: 7, url: "https://github.com/acme/web/pull/7", baseRefOid: "f".repeat(40), headRefOid: "a".repeat(40) };
   const respond = (a: string[]) =>
     a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"OPEN"}]' } : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(a.at(-1) === "state" ? { state: "MERGED" } : facts) }
     : a[1] === "api" && a[3] === "repos/acme/web/pulls/7/files?per_page=100" ? { out: facts.files.map((f: object) => JSON.stringify(f)).join("\n") } : undefined;
@@ -138,7 +143,11 @@ test("auto-merge pass: merges only when enabled, pinned to the head; not-merged 
   expect(all.merges[0]).toBe(`gh pr merge 7 --repo acme/web --squash --delete-branch --match-head-commit ${"a".repeat(40)}`);
   expect(all.merges.join(" ")).not.toContain("--admin");
   expect(all.calls).toEqual(["comment gh-1 auto-merged https://github.com/acme/web/pull/7: autoMerge all", "done gh-1"]);
-  expect(all.cmds.some((x) => x.startsWith("gh api"))).toBe(false);
+  const files = "gh api --paginate repos/acme/web/pulls/7/files?per_page=100 --jq .[] | {filename, previous_filename, status, additions, deletions}";
+  const diff = `bash -c set -o pipefail; gh api -H "Accept: application/vnd.github.diff" "$1" | head -c "$2" bash repos/acme/web/compare/${"f".repeat(40)}...${"a".repeat(40)} 2097153`;
+  expect(dry.cmds.filter((x) => x.includes("gh api"))).toEqual([files, diff]);
+  // The diff is read once per head SHA.
+  expect(all.cmds.filter((x) => x.includes("gh api"))).toEqual([files]);
 
   facts = { ...facts, files: [file("package.json")], changedFiles: 1 };
   const blocked = [await run("intelligent"), await run("intelligent")];
@@ -167,7 +176,7 @@ test("auto-merge pass: parked tickets only get the merged-by-hand recovery; a fr
   const run = async (labels: string[], parked?: () => Promise<boolean>) => {
     const f = fakeTracker({ inReview: [{ ...ticket(1), labels }] });
     if (parked) f.tr.parked = parked;
-    const { io, cmds } = fakeIo((a) => (a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"OPEN"}]' } : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(facts) } : undefined));
+    const { io, cmds } = fakeIo((a) => (a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"OPEN"}]' } : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(facts) } : a[1] === "api" ? filesOut(facts) : undefined));
     worktree("gh-1");
     await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "all" }] }), io, () => f.tr, "/tender");
     return { calls: f.calls, merges: cmds.filter((x) => x.startsWith("gh pr merge")) };
@@ -237,7 +246,7 @@ test("merge decision: renames, newline paths and skipped-only checks are held ba
   expect(mergeDecision(renamed("src/login.ts", "src/auth/login.ts"), undefined, smart).reason).toBe("touches critical path src/auth/login.ts");
   expect(mergeDecision(renamed("src/auth/login.ts", "src/login.ts"), undefined, smart).reason).toBe("touches critical path src/auth/login.ts");
   expect(mergeDecision(renamed("src/session.ts", "src/login.ts"), undefined, smart)).toEqual({ merge: true, reason: "small change" });
-  expect(mergeDecision(renamed("src/login.ts", "src/auth/login.ts"), undefined, { ...smart, autoMerge: "all" }).merge).toBe(true);
+  expect(mergeDecision(renamed("src/login.ts", "src/auth/login.ts"), undefined, { ...smart, autoMerge: "all" }).merge).toBe(false);
   const skipped = { status: "COMPLETED", conclusion: "SKIPPED" };
   const m = (statusCheckRollup: any[]) => mergeDecision(prFacts({ ...medium, statusCheckRollup }), assess(), smart);
   expect(m([skipped, { status: "COMPLETED", conclusion: "NEUTRAL" }]).reason).toBe("medium change with no successful check");
@@ -252,7 +261,7 @@ test("auto-merge pass: a head that moves before the merge re-check drops a held 
   const { io, cmds } = fakeIo((a) =>
     a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"OPEN"}]' }
     : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(views.shift()) }
-    : a[1] === "repo" && a[2] === "view" ? { out: JSON.stringify({ nameWithOwner: "acme/web", defaultBranchRef: { name: "main" } }) } : undefined);
+    : a[1] === "repo" && a[2] === "view" ? { out: JSON.stringify({ nameWithOwner: "acme/web", defaultBranchRef: { name: "main" } }) } : a[1] === "api" ? filesOut(pr) : undefined);
   worktree("gh-1");
   const marker = join(root, "acme/web/gh-1.merge");
   writeFileSync(marker, "a".repeat(40));
@@ -267,12 +276,12 @@ test("auto-merge pass: re-checks the PR right before merging, confirms it merged
     const { io, cmds, logs } = fakeIo((a) =>
       a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"MERGED"}]' }
       : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(a.at(-1) === "state" ? { state } : views.shift()) }
-      : a[1] === "repo" && a[2] === "view" ? { out: JSON.stringify({ nameWithOwner: owner, defaultBranchRef: { name: "main" } }) } : undefined);
+      : a[1] === "repo" && a[2] === "view" ? { out: JSON.stringify({ nameWithOwner: owner, defaultBranchRef: { name: "main" } }) } : a[1] === "api" ? filesOut(pr) : undefined);
     worktree("gh-1");
     await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "all" }] }), io, () => tr, "/tender");
     return { calls, logs, merged: cmds.some((x) => x.startsWith("gh pr merge")) };
   };
-  for (const now of [{ baseRefName: "release" }, { headRefOid: "b".repeat(40) }, { isDraft: true }, { state: "CLOSED" }])
+  for (const now of [{ baseRefName: "release" }, { headRefOid: "b".repeat(40) }, { baseRefOid: "e".repeat(40) }, { isDraft: true }, { state: "CLOSED" }])
     expect(await run([pr, { ...pr, ...now }]).then((r) => [r.merged, r.calls])).toEqual([false, []]);
   const queued = await run([pr, pr], "OPEN");
   expect([queued.merged, queued.calls]).toEqual([true, []]);
@@ -319,7 +328,7 @@ test("in review: gh calls per ticket per poll; feedback reuses auto-merge's view
     return x.cmds.filter((c) => c.startsWith("gh "));
   };
   const list = "gh pr list --repo acme/web --head agent/gh-1 --state all --json url,state";
-  const merge = "gh pr view 7 --repo acme/web --json number,url,state,isDraft,isCrossRepository,baseRefName,mergeable,additions,deletions,changedFiles,statusCheckRollup,labels,headRefOid,reviewDecision,mergeStateStatus";
+  const merge = "gh pr view 7 --repo acme/web --json number,url,state,isDraft,isCrossRepository,baseRefName,baseRefOid,mergeable,additions,deletions,changedFiles,statusCheckRollup,labels,headRefOid,reviewDecision,mergeStateStatus";
   worktree("gh-1");
   // The first poll comments "not auto-merged" and so shares nothing; count the held polls after it.
   expect(await run("intelligent", [], true)).toHaveLength(4);
@@ -341,6 +350,7 @@ test("in review: a PR merged or closed during the merge recheck gets no feedback
       : a[1] === "pr" && a[2] === "list" ? { out: JSON.stringify([{ url, state: "OPEN" }]) }
       : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify({ ...prFacts(over), number: 7, url, headRefOid: "a", reviews: [], comments, state: states.shift() }) }
       : a[1] === "repo" ? { out: JSON.stringify({ nameWithOwner: "acme/web", defaultBranchRef: { name: "main" } }) }
+      : a[1] === "api" && a[3]?.endsWith("/files?per_page=100") ? filesOut(prFacts(over))
       : a[1] === "api" ? { out: "[]" } : undefined);
     const { tr, calls } = fakeTracker({ inReview: [ticket(1)] });
     await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "all", feedbackAuthors: ["op"] }] }), io, () => tr, "/tender", async () => "idle");
@@ -358,4 +368,120 @@ test("in review: a PR merged or closed during the merge recheck gets no feedback
   writeFileSync(join(root, "acme/web/gh-1.feedback"), JSON.stringify({ seenAt: 0, rounds: 3, capped: true }));
   const pending = { __typename: "CheckRun", name: "test", status: "IN_PROGRESS", conclusion: null };
   expect((await run(["OPEN", "CLOSED"], { statusCheckRollup: [pending] as any })).pasted).toBe(false);
+});
+
+test("trust: a file takes its first matching rule's mode, else autoMerge; the PR takes the lowest, capped by the host", () => {
+  const trust = [{ paths: ["docs/**", "**/*.md"], autoMerge: "all" as const }, { paths: ["supabase/migrations/**", "**/auth/**"], autoMerge: "off" as const }, { paths: ["docs/**"], autoMerge: "off" as const }];
+  const s = { autoMerge: "intelligent" as const, ceiling: "all" as const, trust };
+  const mode = (...names: string[]) => prMode(s, names.map((n) => file(n)));
+  expect(mode("docs/a.md", "README.md")).toBe("all");
+  expect(mode("docs/a.md", "src/a.ts")).toBe("intelligent");
+  expect(mode("docs/a.md", "src/auth/login.ts")).toBe("off");
+  expect(mode("docs/x.txt")).toBe("all");
+  expect(prMode(s, [file("docs/a.md", { previous_filename: "src/auth/a.ts" })])).toBe("off");
+  expect(prMode({ ...s, autoMerge: "shadow" }, [])).toBe("shadow");
+  expect(prMode(s)).toBe("all");
+  expect(prMode({ ...s, ceiling: "intelligent" }, [file("docs/a.md")])).toBe("intelligent");
+  expect(prMode({ autoMerge: "off", ceiling: "shadow", trust }, [file("docs/a.md")])).toBe("shadow");
+  expect(prMode({ autoMerge: "off", ceiling: "off", trust })).toBe("off");
+  const d = (names: string[], over: object = {}) => mergeDecision(prFacts({ files: names.map((n) => file(n)), additions: 5000 }), undefined, { ...smart, trust, ...over });
+  expect(d(["docs/a.md"])).toEqual({ merge: true, reason: "autoMerge all" });
+  expect(d(["docs/a.md", "src/a.ts"]).reason).toBe("too large (5005 lines, 2 files)");
+  expect(d(["docs/a.md", "supabase/migrations/1.sql"]).reason).toBe("trust sets supabase/migrations/1.sql to off");
+  expect(d(["docs/a.md"], { ceiling: "intelligent" }).reason).toBe("too large (5005 lines, 1 files)");
+  expect(d(["AGENTS.md"]).reason).toBe("touches critical path AGENTS.md");
+  expect(d([".agents/skills/x/SKILL.md"]).reason).toBe("touches critical path .agents/skills/x/SKILL.md");
+  expect(d(["docs/SKILL.md"]).reason).toBe("touches critical path docs/SKILL.md");
+});
+
+const hunk = (path: string, ...lines: string[]) => {
+  const old = lines.filter((l) => !/^[+\\]/.test(l)).length;
+  const neu = lines.filter((l) => !/^[-\\]/.test(l)).length;
+  return `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1,${old} +1,${neu} @@ fn\n${lines.join("\n")}\n`;
+};
+
+test("escape hatches: each built-in pattern and a repo pattern on an added line, named with its file", () => {
+  const added = ["// eslint-disable-next-line no-console", "// @ts-ignore", "// @ts-expect-error", "const x = y as any;", "x = 1  # type: ignore[attr]", "import os  # noqa: F401", "f() //nolint:errcheck", "#[allow(dead_code)]", '@SuppressWarnings("unchecked")'];
+  expect(added).toHaveLength(ESCAPE_HATCHES.length);
+  ESCAPE_HATCHES.forEach((p, i) => expect(escapeHatch(hunk("src/a.ts", " ctx", `+${added[i]}`), [])).toBe(`adds escape hatch ${JSON.stringify(p)} in src/a.ts`));
+  for (const line of ["it has anything", "as anyOf(x)", "eslint-config", "@ts-check"]) expect(escapeHatch(hunk("src/a.ts", `+${line}`), [])).toBeUndefined();
+  expect(escapeHatch(hunk("lib/a.py", "+x = 1  # pragma: no cover"), ["pragma: no ?cover"])).toBe('adds escape hatch "pragma: no ?cover" in lib/a.py');
+});
+
+test("escape hatches: only added lines count, by hunk counts rather than by prefix", () => {
+  expect(escapeHatch(hunk("src/a.ts", "-// @ts-ignore", " // eslint-disable kept", "+ok()"), [])).toBeUndefined();
+  // An added line "++ b/x" shows as "+++ b/x"; it is content, not a header.
+  const tricky = hunk("src/a.ts", "+++ b/innocent.ts", "+// @ts-ignore");
+  expect(addedLines(tricky)).toEqual([{ file: "src/a.ts", line: "++ b/innocent.ts" }, { file: "src/a.ts", line: "// @ts-ignore" }]);
+  expect(escapeHatch(tricky, [])).toBe('adds escape hatch "@ts-ignore" in src/a.ts');
+  // As git writes it: the marker counts on neither side, so the added line after it is still in the hunk.
+  const eof = "diff --git a/b.ts b/b.ts\n--- a/b.ts\n+++ b/b.ts\n@@ -1 +1 @@\n-// @ts-ignore\n\\ No newline at end of file\n+y as any\n\\ No newline at end of file\n";
+  expect(addedLines(eof)).toEqual([{ file: "b.ts", line: "y as any" }]);
+  expect(escapeHatch(`${hunk("src/a.ts", "+ok()")}${eof}${hunk("src/c.ts", "+ok()")}`, [])).toBe('adds escape hatch "as any" in b.ts');
+  expect(addedLines(`${hunk("src/a.ts", " x", "\\ No newline at end of file", "+ok()")}${hunk("src/c.ts", "+z()")}`).map((x) => x.file)).toEqual(["src/a.ts", "src/c.ts"]);
+  expect(addedLines("diff --git a/x b/x\ndeleted file mode 100644\n--- a/x\n+++ /dev/null\n@@ -1 +0,0 @@\n-// @ts-ignore\n")).toEqual([]);
+  const s = { ...smart, autoMerge: "all" as const };
+  expect(mergeDecision(prFacts({ hatch: 'adds escape hatch "@ts-ignore" in src/a.ts' }), undefined, s).reason).toBe('adds escape hatch "@ts-ignore" in src/a.ts');
+  expect(mergeDecision(prFacts({ hatch: "" }), undefined, s).merge).toBe(true);
+});
+
+test("escape hatches: repo regexes run in a worker cut off after its time limit, which holds the merge back", async () => {
+  expect(await hatchInWorker(hunk("lib/a.py", "+x = 1 # pragma: no cover"), ["pragma: no ?cover"])).toBe('adds escape hatch "pragma: no ?cover" in lib/a.py');
+  expect(await hatchInWorker(hunk("lib/a.py", "+ok()"), [])).toBe("");
+  const start = performance.now();
+  expect(await hatchInWorker(hunk("src/a.ts", `+${"a".repeat(40)}!`), ["(a+)+$"], 200)).toBe("escape-hatch check timed out after 0.2s");
+  expect(performance.now() - start).toBeLessThan(2000);
+});
+
+test("auto-merge pass: the diff is read pinned to both SHAs once per base and head; over 2 MB or an escape hatch holds it back, shadow only reports", async () => {
+  let diff = { code: 0, out: hunk("src/a.ts", "+// @ts-ignore") };
+  let facts: any = { ...prFacts(), number: 7, url: "https://github.com/acme/web/pull/7", baseRefOid: "f".repeat(40), headRefOid: "a".repeat(40) };
+  const run = async (autoMerge: string) => {
+    const { tr, calls } = fakeTracker({ inReview: [ticket(1)] });
+    const { io, cmds } = fakeIo((a) =>
+      a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"OPEN"}]' }
+      : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(a.at(-1) === "state" ? { state: "MERGED" } : facts) }
+      : a[1] === "api" ? filesOut(facts)
+      : a[0] === "bash" ? diff : undefined);
+    worktree("gh-1");
+    await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge }] }), io, () => tr, "/tender");
+    return { calls, diffs: cmds.filter((x) => x.startsWith("bash")).length, merged: cmds.some((x) => x.startsWith("gh pr merge")) };
+  };
+  expect(await run("all")).toEqual({ calls: ['comment gh-1 not auto-merged: adds escape hatch "@ts-ignore" in src/a.ts'], diffs: 1, merged: false });
+  expect(await run("all")).toEqual({ calls: [], diffs: 0, merged: false });
+  // Same head on a new base: the merge base may have moved, so the diff is read again.
+  diff = { code: 0, out: hunk("src/a.ts", "+ok()") };
+  facts = { ...facts, baseRefOid: "e".repeat(40) };
+  expect(await run("all")).toMatchObject({ diffs: 1, merged: true });
+  diff = { code: 0, out: hunk("src/a.ts", "+// @ts-ignore") };
+  facts = { ...facts, headRefOid: "b".repeat(40) };
+  expect(await run("shadow")).toEqual({ calls: ['comment gh-1 not auto-merged: adds escape hatch "@ts-ignore" in src/a.ts'], diffs: 1, merged: false });
+  facts = { ...facts, headRefOid: "c".repeat(40) };
+  diff = { code: 141, out: "+".repeat(2 * 1024 * 1024 + 1) };
+  expect(await run("intelligent")).toEqual({ calls: ["comment gh-1 not auto-merged: diff is over 2 MB"], diffs: 1, merged: false });
+  facts = { ...facts, headRefOid: "d".repeat(40) };
+  diff = { code: 1, out: "" };
+  expect((await run("intelligent")).calls).toEqual([]);
+  diff = { code: 0, out: hunk("src/a.ts", "-// @ts-ignore", "+ok()") };
+  expect(await run("intelligent")).toMatchObject({ calls: ["comment gh-1 auto-merged https://github.com/acme/web/pull/7: small change", "done gh-1"], merged: true });
+});
+
+test("auto-merge pass: a trust rule above the repo's autoMerge lets a docs-only PR merge, up to the host's ceiling", async () => {
+  const facts = { ...prFacts({ files: [file("docs/a.md")] }), number: 7, url: "https://github.com/acme/web/pull/7", baseRefOid: "f".repeat(40), headRefOid: "a".repeat(40) };
+  const run = async (ceiling: string) => {
+    const { tr, calls } = fakeTracker({ inReview: [ticket(1)] });
+    const { io } = fakeIo((a) =>
+      a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"OPEN"}]' }
+      : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(a.at(-1) === "state" ? { state: "MERGED" } : facts) }
+      : a[1] === "api" ? filesOut(facts) : undefined);
+    worktree("gh-1");
+    await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: ceiling }] }), io, () => tr, "/tender");
+    return calls;
+  };
+  repoFiles["config.yaml"] = 'autoMerge: off\ntrust:\n  - { paths: ["docs/**"], autoMerge: all }\n';
+  expect(await run("all")).toEqual(["comment gh-1 auto-merged https://github.com/acme/web/pull/7: autoMerge all", "done gh-1"]);
+  expect(await run("shadow")).toEqual(["comment gh-1 would auto-merge: small change"]);
+  configCache.clear();
+  repoFiles["config.yaml"] = "autoMerge: off\n";
+  expect(await run("all")).toEqual([]);
 });

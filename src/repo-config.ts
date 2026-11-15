@@ -7,7 +7,9 @@ import { GIT, hasLabel, read, TENDER_DIR, write } from "./util";
 
 const MAX_FILE = 64 * 1024;
 const PROMPT = /^[a-z0-9-]+\.md$/;
-const KEYS = ["agent", "testCmd", "planStep", "autoMerge", "criticalPaths", "testPaths", "prompts", "tracker"];
+const KEYS = ["agent", "testCmd", "planStep", "autoMerge", "criticalPaths", "testPaths", "trust", "escapeHatches", "prompts", "tracker"];
+const MAX_HATCHES = 20;
+const MAX_HATCH_CHARS = 200;
 
 /** A file under `.tender/`, `name` relative to it (`.` for `.tender` itself); `text` only for a regular file within the size cap. */
 export interface Entry {
@@ -54,6 +56,8 @@ export function parseRepoConfig(entries: Entry[]): RepoConfig {
     autoMerge: raw.autoMerge,
     criticalPaths: raw.criticalPaths === undefined ? [] : raw.criticalPaths,
     testPaths: raw.testPaths === undefined ? [] : raw.testPaths,
+    trust: raw.trust === undefined ? [] : raw.trust,
+    escapeHatches: raw.escapeHatches === undefined ? [] : raw.escapeHatches,
     prompts: { default: obj(p) ? p.default : undefined, byLabel: obj(byLabel) ? byLabel : {} },
     tracker: raw.tracker,
     files,
@@ -61,8 +65,19 @@ export function parseRepoConfig(entries: Entry[]): RepoConfig {
   check(["claude", "codex"].includes(c.agent), `agent: "claude" | "codex"`);
   check(c.testCmd === undefined || str(c.testCmd), "testCmd: non-empty string");
   check(str(c.planStep), "planStep: non-empty string");
-  check(c.autoMerge === undefined || AUTO_MERGE.includes(c.autoMerge), `autoMerge: ${AUTO_MERGE.map((m) => `"${m}"`).join(" | ")}`);
+  const modes = AUTO_MERGE.map((m) => `"${m}"`).join(" | ");
+  check(c.autoMerge === undefined || AUTO_MERGE.includes(c.autoMerge), `autoMerge: ${modes}`);
   for (const k of ["criticalPaths", "testPaths"] as const) check(Array.isArray(c[k]) && c[k].every(str), `${k}: list of non-empty glob strings`);
+  check(Array.isArray(c.trust) && c.trust.every((t) => obj(t) && Object.keys(t).every((k) => ["paths", "autoMerge"].includes(k)) && Array.isArray(t.paths) && t.paths.length > 0 && t.paths.every(str) && AUTO_MERGE.includes(t.autoMerge)), `trust: list of { paths: [glob, …], autoMerge: ${modes} }`);
+  const regex = (p: unknown) => {
+    try {
+      return str(p) && p.length <= MAX_HATCH_CHARS && !!new RegExp(p);
+    } catch {
+      return false;
+    }
+  };
+  // Run on agent-written lines in a worker with a time limit, so a backtracking pattern stalls only its own check.
+  check(Array.isArray(c.escapeHatches) && c.escapeHatches.length <= MAX_HATCHES && c.escapeHatches.every(regex), `escapeHatches: at most ${MAX_HATCHES} valid regexes of at most ${MAX_HATCH_CHARS} chars`);
   const known = (f: unknown) => str(f) && Object.hasOwn(files, f);
   check(c.prompts.default === undefined || known(c.prompts.default), `prompts.default: ${JSON.stringify(c.prompts.default)} is not a file in .tender/prompts/`);
   check(obj(byLabel), "prompts.byLabel: mapping of label to prompt file");
@@ -135,10 +150,10 @@ export async function repoConfig(io: Io, r: Repo, base: string) {
 
 const rank = (m: AutoMerge) => AUTO_MERGE.indexOf(m);
 
-/** Host settings plus the repo's config: autoMerge is the lower of the repo's request and the host's ceiling; critical paths add up. */
+/** Host settings plus the repo's config: autoMerge is the lower of the repo's request and the host's ceiling, which also caps trust rules; critical paths add up. */
 export function combine(r: Repo, base: string, c: RepoConfig): Session {
   const { baseBranch: _, ...host } = r;
-  return { ...host, ...c, baseBranch: base, criticalPaths: [...r.criticalPaths, ...c.criticalPaths], autoMerge: c.autoMerge !== undefined && rank(c.autoMerge) < rank(r.autoMerge) ? c.autoMerge : r.autoMerge };
+  return { ...host, ...c, baseBranch: base, ceiling: r.autoMerge, criticalPaths: [...r.criticalPaths, ...c.criticalPaths], autoMerge: c.autoMerge !== undefined && rank(c.autoMerge) < rank(r.autoMerge) ? c.autoMerge : r.autoMerge };
 }
 
 /** Fetches `origin/<base>` into the clone, then the settings there; undefined if the repo's config is invalid, logged once per commit. */

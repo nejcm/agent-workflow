@@ -6,7 +6,7 @@ import { fileFindings } from "./findings";
 import { agentOf } from "./agents";
 import { baseBranch, canonical, findPr, sameRepo } from "./github";
 import { claim, cloned, nonoRun, scopeUnit, start, stopScope, sweepScopes, windows, winName } from "./launcher";
-import { autoMerge, checkState, PR_FIELDS, prReady, viewPr } from "./merge";
+import { autoMerge, checkState, PR_FIELDS, prMode, prReady, viewPr } from "./merge";
 import { syncPhases } from "./phases";
 import { agentPane, deliverAnswer, liveStates, syncQuestion } from "./question";
 import { combine, loadSession, parseRepoConfig } from "./repo-config";
@@ -227,7 +227,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
       // Fetched once per repo per pass, so a policy tightened on the base branch applies to PRs already in review.
       const fresh = r.autoMerge === "off" ? undefined : sessionOf(io, sessions, r);
       const ses = await fresh?.catch((e) => void io.log(`merge ${t.id} failed: ${e.message}`));
-      if (ses && ses.autoMerge !== "off") await step(io, `merge ${t.id}`, async () => void (pr = await autoMerge(cfg, ses, w, tr, io, parked, share)));
+      if (ses && prMode(ses) !== "off") await step(io, `merge ${t.id}`, async () => void (pr = await autoMerge(cfg, ses, w, tr, io, parked, share)));
       // Invalid .tender/ or a failed fetch: no decision or comment, but a PR merged by hand still moves the ticket.
       else if (fresh && !ses) await step(io, `merge ${t.id}`, async () => void (pr = await autoMerge(cfg, combine(r, await baseBranch(io, r), parseRepoConfig([])), w, tr, io, true)));
       // autoMerge looks the PR up anyway; otherwise every poll too, so a replaced PR reaches `<ID>.pr` (and feedback).

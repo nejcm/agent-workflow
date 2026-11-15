@@ -23,7 +23,7 @@ const facts = (over: object = {}): any => ({
   statusCheckRollup: [ok], labels: [], headRefOid: "a", reviewDecision: "", mergeStateStatus: "CLEAN", reviews: [], comments: [], ...over,
 });
 
-function setup(o: { autoMerge?: string; authors?: string[]; win?: boolean; quiet?: number; tmux?: { code?: number; out?: string }; slow?: number } = {}) {
+function setup(o: { autoMerge?: string; file?: string; authors?: string[]; win?: boolean; quiet?: number; tmux?: { code?: number; out?: string }; slow?: number } = {}) {
   worktree("gh-1");
   const t = ticket(1);
   const f = fakeTracker({ inReview: [t], readyToMerge: true });
@@ -34,7 +34,7 @@ function setup(o: { autoMerge?: string; authors?: string[]; win?: boolean; quiet
     a[1] === "list-windows" ? o.tmux ?? windowsOut(o.win ? ["acme/web/gh-1"] : [], o.quiet === undefined ? undefined : Math.floor(Date.now() / 1000) - o.quiet)
     : a[1] === "pr" && a[2] === "list" ? { out: JSON.stringify([{ url: URL, state: pr.state }]) }
     : a[1] === "pr" && a[2] === "view" ? (o.slow && setSystemTime(new Date(Date.now() + o.slow * 1000)), { out: JSON.stringify(a.at(-1) === "state" ? { state: "MERGED" } : queue.shift() ?? pr) })
-    : a[1] === "api" && a[3]?.endsWith("/files?per_page=100") ? { out: JSON.stringify({ filename: "package.json", status: "modified", additions: 1, deletions: 0 }) }
+    : a[1] === "api" && a[3]?.endsWith("/files?per_page=100") ? { out: JSON.stringify({ filename: o.file ?? "package.json", status: "modified", additions: 1, deletions: 0 }) }
     : a[1] === "api" ? { out: "[]" } : undefined);
   const cfg = config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: o.autoMerge ?? "off", feedbackAuthors: o.authors ?? [] }] });
   return {
@@ -123,7 +123,7 @@ test("ready to merge: held back by each unmet condition, and a stale marker is c
 });
 
 test("ready to merge: not when auto-merge merges it; yes when a gate blocks it or in shadow", async () => {
-  const all = setup({ autoMerge: "all" });
+  const all = setup({ autoMerge: "all", file: "src/a.ts" });
   await all.run();
   expect(all.calls).toEqual([`comment gh-1 auto-merged ${URL}: autoMerge all`, "done gh-1"]);
   const gated = setup({ autoMerge: "intelligent" });

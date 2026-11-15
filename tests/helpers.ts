@@ -7,6 +7,7 @@ import { CLAUDE_TOKEN, claudeDir } from "../src/agents";
 import { CREDENTIALS } from "../src/claude-auth";
 import { parseConfig } from "../src/config";
 import { canonCache } from "../src/github";
+import { hatchCache } from "../src/merge";
 import { configCache } from "../src/repo-config";
 import type { Config, GitHubSource, Io, LinearSource, Ticket, Tracker } from "../src/types";
 import { TENDER_DIR, GIT, hasLabel } from "../src/util";
@@ -34,6 +35,7 @@ export function useTempRoot() {
     writeFileSync(join(root, CREDENTIALS), JSON.stringify({ claudeAiOauth: { accessToken: "a", refreshToken: "r", expiresAt: Date.now() + 3_600_000, refreshTokenExpiresAt: Date.now() + 7 * 86_400_000, scopes: ["user:inference"] } }));
     canonCache.clear();
     configCache.clear();
+    hatchCache.clear();
     repoFiles = {};
     baseSha = "a".repeat(40);
   });

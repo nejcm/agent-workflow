@@ -19,7 +19,7 @@ function setup(o: { agent?: string; waiter?: boolean; authors?: string[]; open?:
   mkdirSync(join(root, "acme/web/gh-1/.tender/run"), { recursive: true });
   const t = ticket(1);
   const f = fakeTracker({ inReview: [t] });
-  const pr: any = { state: "OPEN", baseRefName: "main", headRefOid: "a", mergeStateStatus: "CLEAN", statusCheckRollup: [okCheck], reviews: [], comments: [] };
+  const pr: any = { url: URL, state: "OPEN", baseRefName: "main", headRefOid: "a", mergeStateStatus: "CLEAN", statusCheckRollup: [okCheck], reviews: [], comments: [] };
   let lines: any[] = [];
   const log = Array.from({ length: 100 }, (_, i) => `line ${i}`).join("\n");
   const { io, cmds, logs } = fakeIo((a) =>
@@ -104,7 +104,7 @@ test("feedback: failing CI and conflicts once per head SHA, with the log tail; n
   expect(d.file()).not.toContain("line 19\n");
   expect(d.cmds).toContain('sh -c gh run view "$1" --repo "$2" --log-failed | tail -n 80 sh 42 acme/web');
   expect(d.cmds.some((c) => c.startsWith("gh api"))).toBe(false);
-  expect(d.cmds).toContain("gh pr view 7 --repo acme/web --json state,baseRefName,headRefOid,mergeStateStatus,statusCheckRollup");
+  expect(d.cmds).toContain("gh pr view 7 --repo acme/web --json number,url,state,isDraft,isCrossRepository,baseRefName,mergeable,additions,deletions,changedFiles,statusCheckRollup,labels,headRefOid,reviewDecision,mergeStateStatus");
   await d.run();
   expect(d.keys()).toHaveLength(3);
   d.pr.mergeStateStatus = "DIRTY";

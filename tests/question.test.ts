@@ -110,7 +110,7 @@ test("question: dry-run writes no sidecar; an open PR means no post", async () =
   expect(dry.logs.some((l) => l.endsWith(`dry: write ${sidecar()}`))).toBe(true);
   const pr = setup(undefined, { pr: true });
   await pr.run();
-  expect(pr.calls).toEqual(["review gh-1 https://github.com/acme/web/pull/1"]);
+  expect(pr.calls).toEqual(["review gh-1 PR: https://github.com/acme/web/pull/1"]);
   expect(existsSync(sidecar())).toBe(false);
 });
 

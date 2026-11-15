@@ -60,11 +60,22 @@ export function launcher(l: Pick<Session, "agent" | "sandbox" | "path">, wt: str
   return `#!/usr/bin/env bash\ncd ${q(wt)} || exit 1\nunset LINEAR_API_KEY\nexport TMPDIR=${q(tmp)} TMP=${q(tmp)} TEMP=${q(tmp)}\n${box}${env}\nexec ${[...scope, ...wrap, ...cmd].join(" ")}\n`;
 }
 
+/** Window ids by name; `activity` is each window's last pane output in epoch seconds, as the tmux server saw it; `listed` only if every row parsed. */
 export async function windows(cfg: Config, io: Io) {
-  const r = await io.run(["tmux", "list-windows", "-t", `=${cfg.tmuxSession}`, "-F", "#{window_id} #{window_name}"]);
+  const r = await io.run(["tmux", "list-windows", "-t", `=${cfg.tmuxSession}`, "-F", "#{window_id} #{window_activity} #{window_name}"]);
   const m = new Map<string, string>();
-  if (r.code === 0) for (const line of r.out.split("\n").filter(Boolean)) m.set(line.slice(line.indexOf(" ") + 1), line.split(" ")[0]);
-  return m;
+  const activity = new Map<string, number>();
+  let listed = r.code === 0;
+  for (const l of listed ? r.out.split("\n").filter(Boolean) : []) {
+    const [, id, at, name] = /^(@\d+) (\S*) (.*)$/.exec(l) ?? [];
+    if (name === undefined) {
+      listed = false;
+      continue;
+    }
+    m.set(name, id!);
+    activity.set(name, /^\d+$/.test(at!) ? Number(at) : NaN);
+  }
+  return Object.assign(m, { listed, activity });
 }
 
 export const winName = (key: string, id: string) => `${key}/${id}`;
@@ -241,7 +252,8 @@ async function cloneSession(io: Io, r: Session, wt: string, branch: string) {
 export async function start(cfg: Config, s: Source, host: Repo, t: Ticket, tr: Tracker, io: Io, tenderDir: string) {
   const dir = repoDir(cfg, host.key);
   await ensureClone(cfg, io, host);
-  const r = await loadSession(io, host);
+  // Can be slow after downtime; per-poll fetches keep the 60 s default so one hang cannot stall a pass.
+  const r = await loadSession(io, host, SLOW_SECS);
   if (!r) {
     const { sha } = configCache.get(host.key)!;
     const marker = join(cfg.workspaceRoot, ".invalid-config", host.key);

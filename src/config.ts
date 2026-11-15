@@ -34,6 +34,7 @@ export function parseConfig(raw: any, base: string): Config {
   check(NAME.test(tmuxSession), "tmuxSession: [a-z0-9-]");
   const maxConcurrent = raw.maxConcurrent ?? 2;
   check(posInt(maxConcurrent), "maxConcurrent: positive integer");
+  check(raw.maxInReview === undefined || posInt(raw.maxInReview), "maxInReview: positive integer");
   const stallMinutes = raw.stallMinutes ?? 30;
   check(posInt(stallMinutes), "stallMinutes: positive integer");
   const reposRoot = expand(raw.reposRoot ?? "~/agent-repos", base);
@@ -62,6 +63,7 @@ export function parseConfig(raw: any, base: string): Config {
       baseBranch: str(v.baseBranch) ? v.baseBranch : undefined,
       sandbox: v.sandbox,
       maxConcurrent: v.maxConcurrent,
+      maxInReview: v.maxInReview,
       autoMerge: v.autoMerge === undefined ? "off" : v.autoMerge,
       criticalPaths: v.criticalPaths === undefined ? [] : v.criticalPaths,
       feedbackAuthors: v.feedbackAuthors === undefined ? [] : v.feedbackAuthors,
@@ -69,6 +71,7 @@ export function parseConfig(raw: any, base: string): Config {
     check(r.baseBranch === undefined || validBranch(r.baseBranch), `${at}.baseBranch: invalid`);
     check(["nono", "none"].includes(r.sandbox), `${at}.sandbox: "nono" | "none" (here or in defaults)`);
     check(r.maxConcurrent === undefined || posInt(r.maxConcurrent), `${at}.maxConcurrent: positive integer`);
+    check(r.maxInReview === undefined || posInt(r.maxInReview), `${at}.maxInReview: positive integer`);
     check(AUTO_MERGE.includes(r.autoMerge), `${at}.autoMerge: ${AUTO_MERGE.map((m) => `"${m}"`).join(" | ")}`);
     check(Array.isArray(r.criticalPaths) && r.criticalPaths.every(str), `${at}.criticalPaths: array of non-empty glob strings`);
     check(Array.isArray(r.feedbackAuthors) && r.feedbackAuthors.every(str), `${at}.feedbackAuthors: array of non-empty strings (GitHub logins / Linear emails)`);
@@ -96,7 +99,7 @@ export function parseConfig(raw: any, base: string): Config {
   const names = sources.map((s) => s.name);
   check(new Set(names).size === names.length, "source names must be unique");
   if (errs.length) throw new Error(`invalid config:\n  ${errs.join("\n  ")}`);
-  return { host: raw.host, defaultHost, pollIntervalMs, workspaceRoot: expand(raw.workspaceRoot ?? "~/agent-ws", base), reposRoot, tmuxSession, maxConcurrent, stallMinutes, repos, sources };
+  return { host: raw.host, defaultHost, pollIntervalMs, workspaceRoot: expand(raw.workspaceRoot ?? "~/agent-ws", base), reposRoot, tmuxSession, maxConcurrent, maxInReview: raw.maxInReview, stallMinutes, repos, sources };
 }
 
 export const repoDir = (cfg: Config, key: string) => join(cfg.workspaceRoot, key);

@@ -60,7 +60,7 @@ test("phases: done is held at in-progress until the PR exists, then closed befor
   expect(calls).toEqual(["create gh-1 gh-1: Do a", "set sub-1 in-progress"]);
   prs = '[{"url":"https://pr/1","state":"OPEN"}]';
   await pass(c, io, () => tr, "/tender");
-  expect(calls.slice(2)).toEqual(["set sub-1 done", "review gh-1 https://pr/1"]);
+  expect(calls.slice(2)).toEqual(["set sub-1 done", "review gh-1 PR: https://pr/1"]);
 });
 
 test("phases: tickets in review keep syncing until the final sync succeeds", async () => {
@@ -101,7 +101,7 @@ test("phases: bad or symlinked file is logged and the parent still moves to revi
   expect(logs.some((l) => l.includes("phases gh-1 failed: phases.json: must be a regular file"))).toBe(true);
   expect(logs.some((l) => l.includes("phases gh-2 failed: ENOTDIR"))).toBe(true);
   expect(logs.some((l) => l.includes("phases gh-3 failed: ELOOP"))).toBe(true);
-  expect(calls).toEqual(["review gh-1 https://pr/1", "review gh-2 https://pr/1", "review gh-3 https://pr/1"]);
+  expect(calls).toEqual(["review gh-1 PR: https://pr/1", "review gh-2 PR: https://pr/1", "review gh-3 PR: https://pr/1"]);
 });
 
 test("phases: start git-ignores .tender/run; cleanup removes the sidecar", async () => {

@@ -55,7 +55,7 @@ export const config = (over: object = {}): Config => parseConfig(raw(over), TEND
 export const web = (c: Config) => c.repos["acme/web"]!;
 export const ticket = (n: number, repo = "acme/web"): Ticket => ({ id: `gh-${n}`, ref: String(n), title: `Fix thing ${n}`, body: "body; rm -rf ~ $(whoami)", url: `https://x/${n}`, repo });
 
-export function fakeTracker(s: { ready?: Ticket[]; inProgress?: Ticket[]; inReview?: Ticket[]; done?: string[]; canceled?: string[]; globalIds?: boolean }) {
+export function fakeTracker(s: { ready?: Ticket[]; inProgress?: Ticket[]; inReview?: Ticket[]; done?: string[]; canceled?: string[]; globalIds?: boolean; readyToMerge?: boolean }) {
   const calls: string[] = [];
   const subs: { ref: string; title: string }[] = [];
   const tr: Tracker = {
@@ -70,7 +70,16 @@ export function fakeTracker(s: { ready?: Ticket[]; inProgress?: Ticket[]; inRevi
       return has(s.canceled) ? "canceled" : has(s.done) ? "done" : undefined;
     },
     claim: async (t) => void calls.push(`claim ${t.id}`),
-    toReview: async (t, pr) => void calls.push(`review ${t.id} ${pr}`),
+    toReview: async (t, note) => {
+      calls.push(`review ${t.id} ${note}`);
+      for (const x of s.inReview ?? []) if (x.id === t.id) x.readyToMerge = undefined;
+    },
+    ...(s.readyToMerge && {
+      toReadyToMerge: async (t: Ticket, note: string) => {
+        calls.push(`ready ${t.id} ${note}`);
+        for (const x of s.inReview ?? []) if (x.id === t.id) x.readyToMerge = true;
+      },
+    }),
     done: async (t) => void calls.push(`done ${t.id}`),
     park: async (t) => {
       calls.push(`park ${t.id}`);
@@ -148,7 +157,8 @@ export const writePhases = (id: string, phases: unknown) => {
 };
 export const phase = (key: string, status: unknown, over: object = {}) => ({ key, title: `Do ${key}`, body: "b", status, ...over });
 
-export const windowsOut =(names: string[]) => ({ out: names.map((n, i) => `@${i} ${n}`).join("\n") });
+// Activity defaults to now: a window with recent output, so never idle.
+export const windowsOut = (names: string[], at = Math.floor(Date.now() / 1000)) => ({ out: names.map((n, i) => `@${i} ${at} ${n}`).join("\n") });
 export const noPr = (argv: string[]) => (argv[1] === "pr" ? { out: "[]" } : undefined);
 
 export const two = (over: object = {}) =>
@@ -168,6 +178,7 @@ export const statusRow = (over: Partial<Row> = {}): Row => ({
   phases: { done: 1, total: 3, items: [{ key: "a", title: "Do a", status: "done" }, { key: "b", title: "Do b", status: "in-progress" }, { key: "c", title: "Do c", status: "todo" }] },
   pr: "https://github.com/acme/web/pull/4",
   merge: null,
+  ready: false,
   transcript: null,
   window: "@1",
   ...over,

@@ -15,7 +15,7 @@ test("config: defaults applied and errors listed", () => {
   expect(c.stallMinutes).toBe(30);
   for (const v of [0, 1.5, "30"]) expect(() => config({ stallMinutes: v })).toThrow("stallMinutes: positive integer");
   expect(c.reposRoot).toMatch(/\/agent-repos$/);
-  expect(c.sources[0]).toEqual({ name: "web", tracker: "github", readyLabel: "agent", needsHumanLabel: "needs-human", inProgressLabel: "in-progress", inReviewLabel: "in-review" });
+  expect(c.sources[0]).toEqual({ name: "web", tracker: "github", readyLabel: "agent", needsHumanLabel: "needs-human", inProgressLabel: "in-progress", inReviewLabel: "in-review", readyToMergeLabel: "ready-to-merge" });
   expect(config({ sources: [src({ tracker: "linear", team: "ENG" })] }).sources[0]).toEqual({ name: "web", tracker: "linear", readyLabel: "agent", needsHumanLabel: "needs-human", team: "ENG", todo: "Todo", inProgress: "In Progress", inReview: "In Review", done: ["Done"] });
   expect(web(c)).toEqual({ key: "acme/web", path: join(root, "src-web"), baseBranch: undefined, sandbox: "nono", maxConcurrent: undefined, autoMerge: "off", criticalPaths: [], feedbackAuthors: [] });
   const c2 = config({ reposRoot: "/r", repos: ["acme/web", { name: "acme/api", maxConcurrent: 1, baseBranch: "dev" }] });

@@ -141,7 +141,7 @@ test.skipIf(!Bun.which("tmux"))("dashboard starts, moves and quits cleanly in a 
     await restored("EXIT=143");
 
     // Attached: a stub tmux reports PER-1's window and its "attach" just sleeps; SIGTERM must not wait for it.
-    writeFileSync(join(dir, "bin/tmux"), `#!/bin/sh\n[ "$1" = list-windows ] && { echo "@1 acme/web/PER-1"; exit 0; }\nexec sleep 31.7\n`, { mode: 0o755 });
+    writeFileSync(join(dir, "bin/tmux"), `#!/bin/sh\n[ "$1" = list-windows ] && { echo "@1 1700000000 acme/web/PER-1"; exit 0; }\nexec sleep 31.7\n`, { mode: 0o755 });
     rmSync(join(dir, "out"));
     tmux("respawn-pane", "-k", `env -u TMUX ${cmd}`);
     expect(await until(() => /PER-1 +acme\/web +claude +\? unknown/.test(pane()))).toBe(true);

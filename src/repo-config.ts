@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { AUTO_MERGE } from "./config";
 import { baseBranch } from "./github";
 import type { AutoMerge, Io, Repo, RepoConfig, Session } from "./types";
-import { GIT, hasLabel, read, SLOW_SECS, TENDER_DIR, write } from "./util";
+import { GIT, hasLabel, read, TENDER_DIR, write } from "./util";
 
 const MAX_FILE = 64 * 1024;
 const PROMPT = /^[a-z0-9-]+\.md$/;
@@ -142,9 +142,9 @@ export function combine(r: Repo, base: string, c: RepoConfig): Session {
 }
 
 /** Fetches `origin/<base>` into the clone, then the settings there; undefined if the repo's config is invalid, logged once per commit. */
-export async function loadSession(io: Io, r: Repo): Promise<Session | undefined> {
+export async function loadSession(io: Io, r: Repo, secs?: number): Promise<Session | undefined> {
   const base = await baseBranch(io, r);
-  await write(io, [...GIT, "-C", r.path, "fetch", "origin", base], undefined, SLOW_SECS);
+  await write(io, [...GIT, "-C", r.path, "fetch", "origin", base], undefined, secs);
   const c = await repoConfig(io, r, base);
   if (c.config) return combine(r, base, c.config);
   if (!c.logged) io.log(`${r.key}: .tender/ on ${base} at ${c.sha.slice(0, 12)} is invalid, so no tickets start:\n  ${c.error}`);

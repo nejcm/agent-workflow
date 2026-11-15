@@ -9,15 +9,17 @@ import { cloneAll } from "./src/launcher";
 import { CRITICAL_PATHS, TEST_PATHS } from "./src/merge";
 import { makeTracker, pass } from "./src/pass";
 import { dirEntries, parseRepoConfig } from "./src/repo-config";
-import { snapshot, table } from "./src/status";
+import { reviewLimit, snapshot, table } from "./src/status";
 import { tail } from "./src/tail";
 import type { Config, Io, RepoConfig, Run } from "./src/types";
 
 async function status(cfg: Config, io: Io) {
+  const full = reviewLimit(cfg);
   return [
-    `max ${cfg.maxConcurrent} sessions`,
+    `max ${cfg.maxConcurrent} sessions${cfg.maxInReview === undefined ? "" : `, ${cfg.maxInReview} in review`}`,
+    ...(full ? [full] : []),
     ...cfg.sources.map((s) => `source ${s.name}  ${makeTracker(s, cfg.host, io, cfg.defaultHost, Object.keys(cfg.repos)).describe()}`),
-    ...Object.values(cfg.repos).map((r) => `${r.key}  ${r.sandbox}  max ${r.maxConcurrent ?? "-"}  merge up to ${r.autoMerge}  ${r.path}`),
+    ...Object.values(cfg.repos).map((r) => `${r.key}  ${r.sandbox}  max ${r.maxConcurrent ?? "-"}${r.maxInReview === undefined ? "" : `  review max ${r.maxInReview}`}  merge up to ${r.autoMerge}  ${r.path}`),
     "",
     table(await snapshot(cfg, io)),
   ].join("\n");

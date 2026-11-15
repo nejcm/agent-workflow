@@ -106,16 +106,21 @@ export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Se
   return { merge: true, reason: s.autoMerge === "all" ? "autoMerge all" : `${tier} change${a ? `; agent: ${a.reason}` : ""}` };
 }
 
-const PR_FIELDS = "number,url,state,isDraft,isCrossRepository,baseRefName,mergeable,additions,deletions,changedFiles,statusCheckRollup,labels,headRefOid,reviewDecision";
+/** Whether a PR is ready for a human to merge, from GitHub's view alone; nothing the agent writes counts. */
+export const prReady = (pr: PrFacts) =>
+  pr.state === "OPEN" && !pr.isDraft && pr.mergeable === "MERGEABLE" && pr.reviewDecision !== "CHANGES_REQUESTED" && pr.statusCheckRollup.every((c) => ["success", "neutral"].includes(checkState(c)));
+
+export const PR_FIELDS = "number,url,state,isDraft,isCrossRepository,baseRefName,mergeable,additions,deletions,changedFiles,statusCheckRollup,labels,headRefOid,reviewDecision";
 
 // tender merges, pinned to the head it judged (the agent's token could too; see README). "Not merged" is commented once per head SHA.
 // With `share`, the first view also fetches `share.fields` and lands in `share.pr`, so feedback need not view the PR again.
+// Returns that view unless tender merged, or tried to merge, the PR.
 export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker, io: Io, parked = false, share?: { fields: string; pr?: any }) {
   const dir = repoDir(cfg, r.key);
   const url = await findPr(r.key, t.id, io, dir);
   const n = url && /\/pull\/(\d+)$/.exec(url)?.[1];
   if (!n) return;
-  const view = async (fields = PR_FIELDS) => JSON.parse(await read(io, ["gh", "pr", "view", n, "--repo", r.key, "--json", fields]));
+  const view = (fields = PR_FIELDS) => viewPr(io, r.key, n, fields);
   const ours = async () => {
     const name = await canonical(io, r.key, true);
     return !!name && sameRepo(name, r.key);
@@ -124,8 +129,8 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
   const f = join(dir, `${t.id}.merge`);
   const held = existsSync(f) && readFileSync(f, "utf8") === pr.headRefOid;
   if (!held) remove(io, f);
-  if (pr.state === "MERGED" && !pr.isCrossRepository && pr.baseRefName === r.baseBranch && (await ours())) return tr.done(t);
-  if (parked) return;
+  if (pr.state === "MERGED" && !pr.isCrossRepository && pr.baseRefName === r.baseBranch && (await ours())) return void (await tr.done(t));
+  if (parked) return pr;
   let a: Assessment | undefined;
   try {
     const raw = readRun(join(dir, t.id), "merge.json", MAX_MERGE_BYTES);
@@ -147,7 +152,7 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
   if (d.merge === "wait" || (held && (!d.merge || r.autoMerge === "shadow"))) {
     // Shared only when nothing was awaited since the view, so feedback never reads a stale one.
     if (share && !fetch) share.pr = pr;
-    return;
+    return pr;
   }
   if (d.merge && r.autoMerge !== "shadow") {
     if (!(await ours())) return;
@@ -164,7 +169,7 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
     const state = io.dry ? "MERGED" : (await view("state")).state;
     if (state !== "MERGED") return io.log(`merge ${t.id}: ${pr.url} is ${state} after gh pr merge, rechecking next poll`);
     await tr.comment(t, `auto-merged ${pr.url}: ${d.reason}`);
-    return tr.done(t);
+    return void (await tr.done(t));
   }
   put(io, f, pr.headRefOid);
   try {
@@ -173,4 +178,7 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
     remove(io, f);
     throw e;
   }
+  return pr;
 }
+
+export const viewPr = async (io: Io, repo: string, n: string, fields = PR_FIELDS) => JSON.parse(await read(io, ["gh", "pr", "view", n, "--repo", repo, "--json", fields]));

@@ -5,7 +5,7 @@ import type { KeyEvent } from "@opentui/core";
 import { repoDir } from "./config";
 import { type Line, type Pane, palette, screen, sortRows } from "./dash-view";
 import { PR_URL } from "./github";
-import { type Row, snapshot } from "./status";
+import { type Row, reviewLimit, snapshot } from "./status";
 import { follower } from "./tail";
 import { clean } from "./util";
 import type { Config, Io } from "./types";
@@ -156,6 +156,7 @@ export async function dashboard(cfg: Config, io: Io, interval: number) {
   let maxBack = 0;
   let at = "--:--:--";
   let msg = "";
+  let note: string | undefined;
   let tail: { path: string | null; lines: string[] } = { path: null, lines: [] };
   const read = follower();
   const P = palette();
@@ -200,7 +201,7 @@ export async function dashboard(cfg: Config, io: Io, interval: number) {
     const { width, height } = r;
     const sel = rs[view.sel];
     const out = screen(
-      { ...view, rs, host: cfg.host, at, every: interval, msg, events: tail.lines, empty: tail.path ? "no events yet" : "no transcript yet", ctx: { now: Date.now(), home, wt: sel ? join(repoDir(cfg, sel.repo), sel.id) : "" } },
+      { ...view, rs, host: cfg.host, at, every: interval, note, msg, events: tail.lines, empty: tail.path ? "no events yet" : "no transcript yet", ctx: { now: Date.now(), home, wt: sel ? join(repoDir(cfg, sel.repo), sel.id) : "" } },
       width,
       height,
       P,
@@ -231,6 +232,7 @@ export async function dashboard(cfg: Config, io: Io, interval: number) {
       rs = sortRows(next);
       view = { ...view, sel: reselect(prev, rs, view.sel) };
       at = new Date().toTimeString().slice(0, 8);
+      note = reviewLimit(cfg);
     } catch (e) {
       say(`refresh failed: ${(e as Error).message}`);
     }

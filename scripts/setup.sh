@@ -49,7 +49,7 @@ for f in nono/tender-claude.json nono/tender-codex.json nono/tender-check.json; 
 [ -e tender.json ] || { cp tender.example.json tender.json && sed -i "s/\"host\": \"laptop\"/\"host\": \"$host\"/" tender.json && echo "write tender.json (edit repos and sources)"; }
 
 for repo in "$@"; do
-  for l in agent in-progress in-review needs-human "host:$host"; do
+  for l in agent in-progress in-review ready-to-merge needs-human "host:$host"; do
     gh label create "$l" --repo "$repo" --force >/dev/null && echo "label $repo $l"
   done
 done

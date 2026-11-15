@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync
 import { join } from "node:path";
 import { type PrFacts, isCritical, isTest, mergeDecision, parseAssessment } from "../src/merge";
 import { pass } from "../src/pass";
-import { config, fakeIo, fakeTracker, root, ticket, useTempRoot, web, worktree } from "./helpers";
+import { config, fakeIo, fakeTracker, root, ticket, useTempRoot, web, windowsOut, worktree } from "./helpers";
 
 useTempRoot();
 
@@ -128,7 +128,7 @@ test("auto-merge pass: merges only when enabled, pinned to the head; not-merged 
   };
 
   const off = await run("off");
-  expect(off.cmds.some((x) => x.includes("gh pr view") && x.includes("reviewDecision"))).toBe(false);
+  expect(off.cmds.filter((x) => x.startsWith("gh pr view"))).toHaveLength(1);
   expect(off.calls).toEqual([]);
 
   const dry = await run("all", true);
@@ -314,7 +314,7 @@ test("in review: gh calls per ticket per poll; feedback reuses auto-merge's view
     : a[1] === "pr" ? { out: JSON.stringify({ ...prFacts({ isDraft: true }), number: 7, url, headRefOid: "a", reviews: [], comments: [] }) }
     : a[1] === "api" ? { out: "[]" } : undefined;
   const run = async (autoMerge: string, feedbackAuthors: string[], win: boolean) => {
-    const x = fakeIo((a) => (a[1] === "list-windows" ? { out: win ? "@0 acme/web/gh-1" : "" } : respond(a)));
+    const x = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(win ? ["acme/web/gh-1"] : []) : respond(a)));
     await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge, feedbackAuthors }] }), x.io, () => fakeTracker({ inReview: [ticket(1)] }).tr, "/tender", async () => "idle");
     return x.cmds.filter((c) => c.startsWith("gh "));
   };
@@ -324,7 +324,7 @@ test("in review: gh calls per ticket per poll; feedback reuses auto-merge's view
   // The first poll comments "not auto-merged" and so shares nothing; count the held polls after it.
   expect(await run("intelligent", [], true)).toHaveLength(4);
   for (const win of [true, false]) {
-    expect(await run("off", [], win)).toEqual([list, "gh pr view 7 --repo acme/web --json state,baseRefName,headRefOid,mergeStateStatus,statusCheckRollup"]);
+    expect(await run("off", [], win)).toEqual([list, merge]);
     expect(await run("off", ["op"], win)).toHaveLength(3);
     expect(await run("intelligent", [], win)).toEqual([list, merge]);
     expect(await run("intelligent", ["op"], win)).toEqual([list, `${merge},reviews,comments`, "gh api repos/acme/web/pulls/7/comments?per_page=100"]);
@@ -336,7 +336,7 @@ test("in review: a PR merged or closed during the merge recheck gets no feedback
   const comments = [{ id: "c1", author: { login: "op" }, body: "nit", createdAt: new Date(Date.now() - 600_000).toISOString() }];
   const run = async (states: string[], over: Partial<PrFacts> = {}) => {
     const { io, cmds } = fakeIo((a) =>
-      a[1] === "list-windows" ? { out: "@0 acme/web/gh-1" }
+      a[1] === "list-windows" ? windowsOut(["acme/web/gh-1"])
       : a[1] === "list-panes" ? { out: `%5 0 ${join(root, "acme/web/gh-1")}.sh\n` }
       : a[1] === "pr" && a[2] === "list" ? { out: JSON.stringify([{ url, state: "OPEN" }]) }
       : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify({ ...prFacts(over), number: 7, url, headRefOid: "a", reviews: [], comments, state: states.shift() }) }

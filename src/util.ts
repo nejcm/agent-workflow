@@ -25,7 +25,7 @@ export const strip = (s: string) =>
 
 export const clean = (s: string, max = 200) => strip(s).replace(/\s+/g, " ").trim().slice(0, max);
 
-// Clone, fetch and checkout scale with repo size; everything else gets the runner's 60s default.
+// Clone, the fetch before a start and checkout scale with repo size; everything else gets the runner's 60s default.
 export const SLOW_SECS = 900;
 
 export async function read(io: Io, argv: string[], cwd?: string, secs?: number) {

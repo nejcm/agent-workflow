@@ -2,8 +2,9 @@ import type { Check, Io, LinearSource, Ticket, Tracker } from "../types";
 import { hasLabel, nonEmpty, ours } from "../util";
 
 export function parseLinear(r: Record<string, any>, at: string, check: Check) {
-  const s = { team: r.team, todo: r.todo ?? "Todo", inProgress: r.inProgress ?? "In Progress", inReview: r.inReview ?? "In Review", done: r.done ?? ["Done"] };
+  const s = { team: r.team, todo: r.todo ?? "Todo", inProgress: r.inProgress ?? "In Progress", inReview: r.inReview ?? "In Review", readyToMerge: r.readyToMerge, done: r.done ?? ["Done"] };
   for (const k of ["todo", "inProgress", "inReview"] as const) check(nonEmpty(s[k]), `${at}.${k}: non-empty string`);
+  check(s.readyToMerge === undefined || nonEmpty(s.readyToMerge), `${at}.readyToMerge: non-empty string`);
   check(Array.isArray(s.done) && s.done.length > 0 && s.done.every(nonEmpty), `${at}.done: non-empty string array`);
   check(/^[A-Z0-9]+$/.test(s.team ?? ""), `${at}.team: Linear team key, e.g. ENG`);
   return s;
@@ -88,16 +89,23 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
       return d.viewer.id;
     }));
   const unrouted = new WeakSet<Ticket>();
-  const list = async (state: string, labels: string[]): Promise<Ticket[]> => {
+  const list = async (state: string, labels: string[], complete = false): Promise<Ticket[]> => {
     const filter = { team: { key: { eq: l.team } }, state: { name: { eq: state } }, and: labels.map((n) => ({ labels: { some: { name: { eq: n } } } })) };
     const d = await gql(LINEAR_ISSUES, { f: filter });
+    if (complete && d.issues.nodes.length >= 100) throw new Error(`linear ${l.team} ${state}: 100 issues listed, the rest unknown`);
     const nodes = d.issues.nodes.filter((i: any) => /^[A-Z0-9]+-\d+$/.test(i.identifier));
     return Promise.all(
       nodes.map(async (i: any) => {
         const t = linearTicket(i);
         if (typeof i.assignee?.id === "string" && i.assignee.id !== (await viewer())) t.otherAssignee = String(i.assignee.name || i.assignee.id);
         if (t.repo === undefined && typeof i.project?.id === "string")
-          t.repo = await claims().then((c) => projectRepo(c, l.team, i.project, io.log), () => void unrouted.add(t));
+          t.repo = await claims().then(
+            (c) => projectRepo(c, l.team, i.project, io.log),
+            (e) => {
+              if (complete) throw e;
+              return void unrouted.add(t);
+            },
+          );
         return t;
       }),
     );
@@ -119,7 +127,7 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
     return { id: i.id, url: i.url };
   };
   const hostLabel = `host:${host}`;
-  const listMine = (state: string, labels: string[]) => defaultHost ? list(state, labels).then((r) => r.filter((t) => ours(t, host, true))) : list(state, [...labels, hostLabel]);
+  const listMine = (state: string, labels: string[], complete = false) => defaultHost ? list(state, labels, complete).then((r) => r.filter((t) => ours(t, host, true))) : list(state, [...labels, hostLabel], complete);
   return {
     globalIds: true,
     restartHint: () => `move it to ${l.todo}`,
@@ -127,7 +135,10 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
     // Unrouted: some repo's claims could not be read, so the ticket waits rather than start elsewhere or be rejected.
     listReady: async () => (await listMine(l.todo, [l.readyLabel])).filter((t) => !hasLabel(t.labels, l.needsHumanLabel) && !unrouted.has(t)),
     listInProgress: () => listMine(l.inProgress, [l.readyLabel]),
-    listInReview: () => listMine(l.inReview, [l.readyLabel]),
+    listInReview: async (complete) => [
+      ...(await listMine(l.inReview, [l.readyLabel], complete)),
+      ...(l.readyToMerge ? (await listMine(l.readyToMerge, [l.readyLabel], complete)).map((t) => ({ ...t, readyToMerge: true })) : []),
+    ],
     async closed(id) {
       const i = (await gql(`query($id: String!) { issue(id: $id) { trashed state { name type } } }`, { id })).issue;
       if (!i || i.trashed) return "canceled";
@@ -139,10 +150,16 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
       // Best-effort: once the ticket is in progress the claim has succeeded; a throw would only report it as failed.
       await comment(t, `picked up on ${host}`).catch((e) => io.log(`${t.id}: picked-up comment failed: ${e.message}`));
     },
-    async toReview(t, prUrl) {
+    async toReview(t, note) {
       await move(t.ref, l.inReview);
-      await comment(t, `PR: ${prUrl}`);
+      await comment(t, note);
     },
+    ...(l.readyToMerge && {
+      async toReadyToMerge(t: Ticket, note: string) {
+        await move(t.ref, l.readyToMerge!);
+        await comment(t, note);
+      },
+    }),
     done: (t) => move(t.ref, l.done[0]!),
     async park(t) {
       const q = `query($n: String!, $t: String!) { issueLabels(filter: { name: { eqIgnoreCase: $n }, or: [{ team: { key: { eq: $t } } }, { team: { null: true } }] }) { nodes { id parent { name } } } }`;

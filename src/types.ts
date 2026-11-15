@@ -8,6 +8,7 @@ export interface Repo {
   baseBranch?: string;
   sandbox: "nono" | "none";
   maxConcurrent?: number;
+  maxInReview?: number;
   /** The ceiling for the repo's own request. */
   autoMerge: AutoMerge;
   /** A floor: added to the built-in and the repo's critical paths. */
@@ -44,6 +45,7 @@ export interface GitHubSource extends SourceBase {
   tracker: "github";
   inProgressLabel: string;
   inReviewLabel: string;
+  readyToMergeLabel: string;
 }
 
 export interface LinearSource extends SourceBase {
@@ -52,6 +54,8 @@ export interface LinearSource extends SourceBase {
   todo: string;
   inProgress: string;
   inReview: string;
+  /** Unset: tickets stay In Review. */
+  readyToMerge?: string;
   done: string[];
 }
 
@@ -66,6 +70,7 @@ export interface Config {
   reposRoot: string;
   tmuxSession: string;
   maxConcurrent: number;
+  maxInReview?: number;
   stallMinutes: number;
   repos: Record<string, Repo>;
   sources: Source[];
@@ -84,6 +89,8 @@ export interface Ticket {
   priority?: number;
   /** Who it is assigned to when that is not the tender user; unset when unassigned or assigned to it. */
   otherAssignee?: string;
+  /** Listed by listInReview from the Ready to merge status. */
+  readyToMerge?: boolean;
 }
 
 export interface TicketComment {
@@ -102,11 +109,15 @@ export interface Tracker {
   describe(): string;
   listReady(): Promise<Ticket[]>;
   listInProgress(): Promise<Ticket[]>;
-  listInReview(): Promise<Ticket[]>;
+  /** In Review and Ready to merge tickets; with `complete`, a listing that failed, filled its page or could not route a ticket throws instead of being skipped. */
+  listInReview(complete?: boolean): Promise<Ticket[]>;
   /** Done (cleanup), canceled (stop, keep data) or still open. */
   closed(id: string, repo: string): Promise<"done" | "canceled" | undefined>;
   claim(t: Ticket): Promise<void>;
-  toReview(t: Ticket, prUrl: string): Promise<void>;
+  /** Moves to In Review from In Progress or Ready to merge, posting `note`. */
+  toReview(t: Ticket, note: string): Promise<void>;
+  /** Unset when the tracker has no Ready to merge status. */
+  toReadyToMerge?(t: Ticket, note: string): Promise<void>;
   done(t: Ticket): Promise<void>;
   /** Adds the needs-human label, which pauses start, feedback, auto-merge and the ended comment until a human removes it. */
   park(t: Ticket): Promise<void>;

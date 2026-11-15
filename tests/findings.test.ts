@@ -209,7 +209,7 @@ test("findings: filed at the review move and while in review, skipped while park
   const { io } = fakeIo(pr);
   await pass(c, io, () => tr, "/tender");
   const filed = calls.filter((x) => /^(file|review)/.test(x)).map((x) => x.split(" | ")[0]);
-  expect(filed).toEqual(["file gh-1 Bug 1", "review gh-1 https://pr/1", "review gh-3 https://pr/1", "file gh-2 Bug 1"]);
+  expect(filed).toEqual(["file gh-1 Bug 1", "review gh-1 PR: https://pr/1", "review gh-3 PR: https://pr/1", "file gh-2 Bug 1"]);
 });
 
 test("findings: a marker quoted in another tender comment, such as an agent question, does not count as posted", async () => {

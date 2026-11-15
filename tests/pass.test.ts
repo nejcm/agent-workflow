@@ -9,7 +9,7 @@ import { endedNotice, pass } from "../src/pass";
 import { liveStates, pickAnswer } from "../src/question";
 import type { State } from "../src/state";
 import type { AgentName, Config, Io, Ticket, TicketComment, Tracker } from "../src/types";
-import { GIT } from "../src/util";
+import { GIT, SLOW_SECS } from "../src/util";
 import { claudeFile, config, fakeIo, repoFiles, fakeTracker, noPr, root, src, ticket, two, useTempRoot, web, windowsOut, worktree } from "./helpers";
 
 useTempRoot();
@@ -370,7 +370,7 @@ test("in-progress: PR moves to review; missing window comments once", async () =
   });
   await pass(c, io, () => tr, "/tender");
   await pass(c, io, () => tr, "/tender");
-  expect(calls).toEqual(["review gh-1 https://pr/1", "comment gh-2 session ended without a PR", "review gh-1 https://pr/1"]);
+  expect(calls).toEqual(["review gh-1 PR: https://pr/1", "comment gh-2 session ended without a PR", "review gh-1 PR: https://pr/1"]);
   expect(existsSync(join(root, "acme/web/gh-2.ended"))).toBe(true);
   expect(readFileSync(join(root, "acme/web/gh-1.pr"), "utf8")).toBe("https://pr/1");
   expect(logs.filter((l) => l.endsWith("write " + join(root, "acme/web/gh-1.pr")))).toHaveLength(1);
@@ -411,7 +411,7 @@ test("done: kills window, removes the session clone, files and config dir; keeps
   const c = config();
   for (const id of ["gh-1", "gh-2", "gh-3"]) {
     mkdirSync(join(root, "acme/web", id, ".git"), { recursive: true });
-    for (const ext of [".prompt.md", ".sh", ".ended", ".pr", ".question", ".findings"]) writeFileSync(join(root, "acme/web", id + ext), "");
+    for (const ext of [".prompt.md", ".sh", ".ended", ".pr", ".question", ".findings", ".ready"]) writeFileSync(join(root, "acme/web", id + ext), "");
     writeFileSync(join(root, "acme/web", `${id}.source`), "web\n");
     mkdirSync(join(root, "acme/web", `${id}.claude/projects/p`), { recursive: true });
     mkdirSync(join(root, "acme/web", `${id}.codex/sessions`), { recursive: true });
@@ -434,6 +434,7 @@ test("done: kills window, removes the session clone, files and config dir; keeps
   expect(existsSync(join(root, "acme/web/gh-1.pr"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.question"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.findings"))).toBe(false);
+  expect(existsSync(join(root, "acme/web/gh-1.ready"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.claude"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.codex"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.tmpdir"))).toBe(false);
@@ -779,7 +780,7 @@ test("redirected or unresolvable repos are skipped before listing, cloning or st
   st.ready = st.ready.slice(0, 2);
   await pass(c, io, factory, "/tender");
   expect(lin.calls).toEqual(["comment ENG-1 repo acme/api now resolves to evil/api on GitHub, which is not in the tender allowlist", "claim ENG-3"]);
-  expect(cmds.filter((x) => x.startsWith("gh issue list")).map((x) => x.split(" ")[4])).toEqual(Array(6).fill("acme/web"));
+  expect(cmds.filter((x) => x.startsWith("gh issue list")).map((x) => x.split(" ")[4])).toEqual(Array(8).fill("acme/web"));
   expect(cmds.filter((x) => x === "gh repo view acme/api --json nameWithOwner,defaultBranchRef")).toHaveLength(3);
   expect(cmds.filter((x) => x === "gh repo view acme/docs --json nameWithOwner,defaultBranchRef").length).toBeGreaterThan(1);
   expect(cmds.some((x) => /clone acme\/(api|docs)|src-(api|docs)/.test(x))).toBe(false);
@@ -809,7 +810,7 @@ test("only the source recorded in <ID>.source reconciles a worktree; a missing o
   await pass(c, io, (s) => (s.name === "gh" ? gh.tr : gh2.tr), "/tender");
   await pass(c, io, (s) => (s.name === "gh" ? gh.tr : gh2.tr), "/tender");
   expect(gh.calls).toEqual([]);
-  expect(gh2.calls).toEqual(["review gh-1 https://pr/1", "review gh-1 https://pr/1"]);
+  expect(gh2.calls).toEqual(["review gh-1 PR: https://pr/1", "review gh-1 PR: https://pr/1"]);
   expect(logs.filter((l) => l.includes('source "gone"'))).toHaveLength(1);
   expect(existsSync(join(root, "acme/web/gh-2"))).toBe(true);
 });
@@ -1253,4 +1254,18 @@ test("reassigned after the session already ended: no stop, still one comment", a
   await pass(c, io, () => tr, "/tender");
   expect(calls).toEqual(["comment gh-1 stopped, reassigned to alice"]);
   expect(cmds.some((x) => x.startsWith("systemctl --user kill"))).toBe(false);
+});
+
+test("the base fetch gets 15 min before a start and the 60 s default in a poll's merge check", async () => {
+  const fetches = async (f: { ready?: Ticket[]; inReview?: Ticket[] }) => {
+    const { tr } = fakeTracker(f);
+    const { io } = fakeIo(noPr);
+    const run = io.run;
+    const secs: (number | undefined)[] = [];
+    io.run = (argv, cwd, s) => (argv.includes("fetch") && secs.push(s), run(argv, cwd, s));
+    await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "all" }] }), io, () => tr, "/tender");
+    return secs;
+  };
+  expect(await fetches({ ready: [ticket(1)] })).toEqual([SLOW_SECS]);
+  expect(await fetches({ inReview: [ticket(2)] })).toEqual([undefined]);
 });

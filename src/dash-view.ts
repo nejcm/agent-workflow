@@ -216,16 +216,17 @@ export function chips(rs: Row[], P: Palette, compact: boolean): Line {
   return out;
 }
 
-export function header(rs: Row[], host: string, at: string, every: number, n: number, P: Palette): Line {
+export function header(rs: Row[], host: string, at: string, every: number, n: number, P: Palette, note?: string): Line {
   const bg = { bg: P.head };
+  const warn = note ? [s(P, "warn", ` ${clean(note, 120)} `, { ...bg, b: true })] : [];
   const mark: Span = P.mono ? { t: " tender ", b: true, r: true } : { t: " tender ", fg: P.ink, bg: P.accent, b: true };
   const h = s(P, "dim", ` ${clean(host, 40)} `, bg);
   const time = [s(P, "fg", `${at} `, bg), s(P, "dim", `· every ${every}s `, bg)];
   for (const [left, right] of [
-    [[mark, h, ...chips(rs, P, false)], time],
-    [[mark, h, ...chips(rs, P, true)], time],
-    [[mark, ...chips(rs, P, true)], [s(P, "fg", `${at} `, bg)]],
-    [[mark, ...chips(rs, P, true)], []],
+    [[mark, h, ...chips(rs, P, false), ...warn], time],
+    [[mark, h, ...chips(rs, P, true), ...warn], time],
+    [[mark, ...chips(rs, P, true), ...warn], [s(P, "fg", `${at} `, bg)]],
+    [[mark, ...warn, ...chips(rs, P, true)], []],
   ] as [Line, Line][])
     if (w(left) + w(right) + 1 <= n || !right.length) return spread(left, right, n, bg);
   return [];
@@ -325,7 +326,7 @@ export function detail(r: Row | undefined, n: number, rows: number, ctx: DetailC
   const badge = (t: string, tone: Tone): Span => (P.mono ? { t: `[${t}]`, b: true } : s(P, tone, ` ${t} `, { bg: P.badge }));
   const title: Line = [s(P, "fg", clean(r.id, 40), { b: true }), s(P, "dim", `  ${clean(r.repo, 80)}  `), badge(r.agent, "dim"), { t: " " }, badge(`${GLYPH[look]} ${look}`, TONE[look])];
   if (r.waitingFor) title.push(s(P, "warn", ` ${clean(r.waitingFor, 60)}`, { b: true }));
-  const pr: Line = r.pr ? [s(P, "accent", `#${/\d+$/.exec(r.pr)?.[0] ?? "?"}`, { u: true }), ...(r.merge ? [s(P, "warn", ` ${r.merge}`)] : [])] : [s(P, "dim", "-")];
+  const pr: Line = r.pr ? [s(P, "accent", `#${/\d+$/.exec(r.pr)?.[0] ?? "?"}`, { u: true }), ...(r.merge ? [s(P, "warn", ` ${r.merge}`)] : []), ...(r.ready ? [s(P, "ok", " ready")] : [])] : [s(P, "dim", "-")];
   const kv = (k: string, v: Line): Line => [s(P, "dim", k.padEnd(9)), ...v];
   const val = (t: string): Line => [s(P, "fg", t)];
   const pairs: [string, Line][] = [
@@ -440,6 +441,8 @@ export interface Model {
   host: string;
   at: string;
   every: number;
+  /** The `maxInReview` line, shown in the header while a limit is reached. */
+  note?: string;
   msg: string;
   events: string[];
   empty: string;
@@ -495,7 +498,7 @@ export function screen(m: Model, n: number, h: number, P: Palette, memo?: Map<st
     body = left.map((l, i) => [...l, ...(right[i] ?? [])]);
   }
   const hints = { pane: m.pane, max: m.max, help: m.help, window: !!sel?.window, pr: !!sel?.pr };
-  let lines = [header(m.rs, m.host, m.at, m.every, n, P), ...body.slice(0, L.body).map((l) => clip(l, n))];
+  let lines = [header(m.rs, m.host, m.at, m.every, n, P, m.note), ...body.slice(0, L.body).map((l) => clip(l, n))];
   while (lines.length < h - 1) lines.push(clip([], n));
   if (h >= 2) lines.push(footer(hints, m.msg, n, P));
   lines = lines.slice(0, h);

@@ -6,6 +6,7 @@
   "reposRoot": "~/agent-repos",
   "tmuxSession": "tender",
   "maxConcurrent": 2,
+  "maxInReview": 5,
   "defaults": {
     "sandbox": "nono",
     "autoMerge": "off"
@@ -16,6 +17,7 @@
       "name": "acme/api",
       "baseBranch": "main",
       "maxConcurrent": 1,
+      "maxInReview": 2,
       "autoMerge": "intelligent",
       "criticalPaths": ["src/billing/**"],
       "feedbackAuthors": ["octocat", "lead@acme.com"]
@@ -27,7 +29,8 @@
       "tracker": "github",
       "readyLabel": "agent",
       "inProgressLabel": "in-progress",
-      "inReviewLabel": "in-review"
+      "inReviewLabel": "in-review",
+      "readyToMergeLabel": "ready-to-merge"
     },
     {
       "name": "eng",
@@ -36,6 +39,7 @@
       "todo": "Todo",
       "inProgress": "In Progress",
       "inReview": "In Review",
+      "readyToMerge": "Ready to merge",
       "done": ["Done"]
     }
   ]

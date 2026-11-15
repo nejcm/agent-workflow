@@ -190,3 +190,13 @@ test("screen rows are exactly the terminal width at every size, including tiny a
   expect(help).toContain("╭─ keys ─");
   expect(help).toContain("switch list ↔ transcript");
 });
+
+test("the maxInReview note stays in the header at narrow widths", () => {
+  const note = "maxInReview reached, no new starts: 5/5 on this host";
+  for (const n of [160, 110, 80, 60]) {
+    const top = text(screen(model({ note }), n, 30, C).lines[0]!);
+    expect(top).toContain(note.slice(0, Math.min(note.length, n - 10)));
+    expect(Bun.stringWidth(top)).toBeLessThanOrEqual(n);
+  }
+  expect(text(screen(model(), 80, 30, C).lines[0]!)).not.toContain("maxInReview");
+});

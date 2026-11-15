@@ -3,7 +3,7 @@ import type { Check, GitHubSource, Io, Ticket, Tracker } from "../types";
 import { hasLabel, labelPriority, nonEmpty, ours, read, write } from "../util";
 
 export function parseGitHub(r: Record<string, any>, at: string, check: Check) {
-  const s = { inProgressLabel: r.inProgressLabel ?? "in-progress", inReviewLabel: r.inReviewLabel ?? "in-review" };
+  const s = { inProgressLabel: r.inProgressLabel ?? "in-progress", inReviewLabel: r.inReviewLabel ?? "in-review", readyToMergeLabel: r.readyToMergeLabel ?? "ready-to-merge" };
   for (const [k, v] of Object.entries(s)) check(nonEmpty(v), `${at}.${k}: non-empty string`);
   return s;
 }
@@ -18,13 +18,14 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
     }));
   // GitHub allows several assignees: a ticket is someone else's only while the tender user is not among them.
   const otherAssignee = async (logins: string[]) => (logins.length && !logins.map((x) => x.toLowerCase()).includes(await viewer()) ? logins.join(", ") : undefined);
-  const listMine = (labels: string[], search?: string) =>
-    defaultHost ? list(labels, search).then((r) => r.filter((t) => ours(t, host, true))) : list([...labels, hostLabel], search);
+  const listMine = (labels: string[], search?: string, complete = false) =>
+    defaultHost ? list(labels, search, complete).then((r) => r.filter((t) => ours(t, host, true))) : list([...labels, hostLabel], search, complete);
   // A failed repo is left out; nothing treats a missing ticket as gone (cleanup asks `closed`, limits count windows).
-  const list = async (labels: string[], search?: string): Promise<Ticket[]> => {
+  const list = async (labels: string[], search?: string, complete = false): Promise<Ticket[]> => {
     const all: Ticket[] = [];
     for (const repo of repos) {
       const name = await canonical(io, repo);
+      if (!name && complete) throw new Error(`repo ${repo}: lookup failed`);
       if (!name || !sameRepo(name, repo)) continue;
       const argv = ["gh", "issue", "list", "--repo", repo, "--state", "open", "--limit", "100"];
       for (const x of labels) argv.push("--label", x);
@@ -33,9 +34,11 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
       try {
         issues = JSON.parse(await read(io, [...argv, "--json", "number,title,body,url,labels,assignees"]));
       } catch (e) {
+        if (complete) throw e;
         io.log(`repo ${repo}: issue list failed, skipped: ${(e as Error).message}`);
         continue;
       }
+      if (complete && issues.length >= 100) throw new Error(`repo ${repo}: 100 issues listed, the rest unknown`);
       for (const i of issues)
         if (Number.isInteger(i.number)) {
           const labels: string[] = (i.labels ?? []).map((x: any) => x.name);
@@ -45,7 +48,7 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
     }
     return all;
   };
-  const skip = [l.inProgressLabel, l.inReviewLabel, l.needsHumanLabel];
+  const skip = [l.inProgressLabel, l.inReviewLabel, l.readyToMergeLabel, l.needsHumanLabel];
   const edit = (t: Ticket, add: string, ...more: string[]) => write(io, ["gh", "issue", "edit", t.ref, "--repo", t.repo!, "--add-label", add, ...more]);
   const create = (t: Ticket, title: string, body: string, extra: string[] = []) => write(io, ["gh", "issue", "create", "--repo", t.repo!, ...extra, "--title", title, "--body", body]);
   const comment = async (t: Ticket, body: string) => { await write(io, ["gh", "issue", "comment", t.ref, "--repo", t.repo!, "--body", `tender: ${body}`]); };
@@ -56,7 +59,11 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
     // Excluded server-side too: claimed tickets keep the ready label and would otherwise fill the 100 limit.
     listReady: async () => (await listMine([l.readyLabel], skip.map((x) => `-label:${JSON.stringify(x)}`).join(" "))).filter((t) => !skip.some((x) => hasLabel(t.labels, x))),
     listInProgress: () => listMine([l.readyLabel, l.inProgressLabel]),
-    listInReview: () => listMine([l.readyLabel, l.inReviewLabel]),
+    // A ticket with both labels counts as Ready to merge.
+    listInReview: async (complete) => [
+      ...(await listMine([l.readyLabel, l.inReviewLabel], undefined, complete)).filter((t) => !hasLabel(t.labels, l.readyToMergeLabel)),
+      ...(await listMine([l.readyLabel, l.readyToMergeLabel], undefined, complete)).map((t) => ({ ...t, readyToMerge: true })),
+    ],
     async closed(id, repo) {
       const n = /^gh-(\d+)$/.exec(id)?.[1];
       if (!n) throw new Error(`not a github ticket id: ${id}`);
@@ -72,9 +79,13 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
       // Best-effort: once the ticket is in progress the claim has succeeded; a throw would only report it as failed.
       await comment(t, `picked up on ${host}`).catch((e) => io.log(`${t.id}: picked-up comment failed: ${e.message}`));
     },
-    async toReview(t, prUrl) {
-      await edit(t, l.inReviewLabel, "--remove-label", l.inProgressLabel);
-      await comment(t, `PR: ${prUrl}`);
+    async toReview(t, note) {
+      await edit(t, l.inReviewLabel, "--remove-label", t.readyToMerge ? l.readyToMergeLabel : l.inProgressLabel);
+      await comment(t, note);
+    },
+    async toReadyToMerge(t, note) {
+      await edit(t, l.readyToMergeLabel, "--remove-label", l.inReviewLabel);
+      await comment(t, note);
     },
     done: (t) => write(io, ["gh", "issue", "close", t.ref, "--repo", t.repo!]).then(() => {}),
     park: (t) => edit(t, l.needsHumanLabel).then(() => {}),

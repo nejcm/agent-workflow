@@ -5,7 +5,7 @@ import { AGENTS, agentOf, type Lookup } from "./agents";
 import { repoDir } from "./config";
 import { PR_URL } from "./github";
 import { windows, winName } from "./launcher";
-import { worktreeIds } from "./pass";
+import { IN_REVIEW_FILE, PENDING, worktreeIds } from "./pass";
 import { phaseProgress, type PhaseStatus } from "./phases";
 import { openQuestion } from "./question";
 import { resolve, type State } from "./state";
@@ -29,6 +29,8 @@ export interface Row {
   pr: string | null;
   /** "held": tender already commented on the PR's current head, refused or, in shadow, would merge (the `<ID>.merge` marker). */
   merge: "held" | null;
+  /** tender moved the ticket to Ready to merge (the `<ID>.ready` marker, once the move is confirmed). */
+  ready: boolean;
   transcript: string | null;
   /** tmux window id (`@3`) while `running`. */
   window: string | null;
@@ -82,6 +84,7 @@ export function rows(cfg: Config, wins: Map<string, string>, home = homedir(), n
         phases: progress(dir, id),
         pr,
         merge: existsSync(join(dir, `${id}.merge`)) ? "held" : null,
+        ready: existsSync(join(dir, `${id}.ready`)) && !readFileSync(join(dir, `${id}.ready`), "utf8").endsWith(PENDING),
         transcript: t,
         window: session === "running" ? wins.get(winName(r.key, id)) ?? null : null,
       };
@@ -113,7 +116,21 @@ export const dur = (ms: number | null) => {
 /** `state`, except a session with neither tmux window nor `.ended` marker shows as `orphan`. */
 export const label = (r: Pick<Row, "session" | "state">) => (r.session === "orphan" ? "orphan" : r.state);
 
-export const prLabel = (r: Row) => [r.pr && `#${/\d+$/.exec(r.pr)![0]}`, r.merge].filter(Boolean).join(" ") || "-";
+export const prLabel = (r: Row) => [r.pr && `#${/\d+$/.exec(r.pr)![0]}`, r.merge, r.ready && "ready"].filter(Boolean).join(" ") || "-";
+
+/** Each `maxInReview` the last pass found reached, as one line; undefined when none is. */
+export function reviewLimit(cfg: Config) {
+  let counts: Record<string, unknown> = {};
+  try {
+    counts = JSON.parse(readFileSync(join(cfg.workspaceRoot, IN_REVIEW_FILE), "utf8"));
+  } catch {}
+  const n = (k?: string) => (k === undefined ? Object.values(counts) : [counts[k]]).reduce((a: number, b) => a + (Number(b) || 0), 0);
+  const full = [
+    ...(cfg.maxInReview !== undefined && n() >= cfg.maxInReview ? [`${n()}/${cfg.maxInReview} on this host`] : []),
+    ...Object.values(cfg.repos).flatMap((r) => (r.maxInReview !== undefined && n(r.key) >= r.maxInReview ? [`${n(r.key)}/${r.maxInReview} in ${r.key}`] : [])),
+  ];
+  return full.length ? `maxInReview reached, no new starts: ${full.join(", ")}` : undefined;
+}
 
 export function table(rs: Row[]) {
   if (!rs.length) return "no worktrees";

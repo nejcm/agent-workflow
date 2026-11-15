@@ -6,7 +6,7 @@ import { fileFindings } from "./findings";
 import { agentOf } from "./agents";
 import { baseBranch, canonical, findPr, sameRepo } from "./github";
 import { claim, cloned, nonoRun, scopeUnit, start, stopScope, sweepScopes, windows, winName } from "./launcher";
-import { autoMerge } from "./merge";
+import { autoMerge, checkState, PR_FIELDS, prReady, viewPr } from "./merge";
 import { syncPhases } from "./phases";
 import { agentPane, deliverAnswer, liveStates, syncQuestion } from "./question";
 import { combine, loadSession, parseRepoConfig } from "./repo-config";
@@ -65,7 +65,7 @@ const startedElsewhere = (cfg: Config, key: string, id: string, wins: Map<string
   [...wins.keys()].find((n) => n.endsWith(`/${id}`) && n !== winName(key, id))?.slice(0, -id.length - 1) ??
   diskRepos(cfg).find((k) => k !== key && hasTrace(cfg, k, id));
 
-async function startReady(cfg: Config, s: Source, tr: Tracker, io: Io, t: Ticket, wins: Map<string, string>, running: Map<string, number>, tenderDir: string) {
+async function startReady(cfg: Config, s: Source, tr: Tracker, io: Io, t: Ticket, wins: Map<string, string>, running: Map<string, number>, reviewing: Map<string, number>, tenderDir: string) {
   if (!SAFE_ID.test(t.id)) return;
   // GitHub tickets always carry an allowlisted repo, so only Linear tickets are ever rejected.
   const key = allowedRepo(cfg, t.repo);
@@ -74,7 +74,7 @@ async function startReady(cfg: Config, s: Source, tr: Tracker, io: Io, t: Ticket
     return;
   }
   const r = cfg.repos[key]!;
-  if (wins.has(winName(key, t.id)) || (running.get(key) ?? 0) >= (r.maxConcurrent ?? Infinity)) return;
+  if (wins.has(winName(key, t.id)) || (running.get(key) ?? 0) >= (r.maxConcurrent ?? Infinity) || (reviewing.get(key) ?? 0) >= (r.maxInReview ?? Infinity)) return;
   const owner = sourceOf(repoDir(cfg, key), t.id);
   if (owner !== undefined && owner !== s.name) return io.log(`skip ${t.id}: ${key}/${t.id} belongs to source ${JSON.stringify(owner)}`);
   const other = tr.globalIds && startedElsewhere(cfg, key, t.id, wins);
@@ -181,7 +181,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
         await step(io, `phases ${t.id}`, () => syncPhases(w, tr, io, dir, !!pr));
         if (pr) {
           if (!hasLabel(t.labels, s.needsHumanLabel)) await step(io, `findings ${t.id}`, () => fileFindings(w, tr, io, dir));
-          return tr.toReview(w, pr);
+          return tr.toReview(w, `PR: ${pr}`);
         }
         const ended = join(dir, `${t.id}.ended`);
         const win = wins.get(winName(key, t.id));
@@ -223,18 +223,73 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
       await step(io, `phases ${t.id}`, () => syncPhases(w, tr, io, dir, true));
       if (!parked) await step(io, `findings ${t.id}`, () => fileFindings(w, tr, io, dir));
       const share: { fields: string; pr?: any } | undefined = parked ? undefined : { fields: feedbackFields(r) };
+      let pr: any;
       // Fetched once per repo per pass, so a policy tightened on the base branch applies to PRs already in review.
       const fresh = r.autoMerge === "off" ? undefined : sessionOf(io, sessions, r);
       const ses = await fresh?.catch((e) => void io.log(`merge ${t.id} failed: ${e.message}`));
-      if (ses && ses.autoMerge !== "off") await step(io, `merge ${t.id}`, () => autoMerge(cfg, ses, w, tr, io, parked, share));
+      if (ses && ses.autoMerge !== "off") await step(io, `merge ${t.id}`, async () => void (pr = await autoMerge(cfg, ses, w, tr, io, parked, share)));
       // Invalid .tender/ or a failed fetch: no decision or comment, but a PR merged by hand still moves the ticket.
-      else if (fresh && !ses) await step(io, `merge ${t.id}`, async () => autoMerge(cfg, combine(r, await baseBranch(io, r), parseRepoConfig([])), w, tr, io, true));
+      else if (fresh && !ses) await step(io, `merge ${t.id}`, async () => void (pr = await autoMerge(cfg, combine(r, await baseBranch(io, r), parseRepoConfig([])), w, tr, io, true)));
       // autoMerge looks the PR up anyway; otherwise every poll too, so a replaced PR reaches `<ID>.pr` (and feedback).
-      else await step(io, `pr ${t.id}`, () => findPr(key, t.id, io, dir));
-      if (!parked) await step(io, `feedback ${t.id}`, () => deliverFeedback(r, w, tr, io, dir, win, scopeUnit(cfg, key, t.id), () => state(dir, t.id), warned, share?.pr));
+      else
+        await step(io, `pr ${t.id}`, async () => {
+          const n = /\/pull\/(\d+)$/.exec((await findPr(key, t.id, io, dir)) ?? "")?.[1];
+          if (n && share) pr = share.pr = await viewPr(io, key, n, PR_FIELDS + share.fields);
+        });
+      if (parked) continue;
+      // A view taken before an awaited comment or files call is stale; a closed PR is not found, so its recorded one is viewed.
+      const prFile = join(dir, `${t.id}.pr`);
+      const n = pr ? (pr !== share!.pr ? String(pr.number) : undefined) : w.readyToMerge && existsSync(prFile) ? /\/pull\/(\d+)$/.exec(readFileSync(prFile, "utf8"))?.[1] : undefined;
+      if (n) {
+        pr = undefined;
+        await step(io, `pr ${t.id}`, async () => void (pr = share!.pr = await viewPr(io, key, n, PR_FIELDS + share!.fields)));
+      }
+      let clear: boolean | undefined;
+      await step(io, `feedback ${t.id}`, async () => void (clear = await deliverFeedback(r, w, tr, io, dir, win, scopeUnit(cfg, key, t.id), () => state(dir, t.id), warned, share)));
+      pr &&= share!.pr;
+      // Never from the live state, which the session writes: ended is a listing without the window, idle is tmux's own output clock.
+      // Listed again with its clock at the decision, since a pass can outlast IDLE_SECS.
+      const done = async () => {
+        const now = await windows(cfg, io);
+        const name = winName(key, t.id);
+        return now.has(name) ? Date.now() / 1000 - now.activity.get(name)! >= IDLE_SECS : now.listed;
+      };
+      if (pr && tr.toReadyToMerge) await step(io, `ready ${t.id}`, () => syncReady(w, tr, io, dir, pr, clear, done));
     }
   });
 }
+
+// Promoted from GitHub's view and tender's own state only. `<ID>.ready` holds the head it was promoted at, so it can only demote.
+async function syncReady(t: Ticket, tr: Tracker, io: Io, dir: string, pr: any, clear: boolean | undefined, done: () => Promise<boolean>) {
+  const f = join(dir, `${t.id}.ready`);
+  if (pr.state === "MERGED") return;
+  if (t.readyToMerge) {
+    // Moved there by hand: the head first seen counts. The listing confirms a pending move.
+    const saved = existsSync(f) ? readFileSync(f, "utf8") : undefined;
+    const at = saved?.replace(PENDING, "") ?? pr.headRefOid;
+    if (saved !== at) put(io, f, at);
+    const why =
+      pr.state !== "OPEN" ? `PR is ${pr.state}`
+      : pr.isDraft ? "PR is a draft"
+      : at !== pr.headRefOid ? "new commits"
+      : pr.mergeable === "CONFLICTING" ? "merge conflicts"
+      : pr.statusCheckRollup.some((c: any) => checkState(c) === "failed") ? "a check failed"
+      : pr.reviewDecision === "CHANGES_REQUESTED" ? "changes requested"
+      : clear === false ? "new feedback"
+      : undefined;
+    if (!why) return;
+    await tr.toReview(t, `back in review, ${why}: ${pr.url}`);
+    return remove(io, f);
+  }
+  if (clear !== true || !prReady(pr) || !(await done())) return remove(io, f);
+  // Before the move, so a move that lands without its comment still has a head to demote from.
+  put(io, f, pr.headRefOid + PENDING);
+  await tr.toReadyToMerge!(t, `ready to merge: ${pr.url}`);
+  put(io, f, pr.headRefOid);
+}
+
+const IDLE_SECS = 5 * 60;
+export const PENDING = " pending";
 
 export const worktreeIds = (dir: string) => subdirs(dir).filter((d) => SAFE_ID.test(d));
 
@@ -252,6 +307,30 @@ function assignedElsewhere(io: Io, t: Ticket) {
   if (!warned.has(seen)) io.log(`skip ${t.id}: assigned to ${JSON.stringify(t.otherAssignee)}`);
   warned.add(seen);
   return true;
+}
+
+export const IN_REVIEW_FILE = ".in-review";
+
+// This host's In Review plus Ready to merge tickets per repo, only when a limit is set (else an empty map); undefined if a listing failed.
+async function countInReview(cfg: Config, io: Io, srcs: Map<string, { s: Source; io: Io; tr: Tracker }>) {
+  const counts = new Map<string, number>();
+  if (cfg.maxInReview === undefined && Object.values(cfg.repos).every((r) => r.maxInReview === undefined)) return counts;
+  for (const x of srcs.values()) {
+    try {
+      for (const t of await x.tr.listInReview(true)) {
+        // A ticket no repo claims is still this host's: it counts toward the host-wide limit only.
+        const key = SAFE_ID.test(t.id) && (workRepo(cfg, x.s, x.tr, t) ?? (t.repo === undefined ? "(no repo)" : undefined));
+        if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+    } catch (e) {
+      x.io.log(`list in-review failed, so no new starts: ${(e as Error).message}`);
+      return;
+    }
+  }
+  const f = join(cfg.workspaceRoot, IN_REVIEW_FILE);
+  const json = JSON.stringify(Object.fromEntries(counts));
+  if (!existsSync(f) || readFileSync(f, "utf8") !== json) put(io, f, json);
+  return counts;
 }
 
 export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir = TENDER_DIR, state = liveStates()) {
@@ -327,7 +406,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
         // rm never follows symlinks.
         await write(x.io, ["rm", "-rf", "--one-file-system", "--", wt], undefined, SLOW_SECS);
         // After the clone, so a delete that fails keeps the transcripts too.
-        for (const ext of [".claude", ".codex", ".tmpdir", ".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".stall", ".findings", ".claim", ".agent", ".source", ".reassigned"]) remove(x.io, join(dir, id + ext));
+        for (const ext of [".claude", ".codex", ".tmpdir", ".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".stall", ".findings", ".claim", ".agent", ".source", ".reassigned", ".ready"]) remove(x.io, join(dir, id + ext));
       });
     }
   }
@@ -338,14 +417,15 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
     if (Object.hasOwn(cfg.repos, k)) running.set(k, (running.get(k) ?? 0) + 1);
   }
   const total = () => [...running.values()].reduce((a, b) => a + b, 0);
-  if (total() < cfg.maxConcurrent) {
+  const reviewing = await countInReview(cfg, io, srcs);
+  if (reviewing && total() < cfg.maxConcurrent && [...reviewing.values()].reduce((a, b) => a + b, 0) < (cfg.maxInReview ?? Infinity)) {
     const ready: { s: Source; io: Io; tr: Tracker; t: Ticket }[] = [];
     for (const x of srcs.values()) await step(x.io, "list ready", async () => void ready.push(...(await listReady(x)).map((t) => ({ ...x, t }))));
     // Stable sort: equal priorities keep source order, then tracker order.
     ready.sort((a, b) => byPriority(a.t, b.t));
     for (const { s, io: sio, tr, t } of ready) {
       if (total() >= cfg.maxConcurrent) break;
-      await step(sio, `ready ${t.id}`, () => startReady(cfg, s, tr, sio, t, wins, running, tenderDir));
+      await step(sio, `ready ${t.id}`, () => startReady(cfg, s, tr, sio, t, wins, running, reviewing, tenderDir));
     }
   }
   for (const { s, io: sio, tr } of srcs.values()) {

@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { checkState } from "./merge";
+import { checkState, PR_FIELDS } from "./merge";
 import { agentOf } from "./agents";
 import { byOperator, deliveryPane, nudge } from "./question";
 import type { State } from "./state";
@@ -52,7 +52,8 @@ async function failedLog(io: Io, repo: string, run: string) {
 export const feedbackFields = (r: Repo) => `,mergeStateStatus${r.feedbackAuthors.length ? ",reviews,comments" : ""}`;
 
 // The cursor is recorded first: a crash or failure after it loses the paste, never repeats it. Text never goes through keys.
-export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, dir: string, win: string | undefined, unit: string, state: () => Promise<State>, warned: Set<string>, viewed?: any) {
+// True when nothing is left to deliver, false when feedback is pending or was just delivered, undefined when not checked.
+export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, dir: string, win: string | undefined, unit: string, state: () => Promise<State>, warned: Set<string>, share?: { fields: string; pr?: any }): Promise<boolean | undefined> {
   const prFile = join(dir, `${t.id}.pr`);
   const url = existsSync(prFile) ? readFileSync(prFile, "utf8") : "";
   const n = /\/pull\/(\d+)$/.exec(url)?.[1];
@@ -63,7 +64,9 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
   if (saved.capped && (await tr.parked(t))) return;
   const cur: FeedbackCursor = saved.capped ? { ...saved, rounds: 0, capped: undefined } : saved;
   const talk = r.feedbackAuthors.length > 0;
-  const pr = viewed?.url === url && !saved.capped ? viewed : JSON.parse(await read(io, ["gh", "pr", "view", n, "--repo", r.key, "--json", `state,baseRefName,headRefOid,mergeStateStatus,statusCheckRollup${talk ? ",reviews,comments" : ""}`]));
+  // A view taken before the parked read is stale; the fresh one is shared back, so the Ready to merge check judges the same.
+  const pr = share?.pr?.url === url && !saved.capped ? share.pr : JSON.parse(await read(io, ["gh", "pr", "view", n, "--repo", r.key, "--json", share ? PR_FIELDS + share.fields : `state,baseRefName,headRefOid,mergeStateStatus,statusCheckRollup${talk ? ",reviews,comments" : ""}`]));
+  if (share) share.pr = pr;
   if (pr.state !== "OPEN") return;
   // shortcut: first 100 line comments only; paginate if a PR ever gets more.
   const lines = talk ? JSON.parse(await read(io, ["gh", "api", `repos/${r.key}/pulls/${n}/comments?per_page=100`])) : [];
@@ -72,25 +75,27 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
     .filter((c) => Date.parse(c.createdAt) > cur.seenAt && ok(c))
     .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
   const newest = items.length ? Date.parse(items.at(-1)!.createdAt) : undefined;
-  if (newest !== undefined && Date.now() - newest < DEBOUNCE_MS) return;
+  if (newest !== undefined && Date.now() - newest < DEBOUNCE_MS) return false;
   const checks: any[] = pr.statusCheckRollup ?? [];
   const failed = !cur.ciShas?.includes(pr.headRefOid) && !checks.some((c) => checkState(c) === "pending") ? checks.filter((c) => checkState(c) === "failed") : [];
   const dirty = pr.mergeStateStatus === "DIRTY" && !cur.dirtyShas?.includes(pr.headRefOid);
-  if (!items.length && !failed.length && !dirty) return;
+  if (!items.length && !failed.length && !dirty) return true;
   if (!win) {
     const seen = `${file}@${newest ?? cur.seenAt}@${pr.headRefOid}`;
     if (!warned.has(seen)) io.log(`${t.id}: PR feedback pending but the session's window is gone; restart it or act on ${url} by hand`);
-    return void warned.add(seen);
+    warned.add(seen);
+    return false;
   }
   if (cur.rounds >= MAX_ROUNDS) {
     // Label first: if adding it fails, this retries next poll instead of leaving a capped cursor that reads as resumed.
     await tr.park(t);
     put(io, file, JSON.stringify({ ...cur, capped: true } satisfies FeedbackCursor));
-    return tr.comment(t, `PR feedback stopped after ${MAX_ROUNDS} rounds on ${url}: a human is needed`);
+    await tr.comment(t, `PR feedback stopped after ${MAX_ROUNDS} rounds on ${url}: a human is needed`);
+    return false;
   }
-  if ((await state()) !== "idle") return;
+  if ((await state()) !== "idle") return false;
   const pane = await deliveryPane(io, agentOf(dir, t.id), win, `${join(dir, t.id)}.sh`, unit);
-  if (pane === undefined) return;
+  if (pane === undefined) return false;
   const runs = [...new Set(failed.map((c) => /\/actions\/runs\/(\d+)/.exec(c.detailsUrl ?? c.targetUrl ?? "")?.[1]).filter((x): x is string => !!x))].slice(0, MAX_RUNS);
   const logs = await Promise.all(runs.map((id) => failedLog(io, r.key, id)));
   put(io, file, JSON.stringify({ seenAt: newest ?? cur.seenAt, ciShas: failed.length ? [...(cur.ciShas ?? []), pr.headRefOid].slice(-10) : cur.ciShas, dirtyShas: dirty ? [...(cur.dirtyShas ?? []), pr.headRefOid].slice(-10) : cur.dirtyShas, rounds: cur.rounds + 1 } satisfies FeedbackCursor));
@@ -106,4 +111,5 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
   io.log(`${io.dry ? "dry: " : ""}feedback ${t.id} round ${cur.rounds + 1} to ${wt}/.tender/run/feedback.md`);
   if (!io.dry) writeRun(wt, "feedback.md", text);
   await nudge(io, t.id, wt, pane, FEEDBACK_POINTER);
+  return false;
 }

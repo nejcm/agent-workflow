@@ -4,6 +4,8 @@ import type { Config, Io, Ticket } from "./types";
 
 export const TENDER_DIR = dirname(import.meta.dir);
 
+export const validBranch = (b: string) => /^[\w.][\w./-]*$/.test(b) && !b.includes("..");
+
 export const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
 
 export const subdirs = (d: string) => (existsSync(d) ? readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) : []);
@@ -22,6 +24,9 @@ export const strip = (s: string) =>
     .replace(/[\p{Cc}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, " ");
 
 export const clean = (s: string, max = 200) => strip(s).replace(/\s+/g, " ").trim().slice(0, max);
+
+// Clone, fetch and checkout scale with repo size; everything else gets the runner's 60s default.
+export const SLOW_SECS = 900;
 
 export async function read(io: Io, argv: string[], cwd?: string, secs?: number) {
   const r = await io.run(argv, cwd, secs);

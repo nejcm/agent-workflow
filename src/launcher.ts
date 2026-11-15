@@ -4,13 +4,13 @@ import { basename, join } from "node:path";
 import { AGENTS, CLAUDE_TOKEN, claudeHome, codexHome, tmpHome } from "./agents";
 import { checkLogin, findBun, readLogin } from "./claude-auth";
 import { repoDir } from "./config";
-import type { Config, Io, Repo, Source, Ticket, Tracker } from "./types";
-import { GIT, inDir, inRun, put, read, remove, write } from "./util";
+import { canonical, sameRepo } from "./github";
+import { configCache, loadSession, promptFor } from "./repo-config";
+import type { Config, Io, Repo, Session, Source, Ticket, Tracker } from "./types";
+import { GIT, inDir, inRun, put, read, remove, SLOW_SECS, write } from "./util";
 
 export const render = (tpl: string, vars: Record<string, string>) => tpl.replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? m);
 
-// Clone, fetch and checkout scale with repo size; everything else gets the runner's 60s default.
-export const SLOW_SECS = 900;
 const q = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 
 export const nonoRun = (profile: string, tenderDir: string, grants: [string, string][], quote = (s: string) => s) =>
@@ -44,7 +44,7 @@ export async function sweepScopes(cfg: Config, io: Io, cgroup = cgroupOf) {
   for (const unit of out.split("\n").map((l) => l.trim().split(/\s+/)[0])) if (unit && !live.has(unit)) await write(io, ["systemctl", "--user", "kill", "--signal=KILL", unit]);
 }
 
-export function launcher(l: Repo, wt: string, promptFile: string, unit: string, tenderDir: string, bun: string) {
+export function launcher(l: Pick<Session, "agent" | "sandbox" | "path">, wt: string, promptFile: string, unit: string, tenderDir: string, bun: string) {
   const prompt = `"$(cat ${q(promptFile)})"`;
   const nono = l.sandbox === "nono";
   const git = join(l.path, ".git");
@@ -68,6 +68,14 @@ export async function windows(cfg: Config, io: Io) {
 }
 
 export const winName = (key: string, id: string) => `${key}/${id}`;
+
+/** Clones every allowlisted repo that has no clone yet and still resolves to itself; a failure is logged and retried at its next start. */
+export async function cloneAll(cfg: Config, io: Io) {
+  for (const r of Object.values(cfg.repos)) {
+    const name = existsSync(r.path) ? r.key : await canonical(io, r.key, true);
+    if (name && sameRepo(name, r.key)) await ensureClone(cfg, io, r).catch((e) => io.log(`clone ${r.key} failed: ${e.message}`));
+  }
+}
 
 // Clone beside the target and rename, so an interrupted clone never looks finished; never deletes anything.
 async function ensureClone(cfg: Config, io: Io, r: Repo) {
@@ -201,7 +209,7 @@ const trusted = (toml: string, root: string) => {
 };
 
 // Shares the base clone's objects (--shared): the session never writes the base, and tender never prunes it (maintenance.auto=false, gc.pruneExpire=never).
-async function cloneSession(io: Io, r: Repo, wt: string, branch: string) {
+async function cloneSession(io: Io, r: Session, wt: string, branch: string) {
   const old = await io.run([...GIT, "-C", r.path, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]);
   const url = (await read(io, [...GIT, "-C", r.path, "remote", "get-url", "origin"])).trim();
   const base = `refs/remotes/origin/${r.baseBranch}`;
@@ -223,8 +231,25 @@ async function cloneSession(io: Io, r: Repo, wt: string, branch: string) {
   if (!io.dry) renameSync(tmp, wt);
 }
 
-export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Tracker, io: Io, tenderDir: string) {
-  const dir = repoDir(cfg, r.key);
+/** Starts a session for `t`; false, with one comment per commit, when the repo's config on its base branch is invalid. */
+export async function start(cfg: Config, s: Source, host: Repo, t: Ticket, tr: Tracker, io: Io, tenderDir: string) {
+  const dir = repoDir(cfg, host.key);
+  await ensureClone(cfg, io, host);
+  const r = await loadSession(io, host);
+  if (!r) {
+    const { sha } = configCache.get(host.key)!;
+    const marker = join(cfg.workspaceRoot, ".invalid-config", host.key);
+    if (existsSync(marker) && readFileSync(marker, "utf8") === sha) return false;
+    // Marked before posting: a crash loses the comment rather than repeating it; a failed post is retried.
+    put(io, marker, sha);
+    try {
+      await tr.comment(t, `not started: ${host.key}'s .tender/ at ${sha.slice(0, 12)} is invalid; run \`tender check\` in the repo for details`);
+    } catch (e) {
+      remove(io, marker);
+      throw e;
+    }
+    return false;
+  }
   const wt = join(dir, t.id);
   const branch = `agent/${t.id}`;
   const promptFile = join(dir, `${t.id}.prompt.md`);
@@ -241,21 +266,21 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
   const login = r.agent === "codex" ? await codexLogin(io) : await codexLogin(io).catch(() => undefined);
   const noHooks = r.agent === "codex" ? codexHooksWarning(io.home) : undefined;
   if (noHooks) io.log(noHooks);
-  await ensureClone(cfg, io, r);
   io.log(`${io.dry ? "dry: " : ""}mkdir ${tmpHome(wt)}`);
   if (!io.dry) {
     rmSync(tmpHome(wt), { recursive: true, force: true });
     mkdirSync(join(tmpHome(wt), "cache"), { recursive: true, mode: 0o700 });
   }
   put(io, join(dir, `${t.id}.source`), s.name);
+  put(io, join(dir, `${t.id}.agent`), r.agent);
   remove(io, join(dir, `${t.id}.ended`));
-  await write(io, [...GIT, "-C", r.path, "fetch", "origin", r.baseBranch], undefined, SLOW_SECS);
   if (existsSync(wt)) io.log(`reuse ${wt}`);
   else await cloneSession(io, r, wt, branch);
   const root = existsSync(wt) ? realpathSync(wt) : wt;
   seedCodex(io, codexHome(wt), login, root);
   if (r.agent === "claude" || nono) seedClaude(io, claudeHome(wt), root);
-  const vars = { id: t.id, title: t.title, body: t.body, url: t.url, branch, base: r.baseBranch, testCmd: r.testCmd, repo: r.key, planStep: r.planStep };
+  const tests = r.testCmd ? `\`${r.testCmd}\`` : "the project's tests (find how they run: README, CI config, package or build files)";
+  const vars = { id: t.id, title: t.title, body: t.body, url: t.url, branch, base: r.baseBranch, testCmd: r.testCmd ?? "", tests, repo: r.key, planStep: r.planStep };
   io.log(`${io.dry ? "dry: " : ""}write ${join(wt, ".tender", "run", ".gitignore")}`);
   if (!io.dry) {
     mkdirSync(join(wt, ".tender"), { recursive: true });
@@ -263,13 +288,14 @@ export async function start(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Trac
     // Unlink + exclusive create: never write through a symlink or hardlink the agent left there.
     inRun(wt, (d) => (rmSync(`${d}/.gitignore`, { force: true }), writeFileSync(`${d}/.gitignore`, "*\n", { flag: "wx" })));
   }
-  put(io, promptFile, render(readFileSync(r.prompt, "utf8"), vars));
+  put(io, promptFile, render(promptFor(r, t.labels), vars));
   put(io, script, launcher(r, wt, promptFile, scopeUnit(cfg, r.key, t.id), tenderDir, bun), 0o755);
   // Claimed last, so a failed start leaves the ticket ready; `<ID>.claim` goes first, so a claim lost to an error or a crash is retried while the window lives.
   const pending = join(dir, `${t.id}.claim`);
   put(io, pending, new Date().toISOString());
   await write(io, ["tmux", "new-window", "-d", "-t", `=${cfg.tmuxSession}:`, "-n", winName(r.key, t.id), script]);
   await claim(io, tr, pending, t).catch((e) => io.log(`${t.id}: claim failed, session left running and the claim retried next poll: ${e.message}`));
+  return true;
 }
 
 /** Claims a started session's ticket; `<ID>.claim` marks it unclaimed until the claim succeeds. */

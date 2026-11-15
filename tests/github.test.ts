@@ -18,7 +18,7 @@ test("github adapter: ready requires host label, skips claimed, edits labels", a
   const { io, cmds } = fakeIo((a) => (a[2] === "list" ? { out: JSON.stringify(issues) } : a[1] === "issue" && a[2] === "view" ? { out: '{"state":"CLOSED"}' } : undefined));
   const tr = github(l, "box", io, false, ["acme/web"]);
   expect((await tr.listReady()).map((t) => [t.id, t.priority])).toEqual([["gh-7", 2]]);
-  expect(cmds[0]).toBe("gh repo view acme/web --json nameWithOwner");
+  expect(cmds[0]).toBe("gh repo view acme/web --json nameWithOwner,defaultBranchRef");
   expect(cmds[1]).toContain("--label agent --label host:box");
   expect(cmds[1]).toContain('-label:"needs-human"');
   await tr.claim((await tr.listReady())[0]!);

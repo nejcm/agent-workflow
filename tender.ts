@@ -1,20 +1,23 @@
 #!/usr/bin/env bun
-import { mkdirSync, openSync, readFileSync } from "node:fs";
+import { mkdirSync, openSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { hostLogin } from "./src/claude-auth";
 import { parseConfig } from "./src/config";
 import { dashboard, watch } from "./src/dash";
+import { cloneAll } from "./src/launcher";
+import { CRITICAL_PATHS, TEST_PATHS } from "./src/merge";
 import { makeTracker, pass } from "./src/pass";
+import { dirEntries, parseRepoConfig } from "./src/repo-config";
 import { snapshot, table } from "./src/status";
 import { tail } from "./src/tail";
-import type { Config, Io, Run } from "./src/types";
+import type { Config, Io, RepoConfig, Run } from "./src/types";
 
 async function status(cfg: Config, io: Io) {
   return [
     `max ${cfg.maxConcurrent} sessions`,
     ...cfg.sources.map((s) => `source ${s.name}  ${makeTracker(s, cfg.host, io, cfg.defaultHost, Object.keys(cfg.repos)).describe()}`),
-    ...Object.values(cfg.repos).map((r) => `${r.key}  ${r.agent}/${r.sandbox}  max ${r.maxConcurrent ?? "-"}  merge ${r.autoMerge}  ${r.path}`),
+    ...Object.values(cfg.repos).map((r) => `${r.key}  ${r.sandbox}  max ${r.maxConcurrent ?? "-"}  merge up to ${r.autoMerge}  ${r.path}`),
     "",
     table(await snapshot(cfg, io)),
   ].join("\n");
@@ -57,9 +60,27 @@ const USAGE = `usage: bun tender.ts <command> [--config tender.json]
   run | once [--dry-run]
   status [--json]
   watch [--interval 2] [--plain]
-  tail <ID | owner/repo/ID> [-n 20] [--no-follow]`;
+  tail <ID | owner/repo/ID> [-n 20] [--no-follow]
+  check [path]`;
 const VALUED = ["--config", "--interval", "-n"];
 const FLAGS = [...VALUED, "--dry-run", "--json", "--no-follow", "--plain"];
+
+/** Validates `<dir>/.tender/` from the working tree and prints the repo's settings with defaults filled in; false if invalid. */
+export function check(dir: string, print = console.log, fail = console.error) {
+  let c: RepoConfig;
+  try {
+    if (!statSync(dir, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`${dir}: not a directory`);
+    c = parseRepoConfig(dirEntries(dir));
+  } catch (e) {
+    fail(`${join(dir, ".tender")}: invalid:\n  ${(e as Error).message}`);
+    return false;
+  }
+  const { files, ...rest } = c;
+  const prompt = (f?: string) => (f ? `.tender/prompts/${f}` : undefined);
+  const prompts = { default: prompt(c.prompts.default ?? (Object.hasOwn(files, "default.md") ? "default.md" : undefined)) ?? "tender's prompts/default.md", byLabel: Object.fromEntries(Object.entries(c.prompts.byLabel).map(([l, f]) => [l, prompt(f)])) };
+  print(JSON.stringify({ ...rest, testCmd: c.testCmd ?? null, autoMerge: c.autoMerge ? `${c.autoMerge} (capped by the host's autoMerge)` : "unset (the host's autoMerge)", criticalPaths: [...CRITICAL_PATHS, ...c.criticalPaths], testPaths: [...TEST_PATHS, ...c.testPaths], prompts }, null, 2));
+  return true;
+}
 
 /** Command, ticket target and option values, or undefined for unknown flags, stray args or out-of-range numbers. */
 export function parseArgs(argv: string[]) {
@@ -70,9 +91,9 @@ export function parseArgs(argv: string[]) {
   const n = Number(opt("-n") ?? 20);
   const ok =
     argv.every((a, i) => !a.startsWith("-") || isValue(i) || FLAGS.includes(a)) &&
-    ["run", "once", "status", "watch", "tail"].includes(cmd ?? "") &&
+    ["run", "once", "status", "watch", "tail", "check"].includes(cmd ?? "") &&
     !extra.length &&
-    (cmd === "tail") === (id !== undefined) &&
+    (cmd === "check" || (cmd === "tail") === (id !== undefined)) &&
     Number.isFinite(interval) &&
     interval >= 1 &&
     Number.isInteger(n) &&
@@ -89,6 +110,7 @@ async function main(argv: string[]) {
     process.exit(2);
   }
   const { cmd, id, interval, n, path } = args;
+  if (cmd === "check") process.exit(check(resolve(id ?? ".")) ? 0 : 1);
   let cfg: Config;
   try {
     cfg = parseConfig(JSON.parse(readFileSync(path, "utf8")), dirname(path));
@@ -127,6 +149,7 @@ async function main(argv: string[]) {
         process.exit(1);
       })
     : undefined;
+  await cloneAll(cfg, io);
   if (cmd === "once") return pass(cfg, io);
   // Its own timer: a pass can block for minutes, longer than Claude's 5-minute refresh window.
   if (refresh) setInterval(refresh, 60_000);

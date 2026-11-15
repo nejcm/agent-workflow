@@ -1,9 +1,8 @@
-import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Config, Repo, Source } from "./types";
 import { TRACKERS } from "./trackers";
-import { TENDER_DIR } from "./util";
+import { validBranch } from "./util";
 
 const NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
@@ -13,6 +12,8 @@ export const validRepo = (s: unknown) => typeof s === "string" && REPO.test(s) &
 /** Canonical allowlist key for an untrusted repo string, or undefined. */
 export const allowedRepo = (cfg: Config, raw: unknown) => (validRepo(raw) ? Object.keys(cfg.repos).find((k) => k.toLowerCase() === (raw as string).toLowerCase()) : undefined);
 const LANE_KEYS = ["repo", "repoPath", "baseBranch", "agent", "sandbox", "maxConcurrent", "testCmd", "prompt"];
+const MOVED_KEYS = ["agent", "testCmd", "planStep", "prompt", "testPaths"];
+export const AUTO_MERGE = ["off", "shadow", "intelligent", "all"] as const;
 
 const expand = (p: string, base: string) => resolve(base, p.replace(/^~(?=$|\/)/, homedir()));
 
@@ -39,6 +40,7 @@ export function parseConfig(raw: any, base: string): Config {
   check(raw.lanes === undefined, "lanes: replaced by sources + repos + defaults (see README)");
   const defaults = raw.defaults ?? {};
   check(obj(defaults) && defaults.path === undefined, "defaults: object without path");
+  if (obj(defaults)) for (const k of MOVED_KEYS) check(defaults[k] === undefined, `defaults.${k}: moved to .tender/config.yaml in the repo`);
 
   const shape = `array of "owner/name" or { "name": "owner/name", …overrides }`;
   check(!obj(raw.repos), `repos: now an ${shape}; move each "owner/name": {…} entry to { "name": "owner/name", … } (see README)`);
@@ -52,31 +54,23 @@ export function parseConfig(raw: any, base: string): Config {
     if (!validRepo(key)) continue;
     const at = `repos[${i}] (${key})`;
     const v = { ...(obj(defaults) ? defaults : {}), ...o };
-    for (const k of ["path", "baseBranch", "prompt"]) check(v[k] === undefined || str(v[k]), `${at}.${k}: non-empty string`);
+    for (const k of MOVED_KEYS) check(o[k] === undefined, `${at}.${k}: moved to .tender/config.yaml in the repo`);
+    for (const k of ["path", "baseBranch"]) check(v[k] === undefined || str(v[k]), `${at}.${k}: non-empty string`);
     const r: Repo = {
       key,
       path: str(v.path) ? expand(v.path, base) : join(reposRoot, key),
-      baseBranch: str(v.baseBranch) ? v.baseBranch : "main",
-      agent: v.agent,
+      baseBranch: str(v.baseBranch) ? v.baseBranch : undefined,
       sandbox: v.sandbox,
-      testCmd: v.testCmd,
-      prompt: expand(str(v.prompt) ? v.prompt : join(TENDER_DIR, "prompts/default.md"), base),
-      planStep: v.planStep === undefined ? "Plan and implement the ticket." : v.planStep,
       maxConcurrent: v.maxConcurrent,
       autoMerge: v.autoMerge === undefined ? "off" : v.autoMerge,
       criticalPaths: v.criticalPaths === undefined ? [] : v.criticalPaths,
-      testPaths: v.testPaths === undefined ? [] : v.testPaths,
       feedbackAuthors: v.feedbackAuthors === undefined ? [] : v.feedbackAuthors,
     };
-    check(/^[\w./-]+$/.test(r.baseBranch) && !r.baseBranch.includes(".."), `${at}.baseBranch: invalid`);
-    check(["claude", "codex"].includes(r.agent), `${at}.agent: "claude" | "codex" (here or in defaults)`);
+    check(r.baseBranch === undefined || validBranch(r.baseBranch), `${at}.baseBranch: invalid`);
     check(["nono", "none"].includes(r.sandbox), `${at}.sandbox: "nono" | "none" (here or in defaults)`);
-    check(str(r.testCmd), `${at}.testCmd: required (here or in defaults)`);
-    check(str(r.planStep), `${at}.planStep: non-empty string`);
     check(r.maxConcurrent === undefined || posInt(r.maxConcurrent), `${at}.maxConcurrent: positive integer`);
-    check(existsSync(r.prompt), `${at}.prompt: ${r.prompt} not found`);
-    check(["off", "shadow", "intelligent", "all"].includes(r.autoMerge), `${at}.autoMerge: "off" | "shadow" | "intelligent" | "all"`);
-    for (const k of ["criticalPaths", "testPaths"] as const) check(Array.isArray(r[k]) && r[k].every(str), `${at}.${k}: array of non-empty glob strings`);
+    check(AUTO_MERGE.includes(r.autoMerge), `${at}.autoMerge: ${AUTO_MERGE.map((m) => `"${m}"`).join(" | ")}`);
+    check(Array.isArray(r.criticalPaths) && r.criticalPaths.every(str), `${at}.criticalPaths: array of non-empty glob strings`);
     check(Array.isArray(r.feedbackAuthors) && r.feedbackAuthors.every(str), `${at}.feedbackAuthors: array of non-empty strings (GitHub logins / Linear emails)`);
     repos[key] = r;
     keys.push(key);

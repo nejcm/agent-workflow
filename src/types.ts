@@ -1,18 +1,34 @@
+export type AgentName = "claude" | "codex";
+
+/** Host-side settings for one allowlisted repo, from tender.json. */
 export interface Repo {
   key: string;
   path: string;
-  baseBranch: string;
-  agent: "claude" | "codex";
+  /** Unset: the remote's default branch. */
+  baseBranch?: string;
   sandbox: "nono" | "none";
-  testCmd: string;
-  prompt: string;
-  planStep: string;
   maxConcurrent?: number;
+  /** The ceiling for the repo's own request. */
   autoMerge: AutoMerge;
+  /** A floor: added to the built-in and the repo's critical paths. */
   criticalPaths: string[];
-  testPaths: string[];
   feedbackAuthors: string[];
 }
+
+/** A repo's `.tender/` at one base commit: `files` maps each `prompts/` file name to its text. */
+export interface RepoConfig {
+  agent: AgentName;
+  testCmd?: string;
+  planStep: string;
+  autoMerge?: AutoMerge;
+  criticalPaths: string[];
+  testPaths: string[];
+  prompts: { default?: string; byLabel: Record<string, string> };
+  files: Record<string, string>;
+}
+
+/** Host and repo settings combined for one start or merge decision. */
+export type Session = Omit<Repo, "baseBranch"> & Omit<RepoConfig, "autoMerge"> & { baseBranch: string };
 
 export type AutoMerge = "off" | "shadow" | "intelligent" | "all";
 

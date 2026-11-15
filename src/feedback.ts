@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkState } from "./merge";
+import { agentOf } from "./agents";
 import { byOperator, deliveryPane, nudge } from "./question";
 import type { State } from "./state";
 import type { Io, Repo, Ticket, TicketComment, Tracker } from "./types";
@@ -88,7 +89,7 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
     return tr.comment(t, `PR feedback stopped after ${MAX_ROUNDS} rounds on ${url}: a human is needed`);
   }
   if ((await state()) !== "idle") return;
-  const pane = await deliveryPane(io, r, win, `${join(dir, t.id)}.sh`, unit);
+  const pane = await deliveryPane(io, agentOf(dir, t.id), win, `${join(dir, t.id)}.sh`, unit);
   if (pane === undefined) return;
   const runs = [...new Set(failed.map((c) => /\/actions\/runs\/(\d+)/.exec(c.detailsUrl ?? c.targetUrl ?? "")?.[1]).filter((x): x is string => !!x))].slice(0, MAX_RUNS);
   const logs = await Promise.all(runs.map((id) => failedLog(io, r.key, id)));

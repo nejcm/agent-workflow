@@ -7,21 +7,15 @@
   "tmuxSession": "tender",
   "maxConcurrent": 2,
   "defaults": {
-    "baseBranch": "main",
-    "agent": "claude",
     "sandbox": "nono",
-    "planStep": "Load the `orchestration` skill and use it to plan and implement the ticket.",
-    "testCmd": "bun test",
     "autoMerge": "off"
   },
   "repos": [
     "acme/web",
     {
       "name": "acme/api",
-      "agent": "codex",
-      "testCmd": "make test",
+      "baseBranch": "main",
       "maxConcurrent": 1,
-      "prompt": "prompts/default.md",
       "autoMerge": "intelligent",
       "criticalPaths": ["src/billing/**"],
       "feedbackAuthors": ["octocat", "lead@acme.com"]

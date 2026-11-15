@@ -48,7 +48,8 @@ test("the PR comes from <ID>.pr for any agent; a forged or oversize one is ignor
   writeFileSync(join(dir(), "PER-5.pr"), "https://evil.example/\x1b[2J");
   writeFileSync(join(dir(), "PER-6.pr"), `https://github.com/acme/web/pull/6${" ".repeat(600)}`);
   symlinkSync(join(dir(), "PER-4.pr"), join(dir(), "PER-8.pr"));
-  const c = config({ repos: [{ name: "acme/web", path: join(root, "src-web"), agent: "codex" }] });
+  for (const id of ["PER-4", "PER-5", "PER-6", "PER-8"]) writeFileSync(join(dir(), `${id}.agent`), "codex");
+  const c = config();
   expect(rows(c, new Map(), root, T * 1000).map((r) => [r.id, r.agent, r.pr])).toEqual([
     ["PER-4", "codex", "https://github.com/acme/web/pull/4"],
     ["PER-5", "codex", null],

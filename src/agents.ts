@@ -1,7 +1,7 @@
 import { lstatSync, opendirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Live, State } from "./state";
-import type { Repo } from "./types";
+import type { AgentName } from "./types";
 import { clean, inDir, readRun, readIn } from "./util";
 
 export type Lookup = (wt: string, since: number, now: number) => Live | undefined;
@@ -26,6 +26,17 @@ const MAX_FILE = 4096;
 
 /** A `claude setup-token` token for `sandbox: "none"` lanes, relative to home; read by the launch script on the host. nono lanes get a phantom from nono's proxy instead. */
 export const CLAUDE_TOKEN = ".claude-tender/oauth-token";
+/** The agent a session was started with, from `<ID>.agent`; undefined for one started before tender recorded it. */
+export function recordedAgent(dir: string, id: string): AgentName | undefined {
+  try {
+    const a = readFileSync(join(dir, `${id}.agent`), "utf8").trim();
+    return a === "claude" || a === "codex" ? a : undefined;
+  } catch {
+    return undefined;
+  }
+}
+export const agentOf = (dir: string, id: string) => recordedAgent(dir, id) ?? "claude";
+
 /** The ticket's own Claude config dir, a sidecar of its worktree. */
 export const claudeHome = (wt: string) => `${wt}.claude`;
 /** The ticket's own CODEX_HOME, a sidecar of its worktree; Claude sessions get one too, to run Codex. */
@@ -117,7 +128,7 @@ export const INBOX_HOOK = 'head -c 1048576 >/dev/null; cd "$CLAUDE_PROJECT_DIR" 
 export const INBOX_WAITER = "^[^ ]*sh -c head -c 1048576 .*inbox\\.pid";
 const INBOX_SETTINGS = JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: INBOX_HOOK, asyncRewake: true, timeout: 2147483 }] }] } });
 
-export const AGENTS: Record<Repo["agent"], Agent> = {
+export const AGENTS: Record<AgentName, Agent> = {
   claude: {
     launch: (wt, prompt, nono) => [`${nono ? "export" : `CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/${CLAUDE_TOKEN}")" || exit 1\nexport CLAUDE_CODE_OAUTH_TOKEN`} CLAUDE_CONFIG_DIR=${claudeHome(wt)} CODEX_HOME=${codexHome(wt)} CLAUDE_CODE_TMPDIR=${tmpHome(wt)}`, ["claude", "--permission-mode", "bypassPermissions", "--settings", `'${INBOX_SETTINGS}'`, prompt]],
     store: (wt) => [claudeHome(wt), "projects"],

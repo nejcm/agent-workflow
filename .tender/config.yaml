@@ -1,0 +1,12 @@
+agent: claude
+testCmd: bun test && bun run typecheck
+planStep: Load the `orchestration` skill and use it to plan and implement the ticket.
+autoMerge: shadow
+criticalPaths:
+  - tender.ts
+  - src/merge.ts
+  - src/repo-config.ts
+  - src/config.ts
+  - prompts/**
+  - scripts/**
+  - systemd/**

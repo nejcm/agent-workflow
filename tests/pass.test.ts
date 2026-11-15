@@ -8,13 +8,14 @@ import { authStamp, CODEX_AUTH, codexHooksWarning, codexLogin, codexRefresh, lau
 import { endedNotice, pass } from "../src/pass";
 import { liveStates, pickAnswer } from "../src/question";
 import type { State } from "../src/state";
-import type { Io, Repo, Ticket, TicketComment, Tracker } from "../src/types";
+import type { AgentName, Config, Io, Ticket, TicketComment, Tracker } from "../src/types";
 import { GIT } from "../src/util";
-import { claudeFile, config, fakeIo, fakeTracker, noPr, root, src, ticket, two, useTempRoot, web, windowsOut, worktree } from "./helpers";
+import { claudeFile, config, fakeIo, repoFiles, fakeTracker, noPr, root, src, ticket, two, useTempRoot, web, windowsOut, worktree } from "./helpers";
 
 useTempRoot();
 
 const unit = (id: string) => scopeUnit(config(), "acme/web", id);
+const ses = (c: Config, agent: AgentName = "claude") => ({ ...web(c), agent });
 
 test("render is single-pass so ticket text cannot expand placeholders", () => {
   expect(render("{{title}} / {{body}} / {{nope}}", { title: "{{body}}", body: "b" })).toBe("{{body}} / b / {{nope}}");
@@ -22,7 +23,7 @@ test("render is single-pass so ticket text cannot expand placeholders", () => {
 
 test("launcher: claude under nono drops any inherited token and gets only TENDER_BUN for nono's capture; the base clone is only read", () => {
   const c = config();
-  const s = launcher(web(c), "/ws/web/gh-1", "/ws/web/gh-1.prompt.md", unit("gh-1"), "/tender", "/b/bun");
+  const s = launcher(ses(c), "/ws/web/gh-1", "/ws/web/gh-1.prompt.md", unit("gh-1"), "/tender", "/b/bun");
   expect(s).not.toContain("oauth-token");
   expect(s).toContain(`unset LINEAR_API_KEY\nexport TMPDIR='/ws/web/gh-1.tmpdir' TMP='/ws/web/gh-1.tmpdir' TEMP='/ws/web/gh-1.tmpdir'\nunset CLAUDE_CODE_OAUTH_TOKEN\nexport GH_CONFIG_DIR='/ws/web/gh-1'.gh XDG_CACHE_HOME='/ws/web/gh-1.tmpdir/cache' TENDER_BUN='/b/bun'\nexport CLAUDE_CONFIG_DIR='/ws/web/gh-1'.claude CODEX_HOME='/ws/web/gh-1'.codex CLAUDE_CODE_TMPDIR='/ws/web/gh-1'.tmpdir\n`);
   expect(s).toContain(`unset LINEAR_API_KEY\nexport TMPDIR='/ws/web/gh-1.tmpdir' TMP='/ws/web/gh-1.tmpdir' TEMP='/ws/web/gh-1.tmpdir'\n`);
@@ -33,11 +34,11 @@ test("launcher: claude under nono drops any inherited token and gets only TENDER
 });
 
 test("launcher: codex without sandbox keeps the daemon", () => {
-  const c = config({ repos: [{ name: "acme/web", agent: "codex", sandbox: "none" }] });
-  const s = launcher(web(c), "/ws/web/gh-2", "/ws/web/gh-2.prompt.md", unit("gh-2"), "/tender", "");
+  const c = config({ repos: [{ name: "acme/web", sandbox: "none" }] });
+  const s = launcher(ses(c, "codex"), "/ws/web/gh-2", "/ws/web/gh-2.prompt.md", unit("gh-2"), "/tender", "");
   expect(s).toContain("export CODEX_HOME='/ws/web/gh-2'.codex");
   expect(s).toContain(`exec systemd-run --user --scope --quiet --collect --unit '${unit("gh-2")}' -- codex --dangerously-bypass-hook-trust --sandbox danger-full-access --ask-for-approval never -C '/ws/web/gh-2' "$(cat '/ws/web/gh-2.prompt.md')"`);
-  expect(launcher(web(config({ repos: [{ name: "acme/web", agent: "codex" }] })), "/w", "/p", "tender-acme:web:w.scope", "/tender", "/b/bun")).toContain("-- codex --no-daemon ");
+  expect(launcher(ses(config(), "codex"), "/w", "/p", "tender-acme:web:w.scope", "/tender", "/b/bun")).toContain("-- codex --no-daemon ");
 });
 
 test("launcher scripts are byte-for-byte stable for each agent, with and without nono", () => {
@@ -56,7 +57,7 @@ export CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CODEX_HOME
 `;
   const codex = (d: string) => String.raw`codex ${d}--dangerously-bypass-hook-trust --sandbox danger-full-access --ask-for-approval never -C '/ws/it'\''s' "$(cat '/ws/p.md')"
 `;
-  const s = (agent: string, sandbox: string) => launcher(web(config({ repos: [{ name: "acme/web", path: "/src/web", agent, sandbox }] })), "/ws/it's", "/ws/p.md", "tender-acme:web:it's.scope", "/tender", sandbox === "nono" ? "/b/it's/bun" : "");
+  const s = (agent: AgentName, sandbox: string) => launcher(ses(config({ repos: [{ name: "acme/web", path: "/src/web", sandbox }] }), agent), "/ws/it's", "/ws/p.md", "tender-acme:web:it's.scope", "/tender", sandbox === "nono" ? "/b/it's/bun" : "");
   const scope = String.raw`systemd-run --user --scope --quiet --collect --unit 'tender-acme:web:it'\''s.scope' -- `;
   const box = String.raw`unset CLAUDE_CODE_OAUTH_TOKEN
 export GH_CONFIG_DIR='/ws/it'\''s'.gh XDG_CACHE_HOME='/ws/it'\''s.tmpdir/cache' TENDER_BUN='/b/it'\''s/bun'
@@ -77,7 +78,7 @@ test("starts ready tickets up to maxConcurrent", async () => {
   const { tr, calls } = fakeTracker({ ready: [ticket(1), ticket(2), ticket(3)] });
   mkdirSync(join(root, "acme/web/gh-1.tmpdir"), { recursive: true });
   writeFileSync(join(root, "acme/web/gh-1.tmpdir/stale"), "");
-  const { io, cmds } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(["acme/web/gh-9"]) : a[4] === "--verify" ? { code: 1 } : noPr(a)));
+  const { io, cmds } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(["acme/web/gh-9"]) : a[5] === "--quiet" ? { code: 1 } : noPr(a)));
   await pass(c, io, () => tr, "/tender");
   expect(calls).toEqual(["claim gh-1"]);
   const wt = `${root}/acme/web/gh-1`;
@@ -204,20 +205,22 @@ test("app-server does not inherit the refresh lock", async () => {
   }
 });
 
-test("a codex start without a usable template login fails before cloning", async () => {
+test("a codex start without a usable template login fails before the session clone", async () => {
   const { tr, calls } = fakeTracker({ ready: [ticket(1)] });
   const { io, cmds, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : noPr(a)));
-  await pass(config({ defaults: { agent: "codex", sandbox: "nono", testCmd: "bun test" } }), io, () => tr, "/tender");
+  repoFiles["config.yaml"] = "agent: codex\n";
+  await pass(config({ defaults: { sandbox: "nono" } }), io, () => tr, "/tender");
   expect(calls).toEqual([]);
-  expect(cmds.filter((c) => / clone | worktree add | new-window /.test(c))).toEqual([]);
+  expect(cmds.filter((c) => / clone -q | worktree add | new-window /.test(c))).toEqual([]);
   expect(logs.join("\n")).toContain(`${root}/${CODEX_AUTH} is missing or unreadable`);
 });
 
 test("a codex start seeds the ticket's own auth.json, 0600, without the refresh token", async () => {
   login(Date.now() + 5 * DAY);
   const { tr, calls } = fakeTracker({ ready: [ticket(1)] });
-  const { io, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : a[4] === "--verify" ? { code: 1 } : noPr(a)));
-  await pass(config({ defaults: { agent: "codex", sandbox: "none", testCmd: "bun test" } }), io, () => tr, "/tender");
+  const { io, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : a[5] === "--quiet" ? { code: 1 } : noPr(a)));
+  repoFiles["config.yaml"] = "agent: codex\n";
+  await pass(config({ defaults: { sandbox: "none" } }), io, () => tr, "/tender");
   expect(calls).toEqual(["claim gh-1"]);
   expect(logs.join("\n")).toContain(codexHooksWarning(root)!);
   const f = join(root, "acme/web/gh-1.codex/auth.json");
@@ -232,8 +235,9 @@ test("a codex start under nono seeds a Claude config dir for a nested claude, wi
   login(Date.now() + 5 * DAY);
   rmSync(join(root, ".claude-tender/oauth-token"));
   const { tr, calls } = fakeTracker({ ready: [ticket(1)] });
-  const { io } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : a[4] === "--verify" ? { code: 1 } : noPr(a)));
-  await pass(config({ defaults: { agent: "codex", sandbox: "nono", testCmd: "bun test" } }), io, () => tr, "/tender");
+  const { io } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : a[5] === "--quiet" ? { code: 1 } : noPr(a)));
+  repoFiles["config.yaml"] = "agent: codex\n";
+  await pass(config({ defaults: { sandbox: "nono" } }), io, () => tr, "/tender");
   expect(calls).toEqual(["claim gh-1"]);
   expect(existsSync(join(root, "acme/web/gh-1.claude/.claude.json"))).toBe(true);
   expect(readFileSync(join(root, "acme/web/gh-1.sh"), "utf8")).toContain(`TENDER_BUN='${realpathSync(process.execPath)}'`);
@@ -293,13 +297,13 @@ test("seedCodex: the trust entry round-trips any path, keeps an existing one, an
   }
 });
 
-test("an unsandboxed claude start without the token file fails before cloning, with the fix in the log", async () => {
+test("an unsandboxed claude start without the token file fails before the session clone, with the fix in the log", async () => {
   rmSync(join(root, ".claude-tender/oauth-token"));
   const { tr, calls } = fakeTracker({ ready: [ticket(1)] });
   const { io, cmds, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : noPr(a)));
   await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), sandbox: "none" }] }), io, () => tr, "/tender");
   expect(calls).toEqual([]);
-  expect(cmds.filter((c) => / clone | worktree add | new-window /.test(c))).toEqual([]);
+  expect(cmds.filter((c) => / clone -q | worktree add | new-window /.test(c))).toEqual([]);
   expect(logs.join("\n")).toContain(`${root}/.claude-tender/oauth-token is missing: run \`claude setup-token\``);
 });
 
@@ -311,10 +315,10 @@ test("a nono claude start needs the host login, not the token file; a near time 
   const failed = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : noPr(a)));
   await pass(config(), failed.io, () => tr, "/tender");
   expect(calls).toEqual([]);
-  expect(failed.cmds.filter((c) => / clone | new-window /.test(c))).toEqual([]);
+  expect(failed.cmds.filter((c) => / clone -q | new-window /.test(c))).toEqual([]);
   expect(failed.logs.join("\n")).toContain("the Claude login reached its time limit: run `claude auth login`");
   login({ refreshTokenExpiresAt: Date.now() + 86_400_000 + 600_000 });
-  const ok = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : a[4] === "--verify" ? { code: 1 } : noPr(a)));
+  const ok = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : a[5] === "--quiet" ? { code: 1 } : noPr(a)));
   await pass(config(), ok.io, () => tr, "/tender");
   expect(calls).toEqual(["claim gh-1"]);
   expect(ok.logs.join("\n")).toContain("the Claude login ends in 24h");
@@ -350,7 +354,7 @@ test("reuses an existing session dir; a branch a legacy worktree left in the bas
   const c = config();
   mkdirSync(join(root, "acme/web/gh-1"), { recursive: true });
   const { tr } = fakeTracker({ ready: [ticket(1), ticket(2)] });
-  const { io, cmds, logs } = fakeIo((a) => (a[4] === "--verify" ? { out: "abc123\n" } : noPr(a)));
+  const { io, cmds, logs } = fakeIo((a) => (a[5] === "--quiet" ? { out: "abc123\n" } : noPr(a)));
   await pass(c, io, () => tr, "/tender");
   expect(logs.some((l) => l.includes(`reuse ${root}/acme/web/gh-1`))).toBe(true);
   expect(cmds.filter((x) => x.includes(`${root}/acme/web/gh-1 `) || x.endsWith(`${root}/acme/web/gh-1`)).filter((x) => x.startsWith("git"))).toEqual([]);
@@ -595,7 +599,7 @@ test("dry-run logs side effects and executes none", async () => {
   const { tr } = fakeTracker({ ready: [ticket(1)], inProgress: [ticket(2)], done: ["gh-5"] });
   const { io, cmds, logs } = fakeIo((a) => (a[1] === "has-session" ? { code: 1 } : a[1] === "pr" && a.includes("agent/gh-2") ? { out: '[{"url":"https://pr/2","state":"OPEN"}]' } : noPr(a)), true);
   await pass(c, io, () => tr, "/tender");
-  expect(cmds.every((x) => /has-session|list-windows|list-panes|list-units|rev-parse|remote get-url|gh pr list|gh repo view/.test(x))).toBe(true);
+  expect(cmds.every((x) => /has-session|list-windows|list-panes|list-units|rev-parse|ls-tree|cat-file|remote get-url|gh pr list|gh repo view/.test(x))).toBe(true);
   expect(logs.some((l) => l.includes("dry: tmux new-session -d -s tender"))).toBe(true);
   expect(logs.some((l) => l.startsWith("[web] dry: nono run --no-rollback-prompt --profile /tender/nono/tender-check.json ") && l.endsWith(`-C ${root}/acme/web/gh-5 status --porcelain --ignore-submodules=none`))).toBe(true);
   expect(logs.some((l) => l.startsWith("[web] dry: nono run ") && l.endsWith(`-C ${root}/acme/web/gh-5 log --format=%h --branches --not --remotes`))).toBe(true);
@@ -697,7 +701,7 @@ test("clone on demand: missing clone is cloned with gh before the worktree, exis
 test("same ticket number in two repos does not collide", async () => {
   const c = two();
   const { tr, calls } = fakeTracker({ ready: [ticket(12), ticket(12, "acme/api")] });
-  const { io, cmds } = fakeIo((a) => (a[4] === "--verify" ? { code: 1 } : noPr(a)));
+  const { io, cmds } = fakeIo((a) => (a[5] === "--quiet" ? { code: 1 } : noPr(a)));
   await pass(c, io, (s) => (s.name === "gh" ? tr : fakeTracker({}).tr), "/tender");
   expect(calls).toEqual(["claim gh-12", "claim gh-12"]);
   expect(cmds).toContain(cloneCmd(`${root}/src-web`, `${root}/acme/web/gh-12.tmp`));
@@ -776,8 +780,8 @@ test("redirected or unresolvable repos are skipped before listing, cloning or st
   await pass(c, io, factory, "/tender");
   expect(lin.calls).toEqual(["comment ENG-1 repo acme/api now resolves to evil/api on GitHub, which is not in the tender allowlist", "claim ENG-3"]);
   expect(cmds.filter((x) => x.startsWith("gh issue list")).map((x) => x.split(" ")[4])).toEqual(Array(6).fill("acme/web"));
-  expect(cmds.filter((x) => x === "gh repo view acme/api --json nameWithOwner")).toHaveLength(3);
-  expect(cmds.filter((x) => x === "gh repo view acme/docs --json nameWithOwner").length).toBeGreaterThan(1);
+  expect(cmds.filter((x) => x === "gh repo view acme/api --json nameWithOwner,defaultBranchRef")).toHaveLength(3);
+  expect(cmds.filter((x) => x === "gh repo view acme/docs --json nameWithOwner,defaultBranchRef").length).toBeGreaterThan(1);
   expect(cmds.some((x) => /clone acme\/(api|docs)|src-(api|docs)/.test(x))).toBe(false);
   expect(logs.some((l) => l.includes('repo acme/api: GitHub resolves it to "evil/api", skipped'))).toBe(true);
   expect(logs.some((l) => l.includes("repo acme/docs: lookup failed, skipped"))).toBe(true);
@@ -962,7 +966,8 @@ test("ended without a PR: quotes the last claude or codex message from the ticke
   const { tr, calls } = fakeTracker({ inProgress: [ticket(1), ticket(3)] });
   await pass(config(), fakeIo(noPr).io, () => tr, "/tender");
   const codex = fakeTracker({ inProgress: [ticket(2)] });
-  await pass(config({ defaults: { agent: "codex", sandbox: "nono", testCmd: "bun test" } }), fakeIo(noPr).io, () => codex.tr, "/tender");
+  writeFileSync(join(root, "acme/web/gh-2.agent"), "codex");
+  await pass(config(), fakeIo(noPr).io, () => codex.tr, "/tender");
   expect(calls).toEqual(["comment gh-1 session ended without a PR. Last message:\n\n```\nBlocked: tests need a DB.\n```", "comment gh-3 session ended without a PR"]);
   expect(codex.calls).toEqual(["comment gh-2 session ended without a PR. Last message:\n\n```\nNeed the API key.\n```"]);
 });
@@ -1062,9 +1067,9 @@ test("stall: also checked while in review, and feedback stops in the same poll",
 
 test("liveStates raw keeps a stale working that the resolved state reports as unknown", async () => {
   const live = liveStates(root, async () => () => ({ state: "working", since: 0, waitingFor: null }));
-  const r = { agent: "codex" } as Repo;
-  expect(await live(r, root, "a", 20 * 60_000)).toBe("unknown");
-  expect(await live(r, root, "a", 20 * 60_000, true)).toBe("working");
+  writeFileSync(join(root, "a.agent"), "codex");
+  expect(await live(root, "a", 20 * 60_000)).toBe("unknown");
+  expect(await live(root, "a", 20 * 60_000, true)).toBe("working");
 });
 
 test("a session gets its own clone sharing the base's objects; cleanup deletes it without git or symlinks, unless work, a stash, a tag or a note is unpushed", async () => {

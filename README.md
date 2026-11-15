@@ -117,14 +117,14 @@ While an In Review ticket's tmux window exists and its PR is open, each poll `te
 
 ### Auto-merge
 
-`autoMerge` (in `defaults` or per repo) lets `tender` merge a ticket's PR; the prompt forbids the agent to merge. That is a prompt rule, not a boundary: the sandbox's GitHub token can reach `/repos/**` and `/graphql` (`gh pr create` needs GraphQL, and nono filters only method + path, not the mutation), so a prompt-injected agent can still `gh pr merge` or push to `baseBranch` itself, even with `autoMerge: "off"` or `no-automerge`. The real boundary is GitHub branch protection on `baseBranch` (required PR, required status checks); enable it. On every poll, for each in-review ticket with an open PR on `agent/<ID>`, `tender` reads `gh pr view --json …` and decides:
+`autoMerge` (requested in the repo's [`.tender/config.yaml`](#repo-config), capped by the repo's `autoMerge` in `tender.json`) lets `tender` merge a ticket's PR; the prompt forbids the agent to merge. That is a prompt rule, not a boundary: the sandbox's GitHub token can reach `/repos/**` and `/graphql` (`gh pr create` needs GraphQL, and nono filters only method + path, not the mutation), so a prompt-injected agent can still `gh pr merge` or push to `baseBranch` itself, even with `autoMerge: "off"` or `no-automerge`. The real boundary is GitHub branch protection on `baseBranch` (required PR, required status checks); enable it. On every poll, for each in-review ticket with an open PR on `agent/<ID>`, `tender` reads `gh pr view --json …` and decides:
 
 - `off` (default): never merges.
 - `all`: merges when the PR is open, not a draft, from this repo (not a fork), targets `baseBranch`, has no conflicts, no review decision "changes requested", no check failed or pending (zero checks is fine), and neither the PR nor the ticket has the label `no-automerge`.
 - `shadow`: decides exactly like `intelligent` but never merges: it posts one `tender: would auto-merge: <reason>` (or `tender: not auto-merged: <reason>`) comment per head SHA and the ticket stays In Review. Use it to see what `intelligent` would do before turning it on.
-- `intelligent`: the same as `all`, plus gates `tender` computes from the PR itself. Never merged: any changed file whose path, or old path for a rename, matches a critical path; an existing test file that loses lines, is deleted or is renamed (from or to a test path; adding test files or only adding lines to one is fine); or a large change. Size is additions + deletions and changed files: small ≤ 150 lines and ≤ 5 files, medium ≤ 500 and ≤ 15, else large. Small needs nothing more (zero checks is fine). Changed files come from `gh api --paginate repos/<owner>/<name>/pulls/<n>/files` (not `gh pr view --json files`, which lacks a rename's old path and stops at 100 files), fetched only when every other gate would let the PR merge; a list whose length differs from the PR's `changedFiles` holds it back. Medium also needs at least one check that succeeded (skipped or neutral ones don't count), and a valid `.tender/run/merge.json` from the agent with `tested: true`, `confidence: "high"`, `critical: false`.
+- `intelligent`: the same as `all`, plus gates `tender` computes from the PR itself. Never merged: any changed file whose path, or old path for a rename, matches a critical path; an existing test file that loses lines, is deleted or is renamed (from or to a test path; adding test files or only adding lines to one is fine); or a large change. Size is additions + deletions and changed files: small ≤ 150 lines and ≤ 5 files, medium ≤ 500 and ≤ 15, else large. Small needs nothing more (zero checks is fine). Changed files come from `gh api --paginate repos/<owner>/<name>/pulls/<n>/files` (not `gh pr view --json files`, which lacks a rename's old path and stops at 100 files), fetched only when every other gate would let the PR merge; a list whose length differs from the PR's `changedFiles` holds it back. Medium also needs at least one check that succeeded (skipped or neutral ones don't count), and a valid `.tender/run/merge.json` from the agent with `tested: true`, `confidence: "high"`, `critical: false` and `reviewed: true` (a model of a different family reviewed the final diff; missing or `false` counts like `confidence: "low"` here).
 
-The agent writes `.tender/run/merge.json` (`{ "tested", "confidence": "high|medium|low", "critical", "reason" }`, max 4 KiB, read like the phases file: no symlinks, regular file only) just before opening the PR. Ticket text can steer the agent, so the file is untrusted: it can only hold a merge back (`critical: true` or `confidence: "low"` blocks any size; missing or invalid blocks medium), never let one through. Built-in critical paths (case-insensitive globs on the repo-relative path; a pattern without `/` matches the file name at any depth): `.github/**`, `**/Dockerfile*`, `docker-compose*`, `**/migrations/**`, `**/*.sql`, `package.json`, `bun.lock*`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `go.mod`, `go.sum`, `Cargo.toml`, `Cargo.lock`, `pyproject.toml`, `requirements*.txt`, `**/auth/**`, `**/*secret*`, `**/*.env*`, `**/*.pem`, `**/*.key`, `nono/**`, `tender.json`, `**/infra/**`, `**/terraform/**`, `**/deploy/**`, `AGENTS.md`, `CLAUDE.md`, `**/.claude/**`, `**/.codex/**`, `.mcp.json`, `CLAUDE.local.md`, `GEMINI.md`, `**/.gemini/**`, `**/.cursor/**`, `.cursorrules`, `uv.lock`, `poetry.lock`, `Gemfile`, `Gemfile.lock`, `**/*.tf`, `**/k8s/**`, `**/helm/**`, `.npmrc`, `bunfig.toml`, `.gitmodules`, `**/.husky/**`, `.pre-commit-config.yaml`, `Makefile`, and test runner config: `conftest.py`, `pytest.ini`, `jest.config.*`, `vitest.config.*`, `playwright.config.*`. `criticalPaths` adds to them. Built-in test paths (same glob rules): `**/*.test.*`, `**/*.spec.*`, `**/tests/**`, `**/test/**`, `**/__tests__/**`, `**/e2e/**`, `**/spec/**`, `**/test_*.py`, `**/*_test.go`, `**/*_test.py`. `testPaths` adds to them.
+The agent writes `.tender/run/merge.json` (`{ "tested", "confidence": "high|medium|low", "critical", "reviewed", "reviewer"?, "reason" }`, max 4 KiB, read like the phases file: no symlinks, regular file only) just before opening the PR. Ticket text can steer the agent, so the file is untrusted: it can only hold a merge back (`critical: true` or `confidence: "low"` blocks any size; missing or invalid blocks medium), never let one through. Built-in critical paths (case-insensitive globs on the repo-relative path; a pattern without `/` matches the file name at any depth): `.github/**`, `**/Dockerfile*`, `docker-compose*`, `**/migrations/**`, `**/*.sql`, `package.json`, `bun.lock*`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `go.mod`, `go.sum`, `Cargo.toml`, `Cargo.lock`, `pyproject.toml`, `requirements*.txt`, `**/auth/**`, `**/*secret*`, `**/*.env*`, `**/*.pem`, `**/*.key`, `nono/**`, `tender.json`, `.tender/**`, `**/infra/**`, `**/terraform/**`, `**/deploy/**`, `AGENTS.md`, `CLAUDE.md`, `**/.claude/**`, `**/.codex/**`, `.mcp.json`, `CLAUDE.local.md`, `GEMINI.md`, `**/.gemini/**`, `**/.cursor/**`, `.cursorrules`, `uv.lock`, `poetry.lock`, `Gemfile`, `Gemfile.lock`, `**/*.tf`, `**/k8s/**`, `**/helm/**`, `.npmrc`, `bunfig.toml`, `.gitmodules`, `**/.husky/**`, `.pre-commit-config.yaml`, `Makefile`, and test runner config: `conftest.py`, `pytest.ini`, `jest.config.*`, `vitest.config.*`, `playwright.config.*`. `criticalPaths` in `tender.json` and in the repo add to them; neither can remove any. Built-in test paths (same glob rules): `**/*.test.*`, `**/*.spec.*`, `**/tests/**`, `**/test/**`, `**/__tests__/**`, `**/e2e/**`, `**/spec/**`, `**/test_*.py`, `**/*_test.go`, `**/*_test.py`. The repo's `testPaths` add to them.
 
 Pending checks or unknown mergeability wait silently. A merge is `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>` (never `--admin`), so a push after the decision makes it fail. Right before merging `tender` views the PR again and re-runs every gate; if the head moved, it drops `<ID>.merge` and decides on the new head next poll. A failed merge is logged and retried next poll, and so is a PR not yet `MERGED` after the command (merge queue). After a merge `tender` comments once, closes the GitHub issue / moves the Linear ticket to the first `done` state, and cleanup follows. A PR found merged on a later poll (also by hand) moves the ticket the same way if it is from this repo and targets `baseBranch`, which retries a failed close; this also runs on a parked ticket, which otherwise gets no merge and no comment. A PR that is not merged gets one `tender: not auto-merged: <reason>` comment per head SHA, recorded in `<ID>.merge` next to the worktree; it is re-evaluated every poll, so a re-run check or a removed label still lets it merge without a new commit.
 
@@ -135,7 +135,7 @@ scripts/setup.sh owner/repo   # config dirs, nono, labels, .env and tender.json 
 scripts/run.sh                # preflight (dry run), then poll in the foreground
 ```
 
-The same are available as `bun run setup owner/repo`, `bun run start`, `bun run once`, `bun run service`, `bun run status`, `bun run watch`, `bun run dry`, `bun run test` and `bun run typecheck` (`tsc --noEmit`; run `bun install` once for `@opentui/core`, the `watch` dashboard's only runtime dependency, and the dev-only `typescript` and `bun-types`; if it cannot be loaded `watch` falls back to plain output, and nothing else needs it). Edit `repos` and `sources` in `tender.json` before running. `scripts/run.sh once` does a single pass; `scripts/run.sh service` installs and starts the systemd user unit. `run` and `once` hold a kernel lock on `<workspaceRoot>/.lock` while they live, so a second one on the same workspace exits with an error (`--dry-run`, `status`, `watch` and `tail` take no lock). The agent logins below are interactive; `scripts/setup.sh` prints what is still missing.
+The same are available as `bun run setup owner/repo`, `bun run start`, `bun run once`, `bun run service`, `bun run status`, `bun run watch`, `bun run dry`, `bun run test` and `bun run typecheck` (`tsc --noEmit`; run `bun install` once for `@opentui/core`, the `watch` dashboard's only runtime dependency, and the dev-only `typescript` and `bun-types`; if it cannot be loaded `watch` falls back to plain output, and nothing else needs it). Edit `repos` and `sources` in `tender.json` before running, and add a [`.tender/config.yaml`](#repo-config) to each repo (optional; `bun tender.ts check <repo>` validates it). `scripts/run.sh once` does a single pass; `scripts/run.sh service` installs and starts the systemd user unit. `run` and `once` hold a kernel lock on `<workspaceRoot>/.lock` while they live, so a second one on the same workspace exits with an error (`--dry-run`, `status`, `watch` and `tail` take no lock). The agent logins below are interactive; `scripts/setup.sh` prints what is still missing.
 
 ## Setup
 
@@ -222,7 +222,7 @@ cp tender.example.json tender.json
 
 Set `host` to the name in your `host:` label, list every repo `tender` may work on under `repos` (a plain `"owner/name"` takes the `defaults`; `{ "name": "owner/name", … }` overrides them), and add one source per GitHub label set / Linear team. `tender.json` is gitignored. See [Config reference](#config-reference).
 
-`tender` clones each repo into `<reposRoot>/<owner>/<name>` (default `~/agent-repos`) with `gh repo clone` the first time a ticket needs it, into `<path>.tmp-…` and renamed when done, so an interrupted clone is never used. Every command `tender` runs has a 60 s deadline (`timeout -k 5`, whole process group), so a hung `gh`, `git` or `tmux` fails that step instead of stalling polling; `gh repo clone`, `git fetch`, the session clone and its checkout get 15 min, and so does deleting a session clone. If `path` exists but is not the top of its own clone (`git rev-parse --git-common-dir` is not `<path>/.git`: an interrupted clone, or a subdirectory or linked worktree of another clone), or resolves to the same directory as another repo's `path`, the ticket is not claimed and the error is logged; `tender` never deletes it, so fix or remove it (and any stale `.tmp-…` sibling) by hand. Leave the clone there, or point `repos[].path` at another clone that is also used only by `tender`. Never point it at your working clone. Only `tender` writes it: it fetches `origin/<base>` there before each start.
+`tender` clones each repo into `<reposRoot>/<owner>/<name>` (default `~/agent-repos`) with `gh repo clone` when `run` or `once` starts (a failed clone is logged and retried before the repo's next ticket), into `<path>.tmp-…` and renamed when done, so an interrupted clone is never used. Every command `tender` runs has a 60 s deadline (`timeout -k 5`, whole process group), so a hung `gh`, `git` or `tmux` fails that step instead of stalling polling; `gh repo clone`, `git fetch`, the session clone and its checkout get 15 min, and so does deleting a session clone. If `path` exists but is not the top of its own clone (`git rev-parse --git-common-dir` is not `<path>/.git`: an interrupted clone, or a subdirectory or linked worktree of another clone), or resolves to the same directory as another repo's `path`, the ticket is not claimed and the error is logged; `tender` never deletes it, so fix or remove it (and any stale `.tmp-…` sibling) by hand. Leave the clone there, or point `repos[].path` at another clone that is also used only by `tender`. Never point it at your working clone. Only `tender` writes it: it fetches `origin/<base>` there before each start.
 
 Each session works in its own clone, `<workspaceRoot>/<owner>/<name>/<ID>`, made by `git clone --shared --revision refs/remotes/origin/<base>` from that base clone: it borrows the base's objects through `.git/objects/info/alternates` instead of copying them, so it is cheap at any repo size. `tender` then points its `origin` at the base's own remote URL (so `git push` and `gh pr create` work as before), sets the usual fetch refspec with `tagOpt=--no-tags` (so a fetch brings in no tags) and `origin/<base>`, and creates `agent/<ID>`, all in `<ID>.tmp`, renamed to `<ID>` only when complete (a failed step deletes it); if the base still has an `agent/<ID>` branch from an older worktree session, the new branch starts there. A borrowed object must never disappear from the base, so `tender` never prunes it (its git calls pass `maintenance.auto=false`) and sets `gc.pruneExpire=never` in the base's config, which keeps a manual `git gc` there from deleting objects too (`git gc --prune=now` and `git prune --expire=now` still do, so never run them there). `--local` with hardlinks was rejected because the session could write through a hardlinked object file into the base, and `--no-hardlinks` copies every object per session. Under nono the session can write only its own clone (whose `.git`, config and hooks included, nothing else uses) and read only the base's `.git/objects`; the base's refs, config, hooks and every other session are out of reach. `git push -u` records the upstream, since the session's config is its own. `tender` never runs git inside a session clone on the host once the session has started, because its config, hooks and filters are agent-controlled. At cleanup it runs `git status --porcelain --ignore-submodules=none`, `git log --branches --not --remotes` and `git for-each-ref refs/tags refs/stash refs/notes` under nono with `nono/tender-check.json`: read-only on the clone and the base's objects, no network and no credentials, so a filter or config the session planted runs with neither, and deletes the clone with `rm -rf --one-file-system`, which removes symlinks without following them, only if all three print nothing and exit 0: a done ticket with uncommitted, untracked or unpushed work, or any tag, stash or note (a fresh clone has none), keeps its clone, which is logged and retried every poll until you push or delete it. The session can make its own check print nothing, which then deletes its clone. With `sandbox: "none"` the same checks run unsandboxed, since that agent runs unsandboxed anyway. Like every command `tender` runs, the checks have a 60 s deadline (`timeout -k 5`, which kills the whole process group), so a planted filter that never returns cannot stall polling; on a timeout the clone is kept. A dir whose `.git` is not a directory is kept and logged.
 
@@ -324,22 +324,17 @@ Same steps on the VM (Tailscale for access), with `"sandbox": "none"` in `defaul
 | `defaultHost` | `false` | also take tickets with no `host:` label (not other hosts') |
 | `pollIntervalMs` | `60000` | min 5000 |
 | `workspaceRoot` | `~/agent-ws` | session clones (`<owner>/<name>/<ID>`), prompts, launchers, sidecars |
-| `reposRoot` | `~/agent-repos` | `tender`-managed clones, `<owner>/<name>`, cloned on first use |
+| `reposRoot` | `~/agent-repos` | `tender`-managed clones, `<owner>/<name>`, cloned when `run` or `once` starts |
 | `tmuxSession` | `tender` | |
 | `maxConcurrent` | `2` | sessions in total |
 | `stallMinutes` | `30` | a session `working` with no transcript write for this long is parked, see **Stalled** below |
 | `repos` | required | allowlist array: `"owner/name"`, or `{ "name": "owner/name", …overrides }`; tickets for other repos are skipped |
 | `repos[].path` | `<reposRoot>/<owner>/<name>` | an existing `tender`-only clone; never your working clone |
-| `defaults` / `repos[].baseBranch` | `main` | |
-| `defaults` / `repos[].agent` | required in one of them | `claude` \| `codex` |
+| `defaults` / `repos[].baseBranch` | the remote's default branch | where `.tender/` is read and PRs target |
 | `defaults` / `repos[].sandbox` | required in one of them | `nono` \| `none` |
-| `defaults` / `repos[].planStep` | `Plan and implement the ticket.` | step 2 of the default prompt, e.g. ``Load the `orchestration` skill and use it to plan and implement the ticket.`` |
-| `defaults` / `repos[].testCmd` | required in one of them | the agent must pass it before opening a PR |
 | `defaults` / `repos[].maxConcurrent` | unlimited | sessions per repo, within the global `maxConcurrent` |
-| `defaults` / `repos[].prompt` | `prompts/default.md` | template, relative to the config file |
-| `defaults` / `repos[].autoMerge` | `off` | `off` \| `shadow` \| `intelligent` \| `all`, see [Auto-merge](#auto-merge) |
-| `defaults` / `repos[].criticalPaths` | `[]` | extra globs never auto-merged in `intelligent` / `shadow`; a per-repo list replaces the `defaults` one |
-| `defaults` / `repos[].testPaths` | `[]` | extra test-file globs: changing, deleting or renaming an existing one blocks `intelligent` / `shadow`; a per-repo list replaces the `defaults` one |
+| `defaults` / `repos[].autoMerge` | `off` | the ceiling for the repo's request: `off` \| `shadow` \| `intelligent` \| `all`, see [Auto-merge](#auto-merge) |
+| `defaults` / `repos[].criticalPaths` | `[]` | a floor of extra globs never auto-merged in `intelligent` / `shadow`, added to the built-in ones and the repo's; a per-repo list replaces the `defaults` one |
 | `defaults` / `repos[].feedbackAuthors` | `[]` | GitHub logins / Linear emails (case-insensitive) whose replies answer agent questions and whose PR reviews and comments go back to the session, see [Questions](#questions) and [PR feedback](#pr-feedback); a per-repo list replaces the `defaults` one |
 | `sources[].name` | required | `[a-z0-9-]`, unique |
 | `sources[].tracker` | required | `github` \| `linear` |
@@ -348,9 +343,50 @@ Same steps on the VM (Tailscale for access), with `"sandbox": "none"` in `defaul
 | GitHub: `inProgressLabel`, `inReviewLabel` | `in-progress`, `in-review` | done = issue closed, unless as not planned or duplicate (canceled) |
 | Linear: `team`, `todo`, `inProgress`, `inReview`, `done` | —, `Todo`, `In Progress`, `In Review`, `[Done]` | `team` is the key, e.g. `ENG`; a Canceled- or Duplicate-type state is canceled even if listed in `done` |
 
-A source key its tracker does not use (e.g. `team` on a GitHub source, `inProgressLabel` on a Linear one) is rejected at startup.
+A source key its tracker does not use (e.g. `team` on a GitHub source, `inProgressLabel` on a Linear one) is rejected at startup. `agent`, `testCmd`, `planStep`, `prompt` and `testPaths` are rejected with `<key>: moved to .tender/config.yaml in the repo`.
 
-Prompt placeholders: `{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{testCmd}} {{repo}} {{planStep}}`; `base`, `testCmd` and `repo` come from the ticket's repo settings.
+### Repo config
+
+How the agent works on a repo lives in the repo itself:
+
+```
+.tender/
+  config.yaml        # optional
+  prompts/
+    default.md       # optional; else tender's prompts/default.md
+    bug.md           # chosen by ticket label
+  run/               # the agent's scratch dir, git-ignored by its own .gitignore
+```
+
+```yaml
+agent: claude
+testCmd: bun test
+planStep: Load the `orchestration` skill and use it to plan and implement the ticket.
+autoMerge: intelligent
+criticalPaths: ["src/billing/**"]
+prompts:
+  byLabel:
+    "type:bug": bug.md
+```
+
+| key | default | |
+|---|---|---|
+| `agent` | `claude` | `claude` \| `codex` |
+| `testCmd` | none | the agent must pass it before opening a PR; unset, the prompt tells it to find and run the project's tests |
+| `planStep` | `Plan and implement the ticket.` | step 2 of the default prompt |
+| `autoMerge` | the host's | the repo's request; the effective mode is the lower of it and the host's `autoMerge` (`off < shadow < intelligent < all`) |
+| `criticalPaths` | `[]` | globs added to the built-in critical paths, `.tender/**` and the host's `criticalPaths`, see [Auto-merge](#auto-merge) |
+| `testPaths` | `[]` | globs added to the built-in test paths |
+| `prompts.default` | `default.md` if present | a file in `.tender/prompts/` |
+| `prompts.byLabel` | `{}` | ticket label to prompt file; the first entry whose label the ticket has wins, else `prompts.default` |
+
+`tender` reads `.tender/` only from `origin/<base>` in its own clone (`git ls-tree` and `git cat-file` on that commit, fetched before each start and once per poll before merge decisions), never from a session clone, which the agent can write. A repo's config changes only when a commit to the base branch changes it; it is cached per base commit. Each file must be a regular file of at most 64 KiB, prompt files must be named `[a-z0-9-]+.md`, and unknown keys are errors. If it is invalid, that repo starts no tickets: `tender` logs the errors once per base commit and posts one `tender: not started` comment per base commit on the next ticket that would have started (recorded in `<workspaceRoot>/.invalid-config/<owner>/<name>`). `.tender` itself must be a directory, not a symlink. Run `bun tender.ts check [path]` (default `.`) before committing: it validates `<path>/.tender/` from the working tree, prints the repo's settings with defaults filled in (the host's `autoMerge` ceiling and `criticalPaths` from `tender.json` still apply on top), and exits non-zero if it is invalid.
+
+Prompt placeholders: `{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{testCmd}} {{tests}} {{repo}} {{planStep}}`. `{{tests}}` is `` `<testCmd>` ``, or "the project's tests (…)" when `testCmd` is unset; `{{testCmd}}` is then empty.
+
+### Upgrading to `.tender/config.yaml`
+
+Move `agent`, `testCmd`, `planStep` and `testPaths` (and any `criticalPaths` that belong to the repo rather than the host) from `tender.json` (`defaults` and each repo) into each repo's `.tender/config.yaml`, along with the `autoMerge` you want there (`tender.json`'s `autoMerge` is now its ceiling; its `criticalPaths` stay as a floor), and a custom `prompt` into `.tender/prompts/default.md`. Commit it to the base branch; `tender` does not read it from anywhere else. `baseBranch` now defaults to the remote's default branch. A session records its agent in `<ID>.agent` next to its clone; sessions started before have none and are treated as Claude sessions, so finish or restart running Codex sessions before upgrading.
 
 ### Upgrading from `aw`
 
@@ -372,13 +408,14 @@ Delete the old `# >>> aw state hooks` block from `~/.codex-tender/config.toml` (
 
 `lanes` is rejected at startup. Move each lane's `repo` into `repos` (with its `repoPath` as `path`, plus `baseBranch`, `agent`, `sandbox`, `testCmd`, `maxConcurrent`, `prompt`) and keep the rest (`name`, `tracker`, labels, Linear states and `team`) as a source; Linear tickets or projects must now name their repo. Worktrees in the old `<workspaceRoot>/<lane>/<ID>` layout are not seen any more: finish or close those tickets first, or remove them by hand (`git -C <clone> worktree remove <workspaceRoot>/<lane>/<ID>`, then the `<ID>.*` files).
 
-CLI: `bun tender.ts <run|once|status|watch|tail> [--dry-run] [--json] [--interval s] [--plain] [-n N] [--no-follow] [--config tender.json]`.
+CLI: `bun tender.ts <run|once|status|watch|tail|check> [path] [--dry-run] [--json] [--interval s] [--plain] [-n N] [--no-follow] [--config tender.json]`.
 
 ## Code layout
 
-- `tender.ts`: CLI entry (`run`, `once`, `status`, `watch`, `tail`).
+- `tender.ts`: CLI entry (`run`, `once`, `status`, `watch`, `tail`, `check`).
 - `src/types.ts`: shared types (`Config`, `Repo`, `Source`, `Ticket`, `Tracker`, `Io`).
 - `src/config.ts`: `tender.json` parsing and the repo allowlist.
+- `src/repo-config.ts`: a repo's `.tender/` read from its base branch, validated, cached per commit and combined with the host settings.
 - `src/trackers/`: tracker adapters (`github.ts`, `linear.ts`) and the `TRACKERS` registry.
 - `src/github.ts`: canonical-repo and PR lookup.
 - `src/phases.ts`: `.tender/run/phases.json` validation and sub-ticket sync.

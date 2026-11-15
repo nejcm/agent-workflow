@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { repoDir } from "./config";
 import { canonical, findPr, sameRepo } from "./github";
-import type { Config, Io, Repo, Ticket, Tracker } from "./types";
+import type { Config, Io, Session, Ticket, Tracker } from "./types";
 import { put, read, readRun, remove, write } from "./util";
 
 const MAX_MERGE_BYTES = 4 * 1024;
@@ -11,24 +11,27 @@ export interface Assessment {
   tested: boolean;
   confidence: "high" | "medium" | "low";
   critical: boolean;
+  reviewed: boolean;
+  reviewer?: string;
   reason: string;
 }
 
 /** Validates the agent-written merge file; it is untrusted, so anything off throws. */
 export function parseAssessment(raw: string): Assessment {
   const a = JSON.parse(raw);
+  const line = (v: unknown, max: number) => typeof v === "string" && v.trim().length > 0 && v.length <= max && !/[\x00-\x1f\x7f]/.test(v);
   const ok =
-    a && typeof a === "object" && !Array.isArray(a) && Object.keys(a).every((k) => ["tested", "confidence", "critical", "reason"].includes(k)) &&
+    a && typeof a === "object" && !Array.isArray(a) && Object.keys(a).every((k) => ["tested", "confidence", "critical", "reviewed", "reviewer", "reason"].includes(k)) &&
     typeof a.tested === "boolean" && typeof a.critical === "boolean" && ["high", "medium", "low"].includes(a.confidence) &&
-    typeof a.reason === "string" && a.reason.trim().length > 0 && a.reason.length <= 300 && !/[\x00-\x1f\x7f]/.test(a.reason);
+    (a.reviewed === undefined || typeof a.reviewed === "boolean") && (a.reviewer === undefined ? a.reviewed !== true : line(a.reviewer, 100)) && line(a.reason, 300);
   if (!ok) throw new Error("merge: invalid");
-  return { tested: a.tested, confidence: a.confidence, critical: a.critical, reason: a.reason.trim() };
+  return { tested: a.tested, confidence: a.confidence, critical: a.critical, reviewed: a.reviewed === true, reviewer: a.reviewer?.trim(), reason: a.reason.trim() };
 }
 
 export const CRITICAL_PATHS = [
   ".github/**", "**/Dockerfile*", "docker-compose*", "**/migrations/**", "**/*.sql",
   "package.json", "bun.lock*", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "go.mod", "go.sum", "Cargo.toml", "Cargo.lock", "pyproject.toml", "requirements*.txt",
-  "**/auth/**", "**/*secret*", "**/*.env*", "**/*.pem", "**/*.key", "nono/**", "tender.json", "**/infra/**", "**/terraform/**", "**/deploy/**",
+  "**/auth/**", "**/*secret*", "**/*.env*", "**/*.pem", "**/*.key", "nono/**", "tender.json", ".tender/**", "**/infra/**", "**/terraform/**", "**/deploy/**",
   "AGENTS.md", "CLAUDE.md", "**/.claude/**", "**/.codex/**", ".mcp.json", "CLAUDE.local.md", "GEMINI.md", "**/.gemini/**", "**/.cursor/**", ".cursorrules", "uv.lock", "poetry.lock", "Gemfile", "Gemfile.lock", "**/*.tf", "**/k8s/**", "**/helm/**",
   ".npmrc", "bunfig.toml", ".gitmodules", "**/.husky/**", ".pre-commit-config.yaml", "Makefile",
   "conftest.py", "pytest.ini", "jest.config.*", "vitest.config.*", "playwright.config.*",
@@ -67,7 +70,7 @@ export const checkState = (c: any) =>
     : c?.status !== "COMPLETED" ? "pending" : c.conclusion === "SUCCESS" ? "success" : ["NEUTRAL", "SKIPPED"].includes(c.conclusion) ? "neutral" : "failed";
 
 /** Whether tender may merge the PR now. The assessment is agent-written and untrusted: it can only hold a merge back. */
-export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Repo, "autoMerge" | "criticalPaths" | "testPaths" | "baseBranch">, ticketLabels: string[] = []): { merge: boolean | "wait"; reason: string } {
+export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Session, "autoMerge" | "criticalPaths" | "testPaths" | "baseBranch">, ticketLabels: string[] = []): { merge: boolean | "wait"; reason: string } {
   const no = (reason: string) => ({ merge: false, reason });
   if (s.autoMerge === "off") return no("autoMerge is off");
   if (pr.isCrossRepository) return no("PR is from a fork");
@@ -95,6 +98,7 @@ export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Re
     if (tier === "medium") {
       if (!a) return no("medium change without a valid .tender/run/merge.json");
       if (!a.tested || a.confidence !== "high") return no(`medium change needs tested + high confidence from the agent: ${a.reason}`);
+      if (!a.reviewed) return no(`medium change not reviewed by a model from another family: ${a.reason}`);
       if (!checks.includes("success")) return no("medium change with no successful check");
     }
   }
@@ -106,7 +110,7 @@ const PR_FIELDS = "number,url,state,isDraft,isCrossRepository,baseRefName,mergea
 
 // tender merges, pinned to the head it judged (the agent's token could too; see README). "Not merged" is commented once per head SHA.
 // With `share`, the first view also fetches `share.fields` and lands in `share.pr`, so feedback need not view the PR again.
-export async function autoMerge(cfg: Config, r: Repo, t: Ticket, tr: Tracker, io: Io, parked = false, share?: { fields: string; pr?: any }) {
+export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker, io: Io, parked = false, share?: { fields: string; pr?: any }) {
   const dir = repoDir(cfg, r.key);
   const url = await findPr(r.key, t.id, io, dir);
   const n = url && /\/pull\/(\d+)$/.exec(url)?.[1];

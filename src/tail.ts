@@ -1,9 +1,9 @@
 import { closeSync, constants as C, existsSync, fstatSync, openSync, readlinkSync, readSync, realpathSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { type Agent, AGENTS } from "./agents";
+import { type Agent, AGENTS, recordedAgent } from "./agents";
 import { repoDir, validRepo } from "./config";
-import type { Config, Repo } from "./types";
+import type { AgentName, Config } from "./types";
 import { clean, diskRepos, mtime, SAFE_ID } from "./util";
 
 const CHUNK = 256 * 1024;
@@ -120,7 +120,7 @@ const sayText = (o: any) =>
   o?.type === "assistant" ? textOf(o.message?.content) : o?.type === "response_item" && o.payload?.type === "message" && o.payload.role === "assistant" ? textOf(o.payload.content) : "";
 
 /** Raw, untrusted text of the last non-empty assistant message in `wt`'s newest transcript (since `since` ms). */
-export function lastSay(wt: string, agent: Repo["agent"], since = 0) {
+export function lastSay(wt: string, agent: AgentName, since = 0) {
   const p = transcript(wt, agent, "", since);
   if (!p) return undefined;
   const [home, sub] = AGENTS[agent].store(wt);
@@ -168,7 +168,7 @@ const ownedBy = (a: Agent, wt: string, home: string, since: number) =>
     .find((x) => headCwd(x.p, a.cwd) === wt)?.p;
 
 /** Newest transcript written for `wt` since `since` (ms) whose recorded cwd is `wt`. */
-export function transcript(wt: string, agent?: Repo["agent"], home = homedir(), since = 0) {
+export function transcript(wt: string, agent?: AgentName, home = homedir(), since = 0) {
   return newest((agent ? [AGENTS[agent]] : Object.values(AGENTS)).flatMap((a) => ownedBy(a, wt, home, since) ?? []));
 }
 
@@ -212,7 +212,7 @@ export async function tail(cfg: Config, target: string, n: number, follow: boole
   const all = worktreesFor(cfg, id);
   const candidates = repo ? [{ key: repo, wt: join(repoDir(cfg, repo), id) }] : all;
   const found = candidates.flatMap(({ key, wt }) => {
-    const p = transcript(wt, cfg.repos[key]?.agent, home);
+    const p = transcript(wt, recordedAgent(repoDir(cfg, key), id), home);
     return p ? [{ key, wt, p }] : [];
   });
   if (found.length > 1) throw new Error(`${id} is in several repos (${found.map((f) => clean(f.key)).sort().join(", ")}); use tender tail <owner/repo>/${id}`);
@@ -229,7 +229,7 @@ export async function tail(cfg: Config, target: string, n: number, follow: boole
   // Only a transcript newer than the current one's last write: a gone current one must not send it back to an older one.
   let at = mtime(path) ?? 0;
   while (follow && (await wait())) {
-    const p = transcript(wt, cfg.repos[key]?.agent, home, at);
+    const p = transcript(wt, recordedAgent(repoDir(cfg, key), id), home, at);
     if (p && (mtime(p) ?? 0) > at) path = p;
     at = mtime(path) ?? at;
     for (const e of next()) print(e);

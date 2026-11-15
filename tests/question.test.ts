@@ -5,7 +5,7 @@ import { INBOX_WAITER } from "../src/agents";
 import { pass } from "../src/pass";
 import { agentPane, answerFrame, liveStates, pickAnswer, POINTER } from "../src/question";
 import type { State } from "../src/state";
-import type { Repo, TicketComment } from "../src/types";
+import type { TicketComment } from "../src/types";
 import { config, fakeIo, fakeTracker, noPr, root, ticket, useTempRoot, windowsOut, worktree } from "./helpers";
 
 useTempRoot();
@@ -128,6 +128,7 @@ const inbox = () => join(root, "acme/web/gh-1/.tender/run/inbox");
 
 function deliver(opts: { agent?: string; authors?: string[]; open?: string[]; dry?: boolean; respond?: (a: string[]) => { code?: number; out?: string } | undefined } = {}) {
   worktree("gh-1");
+  writeFileSync(join(root, "acme/web/gh-1.agent"), opts.agent ?? "codex");
   const f = fakeTracker({ inProgress: [ticket(1)] });
   const reads: number[] = [];
   let answer: TicketComment | undefined;
@@ -135,11 +136,11 @@ function deliver(opts: { agent?: string; authors?: string[]; open?: string[]; dr
   // A human's split, listed first and started from a shell, is never the target.
   const panes = (a: string[]) => (a[1] === "list-panes" ? { out: `%7 0 bash\n%5 0 ${join(root, "acme/web/gh-1")}.sh\n` } : undefined);
   const { io, cmds, logs } = fakeIo((a) => opts.respond?.(a) ?? (a[1] === "list-windows" ? windowsOut(opts.open ?? ["acme/web/gh-1"]) : panes(a) ?? noPr(a)), opts.dry);
-  const cfg = config({ repos: [{ name: "acme/web", path: join(root, "src-web"), agent: opts.agent ?? "codex", feedbackAuthors: opts.authors ?? ["op"] }] });
+  const cfg = config({ repos: [{ name: "acme/web", path: join(root, "src-web"), feedbackAuthors: opts.authors ?? ["op"] }] });
   let state: State = "idle";
   const states: string[] = [];
   const order: string[] = [];
-  const run = () => pass(cfg, io, () => f.tr, "/tender", async (_r, _d, id) => (states.push(id), state));
+  const run = () => pass(cfg, io, () => f.tr, "/tender", async (_d, id) => (states.push(id), state));
   return {
     ...f, cmds, logs, reads, states, order, run,
     answer: (c?: TicketComment) => void (answer = c),
@@ -306,11 +307,10 @@ test("liveStates prepares each worktree's feed once, lazily, and resolves like s
   const prepared: string[] = [];
   const live = liveStates(root, async (a, wts) => (prepared.push(`${a} ${wts}`), (wt) => (wt.endsWith("busy") ? { state: "working", since: 0, waitingFor: null } : { state: "idle", since: 0, waitingFor: null })));
   expect(prepared).toEqual([]);
-  const r = { agent: "claude" } as Repo;
-  expect(await live(r, root, "a", 20 * 60_000)).toBe("idle");
-  expect(await live(r, root, "busy", 20 * 60_000)).toBe("unknown");
+  expect(await live(root, "a", 20 * 60_000)).toBe("idle");
+  expect(await live(root, "busy", 20 * 60_000)).toBe("unknown");
   writeFileSync(join(root, "a.ended"), "");
-  expect(await live(r, root, "a")).toBe("ended");
+  expect(await live(root, "a")).toBe("ended");
   expect(prepared).toEqual([`claude ${join(root, "a")}`, `claude ${join(root, "busy")}`]);
 });
 

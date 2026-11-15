@@ -3,15 +3,17 @@ import { join } from "node:path";
 import { allowedRepo, repoDir, validRepo } from "./config";
 import { deliverFeedback, feedbackFields } from "./feedback";
 import { fileFindings } from "./findings";
-import { canonical, findPr, sameRepo } from "./github";
-import { claim, nonoRun, scopeUnit, SLOW_SECS, start, stopScope, sweepScopes, windows, winName } from "./launcher";
+import { agentOf } from "./agents";
+import { baseBranch, canonical, findPr, sameRepo } from "./github";
+import { claim, nonoRun, scopeUnit, start, stopScope, sweepScopes, windows, winName } from "./launcher";
 import { autoMerge } from "./merge";
 import { syncPhases } from "./phases";
 import { agentPane, deliverAnswer, liveStates, syncQuestion } from "./question";
+import { combine, loadSession, parseRepoConfig } from "./repo-config";
 import { lastSay, transcript } from "./tail";
 import { type Adapter, TRACKERS } from "./trackers";
-import type { Config, Io, Repo, Source, Ticket, Tracker } from "./types";
-import { TENDER_DIR, byPriority, diskRepos, GIT, hasLabel, mtime, put, read, remove, SAFE_ID, strip, subdirs, write } from "./util";
+import type { Config, Io, Repo, Session, Source, Ticket, Tracker } from "./types";
+import { TENDER_DIR, byPriority, diskRepos, GIT, hasLabel, mtime, put, read, remove, SAFE_ID, SLOW_SECS, strip, subdirs, write } from "./util";
 
 const sourceOf = (dir: string, id: string) => {
   const f = join(dir, `${id}.source`);
@@ -84,15 +86,16 @@ async function startReady(cfg: Config, s: Source, tr: Tracker, io: Io, t: Ticket
     return;
   }
   await step(io, `start ${t.id}`, async () => {
-    await start(cfg, s, r, { ...t, repo: key }, tr, io, tenderDir);
+    if (!(await start(cfg, s, r, { ...t, repo: key }, tr, io, tenderDir))) return;
     wins.set(winName(key, t.id), "new");
     running.set(key, (running.get(key) ?? 0) + 1);
   });
 }
 
-function lastMessage(wt: string, agent: Repo["agent"]) {
+function lastMessage(dir: string, id: string) {
+  const wt = join(dir, id);
   try {
-    return lastSay(wt, agent, mtime(`${wt}.sh`) ?? mtime(wt) ?? 0);
+    return lastSay(wt, agentOf(dir, id), mtime(`${wt}.sh`) ?? mtime(wt) ?? 0);
   } catch {
     return undefined;
   }
@@ -113,13 +116,13 @@ export const endedNotice = (say: string | undefined) => quoted("session ended wi
 
 // Transcript writes, not tmux activity: the agent's spinner redraws the pane while it is busy, even when stuck.
 // `<ID>.stall` holds the activity stamp already reported, so one stall gets one comment; a failed comment retries once unparked.
-async function checkStall(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Tracker, io: Io, dir: string, win: string, state: ReturnType<typeof liveStates>) {
+async function checkStall(cfg: Config, s: Source, t: Ticket, tr: Tracker, io: Io, dir: string, win: string, state: ReturnType<typeof liveStates>) {
   const now = Date.now();
   const wt = join(dir, t.id);
   const started = mtime(`${wt}.sh`) ?? mtime(wt) ?? now;
   const quiet = (since: number) => now - since >= cfg.stallMinutes * 60_000;
-  if (!quiet(started) || (await state(r, dir, t.id, now, true)) !== "working") return;
-  const tx = transcript(wt, r.agent, io.home, started);
+  if (!quiet(started) || (await state(dir, t.id, now, true)) !== "working") return;
+  const tx = transcript(wt, agentOf(dir, t.id), io.home, started);
   const at = Math.max(started, (tx ? mtime(tx) : undefined) ?? 0);
   const file = join(dir, `${t.id}.stall`);
   if (!quiet(at) || (existsSync(file) && readFileSync(file, "utf8").trim() === String(at)) || !/^@\d+$/.test(win)) return;
@@ -132,7 +135,7 @@ async function checkStall(cfg: Config, s: Source, r: Repo, t: Ticket, tr: Tracke
   put(io, file, String(at));
 }
 
-async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins: Map<string, string>, state: ReturnType<typeof liveStates>) {
+async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins: Map<string, string>, state: ReturnType<typeof liveStates>, sessions: Map<string, Promise<Session | undefined>>) {
   await step(io, "list in-progress", async () => {
     for (const t of await tr.listInProgress())
       await step(io, `check ${t.id}`, async () => {
@@ -149,9 +152,9 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
         const ended = join(dir, `${t.id}.ended`);
         const win = wins.get(winName(key, t.id));
         if (win) {
-          if (!hasLabel(t.labels, s.needsHumanLabel)) await step(io, `stall ${t.id}`, () => checkStall(cfg, s, cfg.repos[key]!, w, tr, io, dir, win, state));
+          if (!hasLabel(t.labels, s.needsHumanLabel)) await step(io, `stall ${t.id}`, () => checkStall(cfg, s, w, tr, io, dir, win, state));
           await step(io, `question ${t.id}`, () => syncQuestion(w, tr, io, dir, join(dir, t.id)));
-          return step(io, `answer ${t.id}`, () => deliverAnswer(cfg.repos[key]!, w, tr, io, dir, win, scopeUnit(cfg, key, t.id), () => state(cfg.repos[key]!, dir, t.id)));
+          return step(io, `answer ${t.id}`, () => deliverAnswer(cfg.repos[key]!, w, tr, io, dir, win, scopeUnit(cfg, key, t.id), () => state(dir, t.id)));
         }
         // The in-progress listing can lag a close that cleanup already acted on.
         if (hasLabel(t.labels, s.needsHumanLabel)) return;
@@ -162,7 +165,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
           return io.log(`${key}/${t.id}: session ended, ticket still in progress; ${tr.restartHint()} to start it again`);
         }
         if (await tr.closed(t.id, key)) return;
-        await tr.comment(w, endedNotice(lastMessage(join(dir, t.id), cfg.repos[key]!.agent)));
+        await tr.comment(w, endedNotice(lastMessage(dir, t.id)));
         put(io, ended, new Date().toISOString());
       });
   });
@@ -177,15 +180,20 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
       const r = cfg.repos[key]!;
       const win = wins.get(winName(key, t.id));
       // checkStall marks w parked, so feedback and auto-merge stop in the same poll.
-      if (win && !hasLabel(w.labels, s.needsHumanLabel)) await step(io, `stall ${t.id}`, () => checkStall(cfg, s, r, w, tr, io, dir, win, state));
+      if (win && !hasLabel(w.labels, s.needsHumanLabel)) await step(io, `stall ${t.id}`, () => checkStall(cfg, s, w, tr, io, dir, win, state));
       const parked = hasLabel(w.labels, s.needsHumanLabel);
       await step(io, `phases ${t.id}`, () => syncPhases(w, tr, io, dir, true));
       if (!parked) await step(io, `findings ${t.id}`, () => fileFindings(w, tr, io, dir));
       const share: { fields: string; pr?: any } | undefined = parked ? undefined : { fields: feedbackFields(r) };
-      if (r.autoMerge !== "off") await step(io, `merge ${t.id}`, () => autoMerge(cfg, r, w, tr, io, parked, share));
+      // Fetched once per repo per pass, so a policy tightened on the base branch applies to PRs already in review.
+      const fresh = r.autoMerge === "off" ? undefined : (sessions.get(key) ?? sessions.set(key, loadSession(io, r)).get(key)!);
+      const ses = await fresh?.catch((e) => void io.log(`merge ${t.id} failed: ${e.message}`));
+      if (ses && ses.autoMerge !== "off") await step(io, `merge ${t.id}`, () => autoMerge(cfg, ses, w, tr, io, parked, share));
+      // Invalid .tender/ or a failed fetch: no decision or comment, but a PR merged by hand still moves the ticket.
+      else if (fresh && !ses) await step(io, `merge ${t.id}`, async () => autoMerge(cfg, combine(r, await baseBranch(io, r), parseRepoConfig([])), w, tr, io, true));
       // autoMerge looks the PR up anyway; otherwise every poll too, so a replaced PR reaches `<ID>.pr` (and feedback).
       else await step(io, `pr ${t.id}`, () => findPr(key, t.id, io, dir));
-      if (!parked) await step(io, `feedback ${t.id}`, () => deliverFeedback(r, w, tr, io, dir, win, scopeUnit(cfg, key, t.id), () => state(r, dir, t.id), warned, share?.pr));
+      if (!parked) await step(io, `feedback ${t.id}`, () => deliverFeedback(r, w, tr, io, dir, win, scopeUnit(cfg, key, t.id), () => state(dir, t.id), warned, share?.pr));
     }
   });
 }
@@ -255,7 +263,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
         // rm never follows symlinks.
         await write(x.io, ["rm", "-rf", "--one-file-system", "--", wt], undefined, SLOW_SECS);
         // After the clone, so a delete that fails keeps the transcripts too.
-        for (const ext of [".claude", ".codex", ".tmpdir", ".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".stall", ".findings", ".claim", ".source"]) remove(x.io, join(dir, id + ext));
+        for (const ext of [".claude", ".codex", ".tmpdir", ".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".stall", ".findings", ".claim", ".agent", ".source"]) remove(x.io, join(dir, id + ext));
       });
     }
   }
@@ -276,9 +284,10 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
       await step(sio, `ready ${t.id}`, () => startReady(cfg, s, tr, sio, t, wins, running, tenderDir));
     }
   }
+  const sessions = new Map<string, Promise<Session | undefined>>();
   for (const { s, io: sio, tr } of srcs.values()) {
     try {
-      await reconcileSource(cfg, s, tr, sio, wins, state);
+      await reconcileSource(cfg, s, tr, sio, wins, state, sessions);
     } catch (e) {
       sio.log(`source failed: ${(e as Error).message}`);
     }

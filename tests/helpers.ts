@@ -7,10 +7,15 @@ import { CLAUDE_TOKEN, claudeDir } from "../src/agents";
 import { CREDENTIALS } from "../src/claude-auth";
 import { parseConfig } from "../src/config";
 import { canonCache } from "../src/github";
+import { configCache } from "../src/repo-config";
 import type { Config, GitHubSource, Io, LinearSource, Ticket, Tracker } from "../src/types";
 import { TENDER_DIR, GIT, hasLabel } from "../src/util";
 
 export let root: string;
+/** What the fake git serves as `.tender/<name>` at `origin/<base>`; reset per test. */
+export let repoFiles: Record<string, string> = {};
+export let baseSha = "a".repeat(40);
+export const setBaseSha = (sha: string) => void (baseSha = sha);
 // Called per test file: bun shares this module across files, so top-level hooks would only bind to the first.
 /** A Claude session record for this test process, as Claude writes it under `<dir>/sessions`. */
 export function session(dir: string, o: object) {
@@ -28,6 +33,9 @@ export function useTempRoot() {
     mkdirSync(join(root, ".claude"));
     writeFileSync(join(root, CREDENTIALS), JSON.stringify({ claudeAiOauth: { accessToken: "a", refreshToken: "r", expiresAt: Date.now() + 3_600_000, refreshTokenExpiresAt: Date.now() + 7 * 86_400_000, scopes: ["user:inference"] } }));
     canonCache.clear();
+    configCache.clear();
+    repoFiles = {};
+    baseSha = "a".repeat(40);
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 }
@@ -38,7 +46,7 @@ export const src = (over: object = {}) => ({ name: "web", tracker: "github", ...
 export const raw = (over: object = {}) => ({
   host: "box",
   workspaceRoot: root,
-  defaults: { agent: "claude", sandbox: "nono", testCmd: "bun test" },
+  defaults: { sandbox: "nono" },
   repos: [{ name: "acme/web", path: join(root, "src-web") }],
   sources: [src()],
   ...over,
@@ -93,13 +101,22 @@ export function fakeIo(respond: (argv: string[]) => { code?: number; out?: strin
       cmds.push(argv.join(" "));
       const r =
         respond(argv) ??
-        (argv[1] === "repo" && argv[2] === "view" ? { out: JSON.stringify({ nameWithOwner: argv[3] }) } : argv[5] === "--git-common-dir" ? { out: join(realpathSync(argv[2]!), ".git") + "\n" } : argv[4] === "get-url" ? { out: "https://github.com/acme/web.git\n" } : {});
+        (argv[1] === "repo" && argv[2] === "view" ? { out: JSON.stringify({ nameWithOwner: argv[3], defaultBranchRef: { name: "main" } }) } : gitTree(argv) ?? (argv[5] === "--git-common-dir" ? { out: join(realpathSync(argv[2]!), ".git") + "\n" } : argv[4] === "get-url" ? { out: "https://github.com/acme/web.git\n" } : {}));
       if (argv[1] === "repo" && argv[2] === "clone" && !r.code) mkdirSync(argv[4]!, { recursive: true });
       if (argv[0] === "git" && argv[5] === "clone" && !r.code) mkdirSync(join(argv.at(-1)!, ".git"), { recursive: true });
       return { code: r.code ?? 0, out: r.out ?? "", err: r.err ?? (r.code ? "boom" : "") };
     },
   };
   return { io, cmds, logs };
+}
+
+const oid = (name: string) => Buffer.from(name).toString("hex").padEnd(40, "0");
+function gitTree(argv: string[]): { code?: number; out?: string; err?: string } | undefined {
+  if (argv[0] !== "git") return;
+  if (argv[3] === "rev-parse" && argv.at(-1)?.endsWith("^{commit}")) return { out: `${baseSha}\n` };
+  if (argv[3] === "ls-tree" && argv[4] !== "-r") return { out: Object.keys(repoFiles).length ? `040000 tree ${oid(".tender")}\t.tender\0` : "" };
+  if (argv[3] === "ls-tree") return { out: Object.entries(repoFiles).map(([n, t]) => `100644 blob ${oid(n)} ${Buffer.byteLength(t)}\t.tender/${n}\0`).join("") };
+  if (argv[3] === "cat-file") return { out: Object.entries(repoFiles).find(([n]) => oid(n) === argv[5])?.[1] };
 }
 
 export async function withLinearKey<T>(fn: () => Promise<T>) {

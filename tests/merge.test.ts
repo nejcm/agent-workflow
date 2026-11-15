@@ -16,7 +16,7 @@ const prFacts = (over: Partial<PrFacts> = {}): PrFacts => {
     additions: 10, deletions: 5, statusCheckRollup: [ok], labels: [], ...over, files, changedFiles: over.changedFiles ?? files.length,
   };
 };
-const assess = (over: object = {}) => ({ tested: true, confidence: "high" as const, critical: false, reason: "small fix, tests pass", ...over });
+const assess = (over: object = {}) => ({ tested: true, confidence: "high" as const, critical: false, reviewed: true, reviewer: "gpt-5", reason: "small fix, tests pass", ...over });
 const smart = { autoMerge: "intelligent" as const, criticalPaths: [], testPaths: [], baseBranch: "main" };
 const medium = { additions: 200, deletions: 100, changedFiles: 8 };
 
@@ -60,6 +60,8 @@ test("merge decision: size tiers and their boundaries", () => {
   expect(m({ ...medium, statusCheckRollup: [ok, { status: "QUEUED" }] }, assess()).merge).toBe("wait");
   expect(m({ ...medium, statusCheckRollup: [] }, assess()).reason).toBe("medium change with no successful check");
   expect(m(medium, assess({ tested: false })).reason).toMatch(/^medium change needs tested \+ high confidence/);
+  for (const reviewed of [false, undefined]) expect(m(medium, assess({ reviewed, reviewer: undefined })).reason).toBe("medium change not reviewed by a model from another family: small fix, tests pass");
+  expect(m({ additions: 100, changedFiles: 1 }, assess({ reviewed: false })).merge).toBe(true);
   expect(m(medium, assess({ confidence: "medium" })).merge).toBe(false);
   expect(m({ additions: 501, deletions: 0, changedFiles: 1 }, assess()).reason).toBe("too large (501 lines, 1 files)");
   expect(m({ additions: 1, deletions: 0, changedFiles: 16 }, assess()).merge).toBe(false);
@@ -106,7 +108,9 @@ test("merge decision: rewriting an existing test is held back, adding to one is 
 
 test("merge assessment: strict shape", () => {
   expect(parseAssessment(JSON.stringify(assess({ reason: "  ok  " })))).toEqual(assess({ reason: "ok" }));
-  for (const bad of [assess({ tested: "yes" }), assess({ confidence: "certain" }), assess({ reason: "" }), assess({ reason: "a\nb" }), assess({ reason: "x".repeat(301) }), assess({ extra: 1 }), [assess()], null])
+  expect(parseAssessment(JSON.stringify(assess({ reviewed: undefined, reviewer: undefined })))).toEqual(assess({ reviewed: false, reviewer: undefined }));
+  expect(parseAssessment(JSON.stringify(assess({ reviewed: false, reviewer: "gpt-5" }))).reviewed).toBe(false);
+  for (const bad of [assess({ reviewed: "yes" }), assess({ reviewer: undefined }), assess({ reviewer: " " }), assess({ reviewer: "a\nb" }), assess({ reviewer: "x".repeat(101) }), assess({ tested: "yes" }), assess({ confidence: "certain" }), assess({ reason: "" }), assess({ reason: "a\nb" }), assess({ reason: "x".repeat(301) }), assess({ extra: 1 }), [assess()], null])
     expect(() => parseAssessment(JSON.stringify(bad))).toThrow("merge: invalid");
 });
 
@@ -248,7 +252,7 @@ test("auto-merge pass: a head that moves before the merge re-check drops a held 
   const { io, cmds } = fakeIo((a) =>
     a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"OPEN"}]' }
     : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(views.shift()) }
-    : a[1] === "repo" && a[2] === "view" ? { out: JSON.stringify({ nameWithOwner: "acme/web" }) } : undefined);
+    : a[1] === "repo" && a[2] === "view" ? { out: JSON.stringify({ nameWithOwner: "acme/web", defaultBranchRef: { name: "main" } }) } : undefined);
   worktree("gh-1");
   const marker = join(root, "acme/web/gh-1.merge");
   writeFileSync(marker, "a".repeat(40));
@@ -263,7 +267,7 @@ test("auto-merge pass: re-checks the PR right before merging, confirms it merged
     const { io, cmds, logs } = fakeIo((a) =>
       a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"MERGED"}]' }
       : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(a.at(-1) === "state" ? { state } : views.shift()) }
-      : a[1] === "repo" && a[2] === "view" ? { out: JSON.stringify({ nameWithOwner: owner }) } : undefined);
+      : a[1] === "repo" && a[2] === "view" ? { out: JSON.stringify({ nameWithOwner: owner, defaultBranchRef: { name: "main" } }) } : undefined);
     worktree("gh-1");
     await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "all" }] }), io, () => tr, "/tender");
     return { calls, logs, merged: cmds.some((x) => x.startsWith("gh pr merge")) };
@@ -318,7 +322,7 @@ test("in review: gh calls per ticket per poll; feedback reuses auto-merge's view
   const merge = "gh pr view 7 --repo acme/web --json number,url,state,isDraft,isCrossRepository,baseRefName,mergeable,additions,deletions,changedFiles,statusCheckRollup,labels,headRefOid,reviewDecision,mergeStateStatus";
   worktree("gh-1");
   // The first poll comments "not auto-merged" and so shares nothing; count the held polls after it.
-  expect(await run("intelligent", [], true)).toHaveLength(3);
+  expect(await run("intelligent", [], true)).toHaveLength(4);
   for (const win of [true, false]) {
     expect(await run("off", [], win)).toEqual([list, "gh pr view 7 --repo acme/web --json state,baseRefName,headRefOid,mergeStateStatus,statusCheckRollup"]);
     expect(await run("off", ["op"], win)).toHaveLength(3);
@@ -336,7 +340,7 @@ test("in review: a PR merged or closed during the merge recheck gets no feedback
       : a[1] === "list-panes" ? { out: `%5 0 ${join(root, "acme/web/gh-1")}.sh\n` }
       : a[1] === "pr" && a[2] === "list" ? { out: JSON.stringify([{ url, state: "OPEN" }]) }
       : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify({ ...prFacts(over), number: 7, url, headRefOid: "a", reviews: [], comments, state: states.shift() }) }
-      : a[1] === "repo" ? { out: JSON.stringify({ nameWithOwner: "acme/web" }) }
+      : a[1] === "repo" ? { out: JSON.stringify({ nameWithOwner: "acme/web", defaultBranchRef: { name: "main" } }) }
       : a[1] === "api" ? { out: "[]" } : undefined);
     const { tr, calls } = fakeTracker({ inReview: [ticket(1)] });
     await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "all", feedbackAuthors: ["op"] }] }), io, () => tr, "/tender", async () => "idle");

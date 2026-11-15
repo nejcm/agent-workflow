@@ -2,9 +2,9 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { AGENTS, INBOX_WAITER, type Lookup } from "./agents";
+import { AGENTS, agentOf, INBOX_WAITER, type Lookup } from "./agents";
 import { resolve, type State } from "./state";
-import type { Io, Repo, Ticket, TicketComment, Tracker } from "./types";
+import type { AgentName, Io, Repo, Ticket, TicketComment, Tracker } from "./types";
 import { mtime, put, read, readRun, removeRun, write, writeRun } from "./util";
 
 const MAX_QUESTION_BYTES = 64 * 1024;
@@ -70,11 +70,11 @@ export async function syncQuestion(t: Ticket, tr: Tracker, io: Io, dir: string, 
 }
 
 /** Per pass: a worktree's live state as `tender status` resolves it, or with `raw` the feed's own (a stale `working` stays); each feed is prepared at most once, on first use. */
-export function liveStates(home = homedir(), prepare = (a: Repo["agent"], wts: string[]) => AGENTS[a].live(home, wts)) {
+export function liveStates(home = homedir(), prepare = (a: AgentName, wts: string[]) => AGENTS[a].live(home, wts)) {
   const feeds = new Map<string, Promise<Lookup>>();
-  return async (r: Repo, dir: string, id: string, now = Date.now(), raw = false): Promise<State> => {
+  return async (dir: string, id: string, now = Date.now(), raw = false): Promise<State> => {
     const wt = join(dir, id);
-    if (!feeds.has(wt)) feeds.set(wt, prepare(r.agent, [wt]));
+    if (!feeds.has(wt)) feeds.set(wt, prepare(agentOf(dir, id), [wt]));
     const session = existsSync(join(dir, `${id}.ended`)) ? "ended" : "running";
     const live = (await feeds.get(wt)!)(wt, mtime(join(dir, `${id}.sh`)) ?? mtime(wt) ?? 0, now);
     return raw && session === "running" ? live?.state ?? "unknown" : resolve(session, live, null, now).state;
@@ -102,8 +102,8 @@ export async function nudge(io: Io, id: string, wt: string, pane: string | null,
 }
 
 /** null when a Claude inbox waiter runs in the session's scope; otherwise the launcher's pane, undefined if missing or in copy mode. */
-export async function deliveryPane(io: Io, r: Repo, win: string, script: string, unit: string) {
-  return r.agent === "claude" && (await waiterLive(io, unit)) ? null : agentPane(io, win, script);
+export async function deliveryPane(io: Io, agent: AgentName, win: string, script: string, unit: string) {
+  return agent === "claude" && (await waiterLive(io, unit)) ? null : agentPane(io, win, script);
 }
 
 // Seen from the host: a session launched without the hook, or whose last turn ended without Stop, has no waiter and gets the paste.
@@ -124,7 +124,7 @@ export async function deliverAnswer(r: Repo, t: Ticket, tr: Tracker, io: Io, dir
   if (!q || q.answerId !== undefined || !r.feedbackAuthors.length || !/^@\d+$/.test(win)) return;
   const a = pickAnswer(await tr.comments(t, q.postedAt), q.postedAt, r.feedbackAuthors);
   if (!a || (await state()) !== "idle") return;
-  const pane = await deliveryPane(io, r, win, `${join(dir, t.id)}.sh`, unit);
+  const pane = await deliveryPane(io, agentOf(dir, t.id), win, `${join(dir, t.id)}.sh`, unit);
   if (pane === undefined) return;
   put(io, file, JSON.stringify({ ...q, answerId: a.id, answeredAt: Date.parse(a.createdAt) } satisfies QuestionSidecar));
   const wt = join(dir, t.id);

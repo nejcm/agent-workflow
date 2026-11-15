@@ -17,10 +17,10 @@ test("config: defaults applied and errors listed", () => {
   expect(c.reposRoot).toMatch(/\/agent-repos$/);
   expect(c.sources[0]).toEqual({ name: "web", tracker: "github", readyLabel: "agent", needsHumanLabel: "needs-human", inProgressLabel: "in-progress", inReviewLabel: "in-review" });
   expect(config({ sources: [src({ tracker: "linear", team: "ENG" })] }).sources[0]).toEqual({ name: "web", tracker: "linear", readyLabel: "agent", needsHumanLabel: "needs-human", team: "ENG", todo: "Todo", inProgress: "In Progress", inReview: "In Review", done: ["Done"] });
-  expect(web(c)).toMatchObject({ key: "acme/web", path: join(root, "src-web"), baseBranch: "main", agent: "claude", maxConcurrent: undefined });
-  const c2 = config({ reposRoot: "/r", repos: ["acme/web", { name: "acme/api", agent: "codex", testCmd: "make test", maxConcurrent: 1, baseBranch: "dev" }] });
+  expect(web(c)).toEqual({ key: "acme/web", path: join(root, "src-web"), baseBranch: undefined, sandbox: "nono", maxConcurrent: undefined, autoMerge: "off", criticalPaths: [], feedbackAuthors: [] });
+  const c2 = config({ reposRoot: "/r", repos: ["acme/web", { name: "acme/api", maxConcurrent: 1, baseBranch: "dev" }] });
   expect(web(c2).path).toBe("/r/acme/web");
-  expect(c2.repos["acme/api"]).toMatchObject({ path: "/r/acme/api", agent: "codex", sandbox: "nono", testCmd: "make test", maxConcurrent: 1, baseBranch: "dev" });
+  expect(c2.repos["acme/api"]).toMatchObject({ path: "/r/acme/api", sandbox: "nono", maxConcurrent: 1, baseBranch: "dev" });
   const err = (raw: object) => {
     try {
       parseConfig(raw, root);
@@ -31,8 +31,8 @@ test("config: defaults applied and errors listed", () => {
   };
   const e1 = err({ host: "a b", maxConcurrent: 0, sources: [{ name: "Bad Name", tracker: "jira", repo: "x", repoPath: "/x", testCmd: "t" }] });
   for (const k of ["host:", "maxConcurrent:", "repos:", ".name:", ".tracker:", ".repo: moved", ".repoPath: moved", ".testCmd: moved"]) expect(e1).toContain(k);
-  const e2 = err(raw({ defaults: {}, repos: [{ name: "acme/web", agent: "gpt" }, "../x", { name: "-x/y" }, "a/b/c", { path: "/p" }, 7] }));
-  for (const k of [`repos[0] (acme/web).agent`, `repos[0] (acme/web).sandbox: "nono" | "none" (here or in defaults)`, `repos[0] (acme/web).testCmd: required (here or in defaults)`, `repos[1]: must be "owner/name"`, `repos[2].name: must be "owner/name"`, `repos[3]: must be`, `repos[4].name: must be`, `repos[5]: array of`])
+  const e2 = err(raw({ defaults: {}, repos: [{ name: "acme/web", sandbox: "vm" }, "../x", { name: "-x/y" }, "a/b/c", { path: "/p" }, 7] }));
+  for (const k of [`repos[0] (acme/web).sandbox: "nono" | "none" (here or in defaults)`, `repos[1]: must be "owner/name"`, `repos[2].name: must be "owner/name"`, `repos[3]: must be`, `repos[4].name: must be`, `repos[5]: array of`])
     expect(e2).toContain(k);
   expect(err(raw({ repos: [{ name: "acme/web", path: "/a" }, { name: "ACME/Web", path: "/b" }] }))).toContain("unique ignoring case");
   expect(err(raw({ repos: [{ name: "acme/web", path: "/a" }, { name: "acme/api", path: "/a" }] }))).toContain("paths must be unique");
@@ -54,37 +54,45 @@ test("example config validates", () => {
 });
 
 test("config: repo overrides of the wrong type are rejected, not replaced by defaults", () => {
-  for (const [k, v] of [["path", 42], ["path", ""], ["path", null], ["baseBranch", 42], ["prompt", ""], ["prompt", 7]] as const)
+  for (const [k, v] of [["path", 42], ["path", ""], ["path", null], ["baseBranch", 42]] as const)
     expect(() => config({ repos: [{ name: "acme/web", [k]: v }] })).toThrow(`repos[0] (acme/web).${k}: non-empty string`);
-  expect(() => config({ defaults: { agent: "claude", sandbox: "nono", testCmd: "t", baseBranch: 1 } })).toThrow(".baseBranch: non-empty string");
+  expect(() => config({ defaults: { sandbox: "nono", baseBranch: 1 } })).toThrow(".baseBranch: non-empty string");
+  for (const b of ["a..b", "-x", "a b"]) expect(() => config({ repos: [{ name: "acme/web", baseBranch: b }] })).toThrow(".baseBranch: invalid");
 });
 
-test("config: autoMerge and criticalPaths from defaults or per repo, validated", () => {
-  expect(web(config())).toMatchObject({ autoMerge: "off", criticalPaths: [], testPaths: [] });
-  const c = config({ defaults: { agent: "claude", sandbox: "nono", testCmd: "t", autoMerge: "intelligent", criticalPaths: ["x/**"], testPaths: ["qa/**"] }, repos: ["acme/web", { name: "acme/api", autoMerge: "shadow", testPaths: [] }] });
-  expect(web(c)).toMatchObject({ autoMerge: "intelligent", criticalPaths: ["x/**"], testPaths: ["qa/**"] });
-  expect(c.repos["acme/api"]).toMatchObject({ autoMerge: "shadow", testPaths: [] });
+test("config: work keys moved to the repo's .tender/config.yaml are rejected", () => {
+  const keys = ["agent", "testCmd", "planStep", "prompt", "testPaths"];
+  const one = Object.fromEntries(keys.map((k) => [k, "x"]));
+  let msg = "";
+  try {
+    config({ defaults: { sandbox: "nono", ...one }, repos: [{ name: "acme/web", ...one }] });
+  } catch (e) {
+    msg = (e as Error).message;
+  }
+  for (const k of keys) {
+    expect(msg).toContain(`defaults.${k}: moved to .tender/config.yaml in the repo`);
+    expect(msg).toContain(`repos[0] (acme/web).${k}: moved to .tender/config.yaml in the repo`);
+  }
+});
+
+test("config: host criticalPaths from defaults or per repo, validated", () => {
+  expect(web(config({ defaults: { sandbox: "nono", criticalPaths: ["x/**"] } })).criticalPaths).toEqual(["x/**"]);
+  for (const v of ["x", [""], null]) expect(() => config({ repos: [{ name: "acme/web", criticalPaths: v }] })).toThrow("repos[0] (acme/web).criticalPaths: array of non-empty glob strings");
+});
+
+test("config: autoMerge ceiling from defaults or per repo, validated", () => {
+  expect(web(config()).autoMerge).toBe("off");
+  const c = config({ defaults: { sandbox: "nono", autoMerge: "intelligent" }, repos: ["acme/web", { name: "acme/api", autoMerge: "shadow" }] });
+  expect(web(c).autoMerge).toBe("intelligent");
+  expect(c.repos["acme/api"]!.autoMerge).toBe("shadow");
   expect(() => config({ repos: [{ name: "acme/web", autoMerge: "yes" }] })).toThrow(`repos[0] (acme/web).autoMerge: "off" | "shadow" | "intelligent" | "all"`);
-  expect(() => config({ repos: [{ name: "acme/web", criticalPaths: "x" }] })).toThrow("criticalPaths: array of non-empty glob strings");
-  expect(() => config({ repos: [{ name: "acme/web", criticalPaths: [""] }] })).toThrow("criticalPaths");
-  expect(() => config({ repos: [{ name: "acme/web", testPaths: ["x", 1] }] })).toThrow("testPaths: array of non-empty glob strings");
-});
-
-test("config: explicit null autoMerge or criticalPaths is rejected, not defaulted", () => {
-  expect(() => config({ repos: [{ name: "acme/web", criticalPaths: null }] })).toThrow("criticalPaths: array of non-empty glob strings");
   expect(() => config({ repos: [{ name: "acme/web", autoMerge: null }] })).toThrow(`autoMerge: "off" | "shadow" | "intelligent" | "all"`);
 });
 
 test("config: feedbackAuthors defaults to [], from defaults or per repo, validated", () => {
   expect(web(config()).feedbackAuthors).toEqual([]);
-  const c = config({ defaults: { agent: "claude", sandbox: "nono", testCmd: "t", feedbackAuthors: ["lead"] }, repos: ["acme/web", { name: "acme/api", feedbackAuthors: ["octocat", "a@b.c"] }] });
+  const c = config({ defaults: { sandbox: "nono", feedbackAuthors: ["lead"] }, repos: ["acme/web", { name: "acme/api", feedbackAuthors: ["octocat", "a@b.c"] }] });
   expect(web(c).feedbackAuthors).toEqual(["lead"]);
   expect(c.repos["acme/api"]!.feedbackAuthors).toEqual(["octocat", "a@b.c"]);
   for (const v of ["octocat", [1], [""], {}]) expect(() => config({ repos: [{ name: "acme/web", feedbackAuthors: v }] })).toThrow(`repos[0] (acme/web).feedbackAuthors: array of non-empty strings`);
-});
-
-test("config: planStep defaults to a plain instruction and must be non-empty", () => {
-  expect(config({}).repos["acme/web"].planStep).toBe("Plan and implement the ticket.");
-  expect(config({ defaults: { agent: "claude", sandbox: "nono", testCmd: "t", planStep: "Use X." } }).repos["acme/web"].planStep).toBe("Use X.");
-  expect(() => config({ repos: [{ name: "acme/web", planStep: "" }] })).toThrow(".planStep: non-empty string");
 });

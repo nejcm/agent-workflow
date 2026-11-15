@@ -15,6 +15,7 @@ const okCheck = { __typename: "CheckRun", name: "lint", status: "COMPLETED", con
 
 function setup(o: { agent?: string; waiter?: boolean; authors?: string[]; open?: string[] } = {}) {
   worktree("gh-1");
+  writeFileSync(join(root, "acme/web/gh-1.agent"), o.agent ?? "codex");
   mkdirSync(join(root, "acme/web/gh-1/.tender/run"), { recursive: true });
   const t = ticket(1);
   const f = fakeTracker({ inReview: [t] });
@@ -30,7 +31,7 @@ function setup(o: { agent?: string; waiter?: boolean; authors?: string[]; open?:
     : a[0] === "sh" ? { out: log.split("\n").slice(-80).join("\n") }
     : a[0] === "systemctl" && a[2] === "show" ? { out: "/app.slice/s.scope\n" }
     : a[0] === "pgrep" ? { code: o.waiter ? 0 : 1 } : undefined);
-  const cfg = config({ repos: [{ name: "acme/web", path: join(root, "src-web"), agent: o.agent ?? "codex", feedbackAuthors: o.authors ?? ["op"] }] });
+  const cfg = config({ repos: [{ name: "acme/web", path: join(root, "src-web"), feedbackAuthors: o.authors ?? ["op"] }] });
   let state: State = "idle";
   return {
     ...f, t, pr, cmds, logs,

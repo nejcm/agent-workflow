@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { AGENTS, type Lookup } from "./agents";
+import { AGENTS, agentOf, type Lookup } from "./agents";
 import { repoDir } from "./config";
 import { PR_URL } from "./github";
 import { windows, winName } from "./launcher";
@@ -10,13 +10,13 @@ import { phaseProgress, type PhaseStatus } from "./phases";
 import { openQuestion } from "./question";
 import { resolve, type State } from "./state";
 import { transcript, withFile } from "./tail";
-import type { Config, Io, Repo } from "./types";
+import type { AgentName, Config, Io } from "./types";
 import { clean, mtime } from "./util";
 
 export interface Row {
   id: string;
   repo: string;
-  agent: Repo["agent"];
+  agent: AgentName;
   /** tmux/marker view: `running` has a window, `ended` an `<ID>.ended`, `orphan` neither. */
   session: "running" | "ended" | "orphan";
   state: State;
@@ -53,24 +53,25 @@ function savedPr(dir: string, id: string) {
 }
 
 /** `feeds`: each agent's state lookup (missing: that agent's running rows are unknown). */
-export function rows(cfg: Config, wins: Map<string, string>, home = homedir(), now = Date.now(), feeds: Partial<Record<Repo["agent"], Lookup>> = {}): Row[] {
+export function rows(cfg: Config, wins: Map<string, string>, home = homedir(), now = Date.now(), feeds: Partial<Record<AgentName, Lookup>> = {}): Row[] {
   return Object.values(cfg.repos).flatMap((r) => {
     const dir = repoDir(cfg, r.key);
     return worktreeIds(dir).sort().map((id): Row => {
       const wt = join(dir, id);
       const started = mtime(join(dir, `${id}.sh`)) ?? mtime(wt);
       const ended = mtime(join(dir, `${id}.ended`));
-      const t = transcript(wt, r.agent, home, started) ?? null;
+      const agent = agentOf(dir, id);
+      const t = transcript(wt, agent, home, started) ?? null;
       const session = ended !== undefined ? "ended" : wins.has(winName(r.key, id)) ? "running" : "orphan";
       const idleMs = t ? Math.max(0, now - (mtime(t) ?? now)) : null;
-      const resolved = resolve(session, feeds[r.agent]?.(wt, started ?? 0, now), idleMs, now);
+      const resolved = resolve(session, feeds[agent]?.(wt, started ?? 0, now), idleMs, now);
       const pr = savedPr(dir, id);
       // Answers are only delivered before a PR exists, so an open question after it is not news.
       const live = resolved.state === "idle" && !pr && openQuestion(dir, id) ? { ...resolved, state: "question" as const } : resolved;
       return {
         id,
         repo: r.key,
-        agent: r.agent,
+        agent,
         session,
         state: live.state,
         stateSince: live.since,
@@ -89,13 +90,13 @@ export function rows(cfg: Config, wins: Map<string, string>, home = homedir(), n
 }
 
 /** Rows with live state; prepares an agent's feed (once) for the worktrees of its repos that have a tmux window. */
-export async function snapshot(cfg: Config, io: Io, home = homedir(), now = Date.now(), prepare = (a: Repo["agent"], wts: string[]) => AGENTS[a].live(home, wts)) {
+export async function snapshot(cfg: Config, io: Io, home = homedir(), now = Date.now(), prepare = (a: AgentName, wts: string[]) => AGENTS[a].live(home, wts)) {
   const wins = await windows(cfg, io);
-  const up = new Map<Repo["agent"], string[]>();
+  const up = new Map<AgentName, string[]>();
   for (const w of wins.keys()) {
     const key = w.slice(0, w.lastIndexOf("/"));
-    const r = cfg.repos[key];
-    if (r) up.set(r.agent, [...(up.get(r.agent) ?? []), join(repoDir(cfg, key), w.slice(key.length + 1))]);
+    const [dir, id] = [repoDir(cfg, key), w.slice(key.length + 1)];
+    if (cfg.repos[key]) up.set(agentOf(dir, id), [...(up.get(agentOf(dir, id)) ?? []), join(dir, id)]);
   }
   return rows(cfg, wins, home, now, Object.fromEntries(await Promise.all([...up].map(async ([a, wts]) => [a, await prepare(a, wts)]))));
 }

@@ -11,8 +11,7 @@ useTempRoot();
 const T = 1_000_000;
 const NOW = T * 1000;
 const wt = (id: string) => join(root, "acme/web", id);
-const codex = () => config({ defaults: { agent: "codex", sandbox: "nono", testCmd: "bun test" } });
-const launched = (id: string) => (worktree(id), writeFileSync(join(root, "acme/web", `${id}.sh`), ""), utimesSync(join(root, "acme/web", `${id}.sh`), T - 60, T - 60));
+const launched = (id: string) => (worktree(id), writeFileSync(join(root, "acme/web", `${id}.agent`), "codex"), writeFileSync(join(root, "acme/web", `${id}.sh`), ""), utimesSync(join(root, "acme/web", `${id}.sh`), T - 60, T - 60));
 const stateAt = (id: string) => join(wt(id), ".tender/run", "codex-state.json");
 const hookFile = (id: string, o: unknown) => {
   mkdirSync(join(wt(id), ".tender/run"), { recursive: true });
@@ -54,7 +53,7 @@ test("codex rows read the hook file; one from before the launch is ignored", asy
   hookFile("PER-4", { state: "idle", ts: NOW - 10_000 });
   hookFile("PER-5", { state: "working", ts: (T - 120) * 1000 });
   const { io } = fakeIo((argv) => (argv[0] === "tmux" ? windowsOut(["acme/web/PER-4", "acme/web/PER-5"]) : undefined));
-  const rs = await snapshot(codex(), io, root, NOW, (a) => (a === "claude" ? Promise.reject(new Error("not for codex")) : AGENTS[a].live(root, [])));
+  const rs = await snapshot(config(), io, root, NOW, (a) => (a === "claude" ? Promise.reject(new Error("not for codex")) : AGENTS[a].live(root, [])));
   expect(rs.map((r) => [r.state, r.stateSince])).toEqual([["idle", NOW - 10_000], ["unknown", null]]);
 });
 

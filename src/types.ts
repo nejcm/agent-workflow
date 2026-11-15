@@ -82,6 +82,8 @@ export interface Ticket {
   repo?: string;
   /** 1 (urgent) to 4 (low); undefined = no priority, started last. */
   priority?: number;
+  /** Who it is assigned to when that is not the tender user; unset when unassigned or assigned to it. */
+  otherAssignee?: string;
 }
 
 export interface TicketComment {

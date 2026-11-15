@@ -46,7 +46,7 @@ export function projectRepo(claims: ProjectClaim[], team: string, p: { id: strin
 // A label inside a Linear label group is named `<group>:<name>`, so a `repo` group holding `owner/name` reads `repo:owner/name`.
 const labelNames = (c: any): string[] => (c?.nodes ?? []).map((x: any) => (x.parent?.name ? `${x.parent.name}:${x.name}` : x.name));
 
-export const LINEAR_ISSUES = `query($f: IssueFilter) { issues(filter: $f, first: 100) { nodes { id identifier title description url priority labels { nodes { name parent { name } } } project { id name } } } }`;
+export const LINEAR_ISSUES = `query($f: IssueFilter) { issues(filter: $f, first: 100) { nodes { id identifier title description url priority labels { nodes { name parent { name } } } project { id name } assignee { id name } } } }`;
 
 export function linearTicket(i: any): Ticket {
   const labels = labelNames(i.labels);
@@ -81,6 +81,12 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
     if (!id) throw new Error(`linear state "${name}" not found in team ${l.team}`);
     return id;
   };
+  let me: Promise<string> | undefined;
+  const viewer = () =>
+    (me ??= gql(`query { viewer { id } }`, {}).then((d) => {
+      if (typeof d?.viewer?.id !== "string" || !d.viewer.id) throw new Error("linear viewer: no id");
+      return d.viewer.id;
+    }));
   const unrouted = new WeakSet<Ticket>();
   const list = async (state: string, labels: string[]): Promise<Ticket[]> => {
     const filter = { team: { key: { eq: l.team } }, state: { name: { eq: state } }, and: labels.map((n) => ({ labels: { some: { name: { eq: n } } } })) };
@@ -89,6 +95,7 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
     return Promise.all(
       nodes.map(async (i: any) => {
         const t = linearTicket(i);
+        if (typeof i.assignee?.id === "string" && i.assignee.id !== (await viewer())) t.otherAssignee = String(i.assignee.name || i.assignee.id);
         if (t.repo === undefined && typeof i.project?.id === "string")
           t.repo = await claims().then((c) => projectRepo(c, l.team, i.project, io.log), () => void unrouted.add(t));
         return t;
@@ -99,8 +106,8 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
     const d = await gql(`mutation($i: CommentCreateInput!) { commentCreate(input: $i) { success } }`, { i: { issueId: t.ref, body: `tender: ${body}` } }, true);
     if (!io.dry && !d.commentCreate?.success) throw new Error(`linear commentCreate: not successful for ${t.id}`);
   };
-  const move = async (ref: string, state: string) => {
-    const d = await gql(`mutation($id: String!, $s: String!) { issueUpdate(id: $id, input: { stateId: $s }) { success } }`, { id: ref, s: await stateId(state) }, true);
+  const move = async (ref: string, state: string, more: object = {}) => {
+    const d = await gql(`mutation($id: String!, $i: IssueUpdateInput!) { issueUpdate(id: $id, input: $i) { success } }`, { id: ref, i: { stateId: await stateId(state), ...more } }, true);
     if (!io.dry && !d.issueUpdate?.success) throw new Error(`linear issueUpdate: not successful for ${ref}`);
   };
   const create = async (input: object): Promise<{ id: string; url: string }> => {
@@ -128,7 +135,7 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
       return st?.type === "canceled" || st?.type === "duplicate" ? "canceled" : l.done.includes(st?.name) ? "done" : undefined;
     },
     async claim(t) {
-      await move(t.ref, l.inProgress);
+      await move(t.ref, l.inProgress, { assigneeId: await viewer() });
       // Best-effort: once the ticket is in progress the claim has succeeded; a throw would only report it as failed.
       await comment(t, `picked up on ${host}`).catch((e) => io.log(`${t.id}: picked-up comment failed: ${e.message}`));
     },

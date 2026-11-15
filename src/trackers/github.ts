@@ -10,6 +10,14 @@ export function parseGitHub(r: Record<string, any>, at: string, check: Check) {
 
 export function github(l: GitHubSource, host: string, io: Io, defaultHost: boolean, repos: string[]): Tracker {
   const hostLabel = `host:${host}`;
+  let login: Promise<string> | undefined;
+  const viewer = () =>
+    (login ??= read(io, ["gh", "api", "user", "--jq", ".login"]).then((x) => {
+      if (!x.trim()) throw new Error("gh api user: no login");
+      return x.trim().toLowerCase();
+    }));
+  // GitHub allows several assignees: a ticket is someone else's only while the tender user is not among them.
+  const otherAssignee = async (logins: string[]) => (logins.length && !logins.map((x) => x.toLowerCase()).includes(await viewer()) ? logins.join(", ") : undefined);
   const listMine = (labels: string[], search?: string) =>
     defaultHost ? list(labels, search).then((r) => r.filter((t) => ours(t, host, true))) : list([...labels, hostLabel], search);
   // A failed repo is left out; nothing treats a missing ticket as gone (cleanup asks `closed`, limits count windows).
@@ -23,7 +31,7 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
       if (search) argv.push("--search", search);
       let issues: any[];
       try {
-        issues = JSON.parse(await read(io, [...argv, "--json", "number,title,body,url,labels"]));
+        issues = JSON.parse(await read(io, [...argv, "--json", "number,title,body,url,labels,assignees"]));
       } catch (e) {
         io.log(`repo ${repo}: issue list failed, skipped: ${(e as Error).message}`);
         continue;
@@ -31,13 +39,14 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
       for (const i of issues)
         if (Number.isInteger(i.number)) {
           const labels: string[] = (i.labels ?? []).map((x: any) => x.name);
-          all.push({ id: `gh-${i.number}`, ref: String(i.number), title: i.title ?? "", body: i.body ?? "", url: i.url ?? "", labels, repo, priority: labelPriority(labels) });
+          const assignees = (i.assignees ?? []).map((x: any) => String(x.login));
+          all.push({ id: `gh-${i.number}`, ref: String(i.number), title: i.title ?? "", body: i.body ?? "", url: i.url ?? "", labels, repo, priority: labelPriority(labels), otherAssignee: await otherAssignee(assignees) });
         }
     }
     return all;
   };
   const skip = [l.inProgressLabel, l.inReviewLabel, l.needsHumanLabel];
-  const edit = (t: Ticket, add: string, rm?: string) => write(io, ["gh", "issue", "edit", t.ref, "--repo", t.repo!, "--add-label", add, ...(rm ? ["--remove-label", rm] : [])]);
+  const edit = (t: Ticket, add: string, ...more: string[]) => write(io, ["gh", "issue", "edit", t.ref, "--repo", t.repo!, "--add-label", add, ...more]);
   const create = (t: Ticket, title: string, body: string, extra: string[] = []) => write(io, ["gh", "issue", "create", "--repo", t.repo!, ...extra, "--title", title, "--body", body]);
   const comment = async (t: Ticket, body: string) => { await write(io, ["gh", "issue", "comment", t.ref, "--repo", t.repo!, "--body", `tender: ${body}`]); };
   return {
@@ -59,12 +68,12 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
       if (i.state === "CLOSED") return ["NOT_PLANNED", "DUPLICATE"].includes(i.stateReason) ? "canceled" : "done";
     },
     async claim(t) {
-      await edit(t, l.inProgressLabel);
+      await edit(t, l.inProgressLabel, "--add-assignee", "@me");
       // Best-effort: once the ticket is in progress the claim has succeeded; a throw would only report it as failed.
       await comment(t, `picked up on ${host}`).catch((e) => io.log(`${t.id}: picked-up comment failed: ${e.message}`));
     },
     async toReview(t, prUrl) {
-      await edit(t, l.inReviewLabel, l.inProgressLabel);
+      await edit(t, l.inReviewLabel, "--remove-label", l.inProgressLabel);
       await comment(t, `PR: ${prUrl}`);
     },
     done: (t) => write(io, ["gh", "issue", "close", t.ref, "--repo", t.repo!]).then(() => {}),

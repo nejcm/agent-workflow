@@ -22,7 +22,7 @@ test("github adapter: ready requires host label, skips claimed, edits labels", a
   expect(cmds[1]).toContain("--label agent --label host:box");
   expect(cmds[1]).toContain('-label:"needs-human"');
   await tr.claim((await tr.listReady())[0]!);
-  expect(cmds).toContain("gh issue edit 7 --repo acme/web --add-label in-progress");
+  expect(cmds).toContain("gh issue edit 7 --repo acme/web --add-label in-progress --add-assignee @me");
   expect(cmds).toContain("gh issue comment 7 --repo acme/web --body tender: picked up on box");
   await tr.park({ ...ticket(7), repo: "acme/web" });
   expect(cmds.at(-1)).toBe("gh issue edit 7 --repo acme/web --add-label needs-human");
@@ -59,7 +59,7 @@ test("github adapter: claim survives a failed pickup comment, not a failed label
   const { io, cmds, logs } = fakeIo((a) => (a[2] === "comment" || (failEdit && a[2] === "edit") ? { code: 1 } : undefined));
   const tr = github(l, "box", io, false, ["acme/web"]);
   await tr.claim({ ...ticket(7), repo: "acme/web" });
-  expect(cmds).toEqual(["gh issue edit 7 --repo acme/web --add-label in-progress", "gh issue comment 7 --repo acme/web --body tender: picked up on box"]);
+  expect(cmds).toEqual(["gh issue edit 7 --repo acme/web --add-label in-progress --add-assignee @me", "gh issue comment 7 --repo acme/web --body tender: picked up on box"]);
   expect(logs).toContain("gh-7: picked-up comment failed: gh issue comment: boom");
   failEdit = true;
   await expect(tr.claim({ ...ticket(7), repo: "acme/web" })).rejects.toThrow("gh issue edit: boom");
@@ -174,7 +174,7 @@ test("trackers: done closes the GitHub issue, moves the Linear ticket to the fir
   }) as any;
   const l = lin(config({ sources: [src({ tracker: "linear", team: "ENG" })] }));
   await withLinearKey(() => linear(l, "box", { ...fakeIo().io, fetch: f }).done({ ...ticket(1), ref: "uuid-1" }));
-  expect(bodies.at(-1).variables).toEqual({ id: "uuid-1", s: "s-done" });
+  expect(bodies.at(-1).variables).toEqual({ id: "uuid-1", i: { stateId: "s-done" } });
 });
 
 test("github adapter: comments parsed from gh issue view, author is the login", async () => {
@@ -185,4 +185,16 @@ test("github adapter: comments parsed from gh issue view, author is the login", 
     { id: "IC_2", body: "yes", createdAt: "2026-01-01T11:00:00Z", author: undefined },
   ]);
   expect(cmds).toEqual(["gh issue view 7 --repo acme/web --json comments"]);
+});
+
+test("github adapter: tickets assigned only to others carry them; unassigned or with the gh user among them do not; the user is read once", async () => {
+  const issue = (number: number, ...logins: string[]) => ({ number, title: "t", body: "", url: "u", labels: [{ name: "agent" }], assignees: logins.map((login) => ({ login })) });
+  const { io, cmds } = fakeIo((a) => (a[2] === "list" ? { out: JSON.stringify([issue(1), issue(2, "Me"), issue(3, "alice"), issue(4, "alice", "me")]) } : a[1] === "api" ? { out: "me\n" } : undefined));
+  const tr = github(gh(), "box", io, false, ["acme/web"]);
+  expect((await tr.listReady()).map((t) => [t.id, t.otherAssignee])).toEqual([["gh-1", undefined], ["gh-2", undefined], ["gh-3", "alice"], ["gh-4", undefined]]);
+  await tr.listInProgress();
+  expect(cmds.filter((x) => x.startsWith("gh api user"))).toEqual(["gh api user --jq .login"]);
+  expect(cmds.find((x) => x.startsWith("gh issue list"))).toContain("--json number,title,body,url,labels,assignees");
+  const { io: noUser } = fakeIo((a) => (a[2] === "list" ? { out: JSON.stringify([issue(3, "alice")]) } : undefined));
+  await expect(github(gh(), "box", noUser, false, ["acme/web"]).listReady()).rejects.toThrow("gh api user: no login");
 });

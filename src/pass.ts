@@ -136,6 +136,38 @@ async function checkStall(cfg: Config, s: Source, t: Ticket, tr: Tracker, io: Io
   put(io, file, String(at));
 }
 
+async function stopSession(cfg: Config, io: Io, key: string, id: string, wins: Map<string, string>) {
+  await stopScope(cfg, io, key, id);
+  const w = wins.get(winName(key, id));
+  // Killing the scope usually closes the window first.
+  if (w)
+    await write(io, ["tmux", "kill-window", "-t", w]).catch((e) => {
+      if (!/can't find window/.test(e.message)) throw e;
+    });
+  wins.delete(winName(key, id));
+}
+
+// Like a cancel, plus one comment per reassignment: `<ID>.reassigned` is marked before posting and removed if the post fails.
+async function stopReassigned(cfg: Config, tr: Tracker, io: Io, t: Ticket & { repo: string }, wins: Map<string, string>) {
+  const dir = repoDir(cfg, t.repo);
+  const ended = join(dir, `${t.id}.ended`);
+  const told = join(dir, `${t.id}.reassigned`);
+  if (!existsSync(join(dir, t.id))) return;
+  if (wins.has(winName(t.repo, t.id)) || !existsSync(ended)) {
+    await stopSession(cfg, io, t.repo, t.id, wins);
+    put(io, ended, new Date().toISOString());
+    io.log(`stopped ${t.repo}/${t.id}: reassigned to ${JSON.stringify(t.otherAssignee)}; clone and files kept`);
+  }
+  if (existsSync(told)) return;
+  put(io, told, t.otherAssignee!);
+  try {
+    await tr.comment(t, `stopped, reassigned to ${t.otherAssignee}`);
+  } catch (e) {
+    remove(io, told);
+    throw e;
+  }
+}
+
 async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins: Map<string, string>, state: ReturnType<typeof liveStates>, sessions: Map<string, Promise<Session | undefined>>) {
   await step(io, "list in-progress", async () => {
     for (const t of await tr.listInProgress())
@@ -143,6 +175,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
         const key = SAFE_ID.test(t.id) && workRepo(cfg, s, tr, t);
         if (!key) return;
         const w = { ...t, repo: key };
+        if (t.otherAssignee) return stopReassigned(cfg, tr, io, w, wins);
         const dir = repoDir(cfg, key);
         const pr = await findPr(key, t.id, io, dir);
         await step(io, `phases ${t.id}`, () => syncPhases(w, tr, io, dir, !!pr));
@@ -177,6 +210,10 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
       const key = SAFE_ID.test(t.id) && workRepo(cfg, s, tr, t);
       if (!key) continue;
       const w = { ...t, repo: key };
+      if (t.otherAssignee) {
+        await step(io, `reassigned ${t.id}`, () => stopReassigned(cfg, tr, io, w, wins));
+        continue;
+      }
       const dir = repoDir(cfg, key);
       const r = cfg.repos[key]!;
       const win = wins.get(winName(key, t.id));
@@ -208,6 +245,14 @@ export function makeTracker(s: Source, host: string, io: Io, defaultHost: boolea
 const sessionOf = (io: Io, sessions: Map<string, Promise<Session | undefined>>, r: Repo) => sessions.get(r.key) ?? sessions.set(r.key, loadSession(io, r)).get(r.key)!;
 
 const warned = new Set<string>();
+
+function assignedElsewhere(io: Io, t: Ticket) {
+  if (!t.otherAssignee) return false;
+  const seen = `assigned ${t.repo}/${t.id}`;
+  if (!warned.has(seen)) io.log(`skip ${t.id}: assigned to ${JSON.stringify(t.otherAssignee)}`);
+  warned.add(seen);
+  return true;
+}
 
 export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir = TENDER_DIR, state = liveStates()) {
   if ((await io.run(["tmux", "has-session", "-t", `=${cfg.tmuxSession}`])).code !== 0)
@@ -244,7 +289,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
   await step(io, "sweep scopes", () => sweepScopes(cfg, io));
 
   const lists = new Map<string, Promise<Ticket[]>>();
-  const listReady = (x: { s: Source; tr: Tracker }) => lists.get(x.s.name) ?? lists.set(x.s.name, x.tr.listReady()).get(x.s.name)!;
+  const listReady = (x: { s: Source; io: Io; tr: Tracker }) => lists.get(x.s.name) ?? lists.set(x.s.name, x.tr.listReady().then((ts) => ts.filter((t) => !assignedElsewhere(x.io, t)))).get(x.s.name)!;
   for (const r of Object.values(cfg.repos)) {
     const dir = repoDir(cfg, r.key);
     for (const id of worktreeIds(dir)) {
@@ -265,13 +310,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
         if (!end) return;
         const w = wins.get(winName(r.key, id));
         if (end === "canceled" && !w && existsSync(join(dir, `${id}.ended`))) return;
-        await stopScope(cfg, x.io, r.key, id);
-        // Killing the scope usually closes the window first.
-        if (w)
-          await write(x.io, ["tmux", "kill-window", "-t", w]).catch((e) => {
-            if (!/can't find window/.test(e.message)) throw e;
-          });
-        wins.delete(winName(r.key, id));
+        await stopSession(cfg, x.io, r.key, id, wins);
         if (end === "canceled") {
           if (existsSync(join(dir, `${id}.ended`))) return;
           put(x.io, join(dir, `${id}.ended`), new Date().toISOString());
@@ -288,7 +327,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
         // rm never follows symlinks.
         await write(x.io, ["rm", "-rf", "--one-file-system", "--", wt], undefined, SLOW_SECS);
         // After the clone, so a delete that fails keeps the transcripts too.
-        for (const ext of [".claude", ".codex", ".tmpdir", ".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".stall", ".findings", ".claim", ".agent", ".source"]) remove(x.io, join(dir, id + ext));
+        for (const ext of [".claude", ".codex", ".tmpdir", ".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".stall", ".findings", ".claim", ".agent", ".source", ".reassigned"]) remove(x.io, join(dir, id + ext));
       });
     }
   }

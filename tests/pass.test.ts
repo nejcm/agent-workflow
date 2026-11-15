@@ -1182,3 +1182,75 @@ test("a failed pane listing kills no scope", async () => {
 test("scope names differ per workspace root", () => {
   expect(scopeUnit(config(), "acme/web", "gh-1")).not.toBe(scopeUnit({ ...config(), workspaceRoot: "/elsewhere" }, "acme/web", "gh-1"));
 });
+
+test("assigned to someone else: not started, the skip logged once per ticket; unassigned still starts", async () => {
+  const c = config({ maxConcurrent: 4 });
+  const { tr, calls } = fakeTracker({ ready: [{ ...ticket(1), otherAssignee: "alice" }, ticket(2)] });
+  const { io, cmds, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : noPr(a)));
+  await pass(c, io, () => tr, "/tender");
+  await pass(c, io, () => tr, "/tender");
+  const started = cmds.filter((x) => x.includes(" new-window ")).map((x) => x.split(" ").at(-2));
+  expect(started.every((w) => w === "acme/web/gh-2")).toBe(true);
+  expect(started.length).toBeGreaterThan(0);
+  expect(calls.some((x) => x === "claim gh-1")).toBe(false);
+  expect(logs.filter((l) => l.includes("gh-1: assigned"))).toEqual(['[web] skip gh-1: assigned to "alice"']);
+});
+
+test("reassigned while in progress or in review: kills the session once, keeps the clone, one comment; unassigned stops nothing", async () => {
+  const c = config();
+  for (const id of ["gh-1", "gh-2"]) worktree(id);
+  const s: { inProgress: Ticket[]; inReview: Ticket[] } = { inProgress: [{ ...ticket(1), otherAssignee: "alice" }], inReview: [{ ...ticket(2), otherAssignee: "bob" }] };
+  const { tr, calls } = fakeTracker(s);
+  let wins = ["acme/web/gh-1", "acme/web/gh-2"];
+  const { io, cmds, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(wins) : noPr(a)));
+  await pass(c, io, () => tr, "/tender");
+  expect(cmds.filter((x) => x.includes("kill-window"))).toEqual(["tmux kill-window -t @0", "tmux kill-window -t @1"]);
+  expect(cmds.filter((x) => x.startsWith("systemctl --user kill")).sort()).toEqual(["gh-1", "gh-2"].map((id) => `systemctl --user kill --signal=KILL ${unit(id)}`));
+  for (const f of ["gh-1", "gh-1.ended", "gh-2", "gh-2.ended"]) expect(existsSync(join(root, "acme/web", f))).toBe(true);
+  expect(cmds.some((x) => x.startsWith("rm "))).toBe(false);
+  expect(calls).toEqual(["comment gh-1 stopped, reassigned to alice", "comment gh-2 stopped, reassigned to bob"]);
+  expect(logs.filter((l) => l.includes("stopped"))).toEqual(['[web] stopped acme/web/gh-1: reassigned to "alice"; clone and files kept', '[web] stopped acme/web/gh-2: reassigned to "bob"; clone and files kept']);
+  wins = [];
+  await pass(c, io, () => tr, "/tender");
+  expect(calls).toHaveLength(2);
+  expect(cmds.filter((x) => x.includes("kill-window"))).toHaveLength(2);
+
+  rmSync(join(root, "acme/web/gh-1.ended"));
+  s.inProgress = [ticket(1)];
+  s.inReview = [];
+  wins = ["acme/web/gh-1"];
+  const killed = cmds.length;
+  await pass(c, io, () => tr, "/tender");
+  expect(cmds.slice(killed).some((x) => x.includes("kill-window") || x.startsWith("systemctl --user kill"))).toBe(false);
+  expect(calls).toHaveLength(2);
+});
+
+test("reassigned: a failed comment keeps the ticket unmarked, so the next poll posts it", async () => {
+  const c = config();
+  worktree("gh-1");
+  const { tr, calls } = fakeTracker({ inProgress: [{ ...ticket(1), otherAssignee: "alice" }] });
+  const comment = tr.comment;
+  tr.comment = async () => {
+    throw new Error("down");
+  };
+  const { io, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(["acme/web/gh-1"]) : noPr(a)));
+  await pass(c, io, () => tr, "/tender");
+  expect(existsSync(join(root, "acme/web/gh-1.reassigned"))).toBe(false);
+  expect(logs).toContain("[web] check gh-1 failed: down");
+  tr.comment = comment;
+  await pass(c, io, () => tr, "/tender");
+  expect(calls).toEqual(["comment gh-1 stopped, reassigned to alice"]);
+  expect(existsSync(join(root, "acme/web/gh-1.reassigned"))).toBe(true);
+});
+
+test("reassigned after the session already ended: no stop, still one comment", async () => {
+  const c = config();
+  worktree("gh-1");
+  writeFileSync(join(root, "acme/web/gh-1.ended"), "2026-01-01T00:00:00Z");
+  const { tr, calls } = fakeTracker({ inProgress: [{ ...ticket(1), otherAssignee: "alice" }] });
+  const { io, cmds } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : noPr(a)));
+  await pass(c, io, () => tr, "/tender");
+  await pass(c, io, () => tr, "/tender");
+  expect(calls).toEqual(["comment gh-1 stopped, reassigned to alice"]);
+  expect(cmds.some((x) => x.startsWith("systemctl --user kill"))).toBe(false);
+});

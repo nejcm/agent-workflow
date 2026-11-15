@@ -53,7 +53,7 @@ test("linear adapter: phases become child issues that are never picked up as wor
     }
     if (query.includes("issueUpdate")) {
       mutations.push(variables);
-      issues.find((i) => i.id === variables.id).state = states.find((s) => s.id === variables.s)!.name;
+      issues.find((i) => i.id === variables.id).state = states.find((s) => s.id === variables.i.stateId)!.name;
       return Response.json({ data: { issueUpdate: { success: true } } });
     }
     if (query.includes("issues(")) {
@@ -62,7 +62,7 @@ test("linear adapter: phases become child issues that are never picked up as wor
       const nodes = issues.filter((i) => i.state === f.state.name.eq && want.every((w: string) => i.labels.includes(w)));
       return Response.json({ data: { issues: { nodes: nodes.map((i) => ({ ...i, labels: { nodes: i.labels.map((name: string) => ({ name })) } })) } } });
     }
-    return Response.json({ data: {} });
+    return Response.json({ data: { viewer: { id: "me" } } });
   }) as any;
   writePhases("ENG-1", [phase("a", "in-progress"), phase("b", "done"), phase("c", "todo")]);
   await withLinearKey(async () => {
@@ -76,11 +76,11 @@ test("linear adapter: phases become child issues that are never picked up as wor
   });
   expect(mutations).toEqual([
     { teamId: "team-1", parentId: "u-1", stateId: "s-todo", title: "ENG-1: Do a", description: "b" },
-    { id: "u-2", s: "s-prog" },
+    { id: "u-2", i: { stateId: "s-prog" } },
     { teamId: "team-1", parentId: "u-1", stateId: "s-todo", title: "ENG-1: Do b", description: "b" },
-    { id: "u-3", s: "s-prog" },
+    { id: "u-3", i: { stateId: "s-prog" } },
     { teamId: "team-1", parentId: "u-1", stateId: "s-todo", title: "ENG-1: Do c", description: "b" },
-    { id: "u-3", s: "s-done" },
+    { id: "u-3", i: { stateId: "s-done" } },
   ]);
 });
 
@@ -183,7 +183,7 @@ test("pass: the project map comes from every allowlisted repo's .tender/ on its 
     if (query.includes("issues(")) return Response.json({ data: { issues: { nodes: variables.f.state.name.eq === "Todo" ? ready : [] } } });
     if (query.includes("commentCreate")) return comments.push(`${variables.i.issueId} ${variables.i.body}`), Response.json({ data: { commentCreate: { success: true } } });
     if (query.includes("workflowStates")) return Response.json({ data: { workflowStates: { nodes: [{ id: "s", name: "In Progress", team: { id: "t" } }] } } });
-    return Response.json({ data: { issueUpdate: { success: true } } });
+    return Response.json({ data: { issueUpdate: { success: true }, viewer: { id: "me" } } });
   }) as any;
   await withLinearKey(() => pass(c, io, makeTracker, "/tender"));
   expect(cmds.filter((x) => x.includes(" new-window ")).map((x) => x.split(" ").at(-2))).toEqual(["acme/web/ENG-1"]);
@@ -215,7 +215,7 @@ test("pass: while any repo's claims cannot be read, project-routed tickets wait 
     if (query.includes("issues(")) return Response.json({ data: { issues: { nodes: variables.f.state.name.eq === "Todo" ? ready : [] } } });
     if (query.includes("commentCreate")) return comments.push(`${variables.i.issueId} ${variables.i.body}`), Response.json({ data: { commentCreate: { success: true } } });
     if (query.includes("workflowStates")) return Response.json({ data: { workflowStates: { nodes: [{ id: "s", name: "In Progress", team: { id: "t" } }] } } });
-    return Response.json({ data: { issueUpdate: { success: true } } });
+    return Response.json({ data: { issueUpdate: { success: true }, viewer: { id: "me" } } });
   }) as any;
   await withLinearKey(() => pass(c, io, makeTracker, "/tender"));
   expect(cmds.filter((x) => x.includes(" new-window ")).map((x) => x.split(" ").at(-2))).toEqual(["acme/web/ENG-2"]);
@@ -244,7 +244,7 @@ test("pass: a failed map waits for every clone it started, so an explicit start 
     const { query, variables } = JSON.parse(init.body);
     if (query.includes("issues(")) return Response.json({ data: { issues: { nodes: variables.f.state.name.eq === "Todo" ? ready : [] } } });
     if (query.includes("workflowStates")) return Response.json({ data: { workflowStates: { nodes: [{ id: "s", name: "In Progress", team: { id: "t" } }] } } });
-    return Response.json({ data: { issueUpdate: { success: true }, commentCreate: { success: true } } });
+    return Response.json({ data: { issueUpdate: { success: true }, commentCreate: { success: true }, viewer: { id: "me" } } });
   }) as any;
   await withLinearKey(() => pass(c, fake.io, makeTracker, "/tender"));
   expect(fake.cmds.filter((x) => x.startsWith("gh repo clone acme/web "))).toHaveLength(1);
@@ -384,6 +384,7 @@ test("linear adapter: claim survives a failed pickup comment; a move Linear repo
     bodies.push(b);
     if (b.query.includes("workflowStates")) return Response.json({ data: { workflowStates: { nodes: [{ id: "s-ip", name: "In Progress", team: { id: "team" } }] } } });
     if (b.query.includes("issueUpdate")) return Response.json({ data: { issueUpdate: { success: moved } } });
+    if (b.query.includes("viewer")) return Response.json({ data: { viewer: { id: "user-me" } } });
     return Response.json({ data: { commentCreate: { success: false } } });
   }) as any;
   const { io, logs } = fakeIo();
@@ -391,7 +392,8 @@ test("linear adapter: claim survives a failed pickup comment; a move Linear repo
   const t = { id: "ENG-1", ref: "u-1", title: "t", body: "", url: "u" };
   await withLinearKey(async () => {
     await linear(l, "box", io).claim(t);
-    expect(bodies.map((b) => b.query.match(/\{\s*(\w+)/)[1])).toEqual(["workflowStates", "issueUpdate", "commentCreate"]);
+    expect(bodies.map((b) => b.query.match(/\{\s*(\w+)/)[1])).toEqual(["viewer", "workflowStates", "issueUpdate", "commentCreate"]);
+    expect(bodies[2].variables).toEqual({ id: "u-1", i: { stateId: "s-ip", assigneeId: "user-me" } });
     expect(logs).toContain("ENG-1: picked-up comment failed: linear commentCreate: not successful for ENG-1");
     moved = false;
     await expect(linear(l, "box", io).claim(t)).rejects.toThrow("linear issueUpdate: not successful for u-1");
@@ -416,4 +418,23 @@ test("linear adapter: a trashed issue, or one missing from the response, is canc
     expect(await tr.closed("ENG-1", "acme/web")).toBeUndefined();
   });
   expect(queries[0]).toContain("trashed state { name type }");
+});
+
+test("linear adapter: a ticket assigned to another user carries their name; unassigned or the viewer's does not; the viewer is read once", async () => {
+  const l = lin(config({ sources: [src({ tracker: "linear", team: "ENG" })] }));
+  const nodes = [{ ...issue("ENG-1", named("agent", "host:box"), null, null), assignee: null }, { ...issue("ENG-2", named("agent", "host:box"), null, null), assignee: { id: "user-me", name: "Me" } }, { ...issue("ENG-3", named("agent", "host:box"), null, null), assignee: { id: "user-al", name: "Alice" } }];
+  const queries: string[] = [];
+  const { io } = fakeIo();
+  io.fetch = (async (_url: string, init: any) => {
+    const { query } = JSON.parse(init.body);
+    queries.push(query);
+    return Response.json({ data: query.includes("viewer") ? { viewer: { id: "user-me" } } : { issues: { nodes } } });
+  }) as any;
+  const tr = linear(l, "box", io);
+  await withLinearKey(async () => {
+    expect((await tr.listReady()).map((t) => [t.id, t.otherAssignee])).toEqual([["ENG-1", undefined], ["ENG-2", undefined], ["ENG-3", "Alice"]]);
+    await tr.listInProgress();
+  });
+  expect(queries.filter((q) => q.includes("viewer"))).toHaveLength(1);
+  expect(LINEAR_ISSUES).toContain("assignee { id name }");
 });

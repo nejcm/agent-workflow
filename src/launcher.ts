@@ -280,6 +280,7 @@ export async function start(cfg: Config, s: Source, host: Repo, t: Ticket, tr: T
   put(io, join(dir, `${t.id}.source`), s.name);
   put(io, join(dir, `${t.id}.agent`), r.agent);
   remove(io, join(dir, `${t.id}.ended`));
+  remove(io, join(dir, `${t.id}.reassigned`));
   if (existsSync(wt)) io.log(`reuse ${wt}`);
   else await cloneSession(io, r, wt, branch);
   const root = existsSync(wt) ? realpathSync(wt) : wt;

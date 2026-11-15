@@ -7,6 +7,48 @@ Move a GitHub issue or Linear ticket to **ready**, and `aw` starts a Claude Code
 - **No moving parts to babysit.** A small Bun + TypeScript program, no database: state is the tracker, the tmux windows and the session clones. Polls instead of webhooks, so nothing listens on a port.
 - **Your setup, read-only.** Agents use your `CLAUDE.md`, `AGENTS.md` and skills, but run from their own config dirs (a fresh `<ID>.claude` per Claude ticket and `<ID>.codex` per ticket) and cannot modify yours.
 
+## Features
+
+**Picking up work**
+- **Sources:** GitHub issues, with labels over the repos you allowlist, or Linear tickets from a team. Several sources can run side by side.
+- **Ready means:** the `agent` label plus `host:<host>`, so a laptop and a VM never take the same ticket. One machine can also take unlabelled tickets (`defaultHost`).
+- **Which repo, in what order:**
+  - Repo allowlist, checked against GitHub renames and redirects.
+  - A Linear ticket names its repo with a label, a `repo:` line in the ticket, or its project.
+  - Most urgent tickets start first: Linear priority, or a GitHub `priority:*` label.
+- **Limits:** at most `maxConcurrent` sessions in total and per repo.
+
+**Running agents**
+- **Agents:** Claude Code or Codex, chosen per repo.
+- **Isolation:** one git clone and branch `agent/<ID>` per ticket, in its own tmux window.
+- **Sandbox:** [nono](https://github.com/nolabs-ai/nono), or none on a VM where the VM is the boundary.
+- **Your config, read-only:** a fresh agent config dir per ticket. Agents use your `CLAUDE.md`, `AGENTS.md` and skills but cannot change them.
+- **Claude login:** the sandbox holds only a phantom token. `aw` refreshes the host login itself before it expires ([Claude auth](#claude-auth)).
+
+**While it works**
+- **[Phases](#phases):** a phased plan is mirrored into sub-tickets that track its status.
+- **[Questions](#questions):** a blocked agent's question is posted to the ticket, and your reply is delivered back to the session.
+- **[Findings](#findings):** problems outside the ticket's scope become new tickets, not drive-by fixes.
+- **Stall detection:** a session that writes nothing for `stallMinutes` gets `needs-human` and a comment with its last pane lines.
+
+**After the PR**
+- **Ticket status:** moves to In Review once the PR exists.
+- **[PR feedback](#pr-feedback):**
+  - Review comments, failed checks and merge conflicts are delivered to the live session.
+  - After 3 rounds the ticket is parked with `needs-human`.
+- **[Auto-merge](#auto-merge):** modes `off`, `all`, `shadow` and `intelligent`. `intelligent` adds gates for critical paths, deleted tests, PR size and the agent's own confidence.
+- **Cleanup:**
+  - A done ticket ends its session, and its clone is deleted once nothing is unpushed.
+  - A canceled ticket ends its session and keeps its clone.
+
+**Watching**
+- `status [--json]`: every session's state, runtime, phases and PR.
+- `watch`: a terminal dashboard with a live transcript and attach and open-PR keys ([Watching sessions](#watching-sessions)).
+- `tail <ID>`: follow one session's transcript.
+- `tmux attach -t aw`: the live terminals, where you can steer an agent directly.
+
+Planned, not built: signal intake (perf regressions, Supabase advisors, slow queries) in [docs/improvements.md](docs/improvements.md#signal-intake).
+
 ## How it works
 
 `aw.json` has three parts: `repos`, the allowlist of GitHub repos `aw` may work on (with per-repo settings); `defaults` for those settings; and `sources`, where tickets come from (a GitHub label set over the allowlisted repos, or a Linear team). Every `pollIntervalMs` (default 60 s), for each source:

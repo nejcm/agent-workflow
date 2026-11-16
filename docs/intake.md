@@ -32,11 +32,37 @@ Run it by hand with `bun tender.ts intake [owner/repo:rule | rule] [--dry-run]`;
 Example scripts live in tender's [`intake/`](../intake) dir; copy one into the repo's `.tender/intake/`, keep it executable, and add a rule.
 
 - `shortcuts.ts`: one ticket per `shortcut:` comment (`// shortcut: <the limit>, <when to upgrade>`), keyed by file and comment text. Needs only the clone: no network, no secrets. `--recheck` reports `still` while the same comment is in that file.
+- `sentry.ts`: one ticket per unresolved Sentry issue in a project and environment, most frequent first, keyed `sentry:<issue id>`. See [Sentry](#sentry).
+
+### Sentry
+
+Lists the project's unresolved issues over `--period-days` sorted by events ([organization issues API](https://docs.sentry.io/api/events/list-an-organizations-issues/), `sort=freq`, `query=is:unresolved`, up to 10 pages of 100), keeps those with at least `--min-events` events and `--min-users` users in that period, and fetches the latest event only for the first `--top` for its stack. Facts: `events`, `users`, `level`, `firstSeen` and, for the top ones, `release`. The body has the title, culprit, up to 10 in-app frames (innermost first), counts, first and last seen, the latest event's release and the Sentry link.
+
+Arguments: `--org` and `--project` (slug or ID) are required; `--environment` (default: all), `--url` (default `https://sentry.io`), `--min-events 10`, `--min-users 3`, `--period-days 14`, `--top 10`. A rule's `run` takes no arguments, so pass them from a wrapper next to the copied script:
+
+```sh
+#!/bin/sh
+# .tender/intake/sentry-web.sh
+exec "$(dirname "$0")/sentry.ts" --org acme --project web --environment production "$@"
+```
+
+```yaml
+  - name: sentry-web
+    run: .tender/intake/sentry-web.sh
+    every: 1h
+    secrets: [SENTRY_TOKEN]
+    network: [sentry.io]
+    autoLabel: [{ minEvents: 100, level: error }]
+```
+
+- **Token:** an internal integration or personal token with only `project:read` and `event:read`, as `SENTRY_TOKEN` in the host's `.env`.
+- **Host:** `network` must name the host in `--url`. For a US or EU region org use `--url https://us.sentry.io` or `https://de.sentry.io` and allow that exact host; self-hosted Sentry is `--url https://sentry.example.com` with that host allowed.
+- **Recheck:** `still` means the issue has events since the merge (`TENDER_DONE_AT`) on a release created after it; events only on older releases, or none, are `gone`. It lists the project's releases, archived ones included, newest first until a page has none newer than the merge, then searches the issue's events on those releases (`release:[…]`, 20 at a time). Over 10 pages (1000 releases) of newer releases it cannot decide and exits non-zero, which reopens nothing and is retried next run.
 
 ## Script protocol
 
 - **Collect:** `run` with no arguments prints at most 100 JSON lines `{ "key", "title", "body", "facts"? }` and exits 0. `key` is `[A-Za-z0-9.:/-]`, at most 128 chars, unique in the output. `facts` is a flat map of at most 20 numbers and strings, used by `autoLabel`. Order by importance: `maxPerRun` takes the first new keys.
-- **Recheck:** `run --recheck <key>` prints one line `{ "state": "gone" | "still", "detail"? }`.
+- **Recheck:** `run --recheck <key>` prints one line `{ "state": "gone" | "still", "detail"? }`. A failed recheck (non-zero exit, timeout or malformed line) is logged and retried next run; it does not stop the rule's other rechecks or its collect. `TENDER_DONE_AT` holds the ISO time the clock counts from: the merge of `agent/<ID>`, or when tender first saw the ticket Done.
 - **Limits:** 5 minutes and 1 MiB of output. A timeout, a non-zero exit, too much output or any malformed line fails that run, which is logged and files nothing.
 - **Environment:** `TENDER_STATE` (a file the script may rewrite, kept between runs: `<workspaceRoot>/.intake/<owner>/<name>/<rule>.state`), `TENDER_RULE`, `TMPDIR`, `PATH`, `HOME`, `LANG` and the declared `secrets`. Nothing else.
 

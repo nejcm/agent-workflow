@@ -127,7 +127,7 @@ export function intakeSource(cfg: Config, r: Session): Source {
   return fits[0]!;
 }
 
-type Script = (args: string[]) => Promise<string>;
+type Script = (args: string[], extra?: Record<string, string>) => Promise<string>;
 
 // A fresh --shared clone of origin/<base> per run, always under nono: the script can write only it, its temp dir and its state file.
 async function sandbox(cfg: Config, io: Io, work: string, r: Session, id: string, rule: IntakeRule, tenderDir: string, secrets: Record<string, string>) {
@@ -149,8 +149,8 @@ async function sandbox(cfg: Config, io: Io, work: string, r: Session, id: string
   writeFileSync(join(dir, "nono", "tender-intake.json"), JSON.stringify(profile));
   const box = nonoRun("tender-intake", dir, [["--allow", clone], ["--allow", tmp], ["--allow-file", state], ["--read", join(r.path, ".git", "objects")]]);
   const env = { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: io.home, LANG: "C.UTF-8", TMPDIR: tmp, TENDER_STATE: state, TENDER_RULE: id, ...secrets };
-  const script: Script = async (args) => {
-    const res = await io.run([...box, join(clone, rule.run), ...args], clone, LIMITS.secs, { env, max: LIMITS.bytes });
+  const script: Script = async (args, extra) => {
+    const res = await io.run([...box, join(clone, rule.run), ...args], clone, LIMITS.secs, { env: { ...env, ...extra }, max: LIMITS.bytes });
     if (res.code !== 0) throw new Error(`${[rule.run, ...args].join(" ")} exited ${res.code}: ${clean(res.err, 300)}`);
     return res.out;
   };
@@ -235,15 +235,20 @@ async function sweep(io: Io, db: Database, save: Save, tr: Tracker, repo: string
       set(row.key, "closed");
       continue;
     }
-    const { state, detail } = parseRecheck(await script(["--recheck", row.key]));
-    io.log(`intake ${id}: recheck ${row.key} (${t.id}): ${state}`);
-    if (state === "gone") {
-      set(row.key, "closed");
-      continue;
+    // One failing row must not starve the others or collect; its state says where the next run resumes.
+    try {
+      const { state, detail } = parseRecheck(await script(["--recheck", row.key], { TENDER_DONE_AT: doneAt }));
+      io.log(`intake ${id}: recheck ${row.key} (${t.id}): ${state}`);
+      if (state === "gone") {
+        set(row.key, "closed");
+        continue;
+      }
+      set(row.key, "reopening");
+      await reopenOnce(tr, t, m, id, detail);
+      set(row.key, "reopened");
+    } catch (e) {
+      io.log(`intake ${id}: recheck ${row.key} failed: ${(e as Error).message}`);
     }
-    set(row.key, "reopening");
-    await reopenOnce(tr, t, m, id, detail);
-    set(row.key, "reopened");
   }
 }
 

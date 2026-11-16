@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { autoLabels, changed, intake, marker, parseCollect, parseRecheck } from "../src/intake";
+import { autoLabels, changed, intake, marker, parseCollect, parseRecheck, ticketAt } from "../src/intake";
 import { MIGRATIONS, openDb, schemaVersion } from "../src/db";
 import { parseRepoConfig } from "../src/repo-config";
 import { TENDER_DIR } from "../src/util";
@@ -239,13 +239,15 @@ test("recheck: turning recheck off or a human reopening cancels a queued recheck
   expect(sideCalls(s)).toEqual([]);
 });
 
-test("recheck: the clock starts at the agent branch's merge, so an old merge first seen Done is rechecked on that run", async () => {
+test("recheck: the clock starts at the agent branch's merge, so an old merge first seen Done is rechecked on that run, with TENDER_DONE_AT set to it", async () => {
   const s = setup(STILL, { done: ["gh-101"] });
   const run = s.io.run;
   s.io.run = (argv, ...rest) => (argv.join(" ").startsWith("gh pr list --repo acme/web --head agent/gh-101") ? Promise.resolve({ code: 0, out: JSON.stringify([{ mergedAt: new Date(T0 - 48 * HOUR).toISOString() }]), err: "" }) : run(argv, ...rest));
   await s.go();
   await s.go(T0 + 2 * HOUR);
   expect(sideCalls(s)).toEqual([RECHECKED, "reopen gh-101"]);
+  expect(s.runs.map((r) => r.env?.TENDER_DONE_AT)).toEqual([undefined, new Date(T0 - 48 * HOUR).toISOString(), undefined]);
+  expect(s.runs[1]!.profile.environment.allow_vars).toContain("TENDER_DONE_AT");
 });
 
 test("recheck: gone closes the row without touching the ticket", async () => {
@@ -255,6 +257,27 @@ test("recheck: gone closes the row without touching the ticket", async () => {
   await s.go(T0 + 30 * HOUR);
   expect(seen()[0]!.state).toBe("closed");
   expect(s.calls.filter((c) => !c.startsWith("intake "))).toEqual([]);
+});
+
+test("recheck: a failing or malformed --recheck changes nothing, is retried next run, and blocks neither collect nor other rows", async () => {
+  let undecided = true;
+  let keys = ["a", "b", "m"];
+  const recheck = (key: string) => (key === "b" ? { out: '{"state":"gone"}' } : !undecided ? { out: '{"state":"gone"}' } : key === "a" ? { code: 1, err: "cannot decide" } : { out: "not json" });
+  const s = setup((a) => (a.includes("--recheck") ? recheck(a.at(-1)!) : { out: keys.map((k) => line(k)).join("\n") }), {}, {}, RULE.replace("maxPerRun: 2", "maxPerRun: 3"));
+  await s.go();
+  s.done.push(...seen().map((r) => ticketAt(r.ticket_url!, "acme/web")!.id));
+  await s.go(T0 + 2 * HOUR);
+  keys = ["a", "b", "m", "c"];
+  await s.go(T0 + 30 * HOUR);
+  await s.go(T0 + 32 * HOUR);
+  expect(s.logs.filter((l) => l.includes("recheck a failed") && l.includes("cannot decide"))).toHaveLength(2);
+  expect(s.logs.filter((l) => l.includes("recheck m failed") && l.includes("not one JSON line"))).toHaveLength(2);
+  expect(seen().map((r) => [r.key, r.state])).toEqual([["a", "done"], ["b", "closed"], ["c", "open"], ["m", "done"]]);
+  expect(s.calls.filter((c) => c.startsWith("intake ")).map((c) => c.split(" | ")[0]!.split(" ").slice(2, 4).join(" "))).toEqual(["Err a", "Err b", "Err m", "Err c"]);
+  expect(s.calls.filter((c) => /^(comment|reopen) /.test(c))).toEqual([]);
+  undecided = false;
+  await s.go(T0 + 34 * HOUR);
+  expect(seen().map((r) => r.state)).toEqual(["closed", "closed", "open", "closed"]);
 });
 
 test("a disabled rule does not run, nor does any rule on another host", async () => {

@@ -14,6 +14,7 @@ export const validRepo = (s: unknown) => typeof s === "string" && REPO.test(s) &
 export const allowedRepo = (cfg: Config, raw: unknown) => (validRepo(raw) ? Object.keys(cfg.repos).find((k) => k.toLowerCase() === (raw as string).toLowerCase()) : undefined);
 const LANE_KEYS = ["repo", "repoPath", "baseBranch", "agent", "sandbox", "maxConcurrent", "testCmd", "prompt"];
 const MOVED_KEYS = ["agent", "testCmd", "planStep", "prompt", "testPaths"];
+const MODEL = /^[A-Za-z0-9][A-Za-z0-9._:\[\]\/-]{0,99}$/;
 export const AUTO_MERGE = ["off", "shadow", "intelligent", "all"] as const;
 
 const expand = (p: string, base: string) => resolve(base, p.replace(/^~(?=$|\/)/, homedir()));
@@ -105,8 +106,16 @@ export function parseConfig(raw: any, base: string): Config {
     check(str(intake.host) && /^[A-Za-z0-9._-]+$/.test(intake.host), "intake.host: required, the one host that runs intake");
     check(Array.isArray(intake.enabled) && intake.enabled.every((e: unknown) => typeof e === "string" && keys.includes(e.slice(0, e.lastIndexOf(":"))) && INTAKE_NAME.test(e.slice(e.lastIndexOf(":") + 1))), `intake.enabled: array of "owner/name:rule" for repos in repos`);
   }
+  const judge = raw.judge === undefined ? undefined : { agent: raw.judge?.agent, model: raw.judge?.model, maxPerRun: raw.judge?.maxPerRun ?? 10 };
+  check(raw.judge === undefined || (obj(raw.judge) && Object.keys(raw.judge).every((k) => ["agent", "model", "maxPerRun"].includes(k))), "judge: object with agent, model and maxPerRun");
+  if (judge) {
+    check(obj(intake), "judge: needs intake, as it runs during `tender intake` on the intake host");
+    check(["claude", "codex"].includes(judge.agent), `judge.agent: "claude" | "codex"`);
+    check(typeof judge.model === "string" && MODEL.test(judge.model), "judge.model: required, the model name, e.g. sonnet");
+    check(Number.isInteger(judge.maxPerRun) && judge.maxPerRun > 0 && judge.maxPerRun <= 100, "judge.maxPerRun: integer 1-100");
+  }
   if (errs.length) throw new Error(`invalid config:\n  ${errs.join("\n  ")}`);
-  return { host: raw.host, defaultHost, pollIntervalMs, workspaceRoot: expand(raw.workspaceRoot ?? "~/agent-ws", base), reposRoot, tmuxSession, maxConcurrent, maxInReview: raw.maxInReview, stallMinutes, repos, sources, ...(obj(intake) && { intake: { enabled: intake.enabled, host: intake.host } }) };
+  return { host: raw.host, defaultHost, pollIntervalMs, workspaceRoot: expand(raw.workspaceRoot ?? "~/agent-ws", base), reposRoot, tmuxSession, maxConcurrent, maxInReview: raw.maxInReview, stallMinutes, repos, sources, ...(obj(intake) && { intake: { enabled: intake.enabled, host: intake.host } }), ...(judge && { judge }) };
 }
 
 export const repoDir = (cfg: Config, key: string) => join(cfg.workspaceRoot, key);

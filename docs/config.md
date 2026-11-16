@@ -44,6 +44,7 @@ Unknown keys are errors in both files. Upgrading from older layouts is in [upgra
 | `repos` | non-empty array | required | the allowlist; tickets for any other repo are skipped |
 | `sources` | non-empty array | required | the trackers to poll |
 | `intake` | object | none | which [intake](intake.md) rules run, and where |
+| `judge` | object | none | turns on the [judge](intake.md#judge) for intake tickets; needs `intake` |
 
 ### `repos` and `defaults`
 
@@ -100,6 +101,14 @@ A key the source's tracker doesn't use (e.g. `team` on a GitHub source) is rejec
 |---|---|---|---|
 | `intake.enabled` | array of `"owner/name:rule"` | required with `intake` | only these repo rules run; the repo must be in `repos` |
 | `intake.host` | string | required with `intake` | the one host that runs intake; on any other host `tender intake` does nothing |
+
+### `judge`
+
+| key | type | default | |
+|---|---|---|---|
+| `judge.agent` | `"claude"` \| `"codex"` | required with `judge` | the CLI that scores shadow intake tickets, see [Judge](intake.md#judge) |
+| `judge.model` | string | required with `judge` | the model name passed to `--model` / `-m`; no default |
+| `judge.maxPerRun` | integer 1–100 | `10` | agent calls per `tender intake` run, across all rules |
 
 ## Repo config
 
@@ -178,6 +187,7 @@ Each entry of `intake` is one rule. A rule runs only when `tender.json` lists it
 | `autoLabel` | list of `{ fact: value, min<Fact>: number }` | `[]` | a ticket gets the ready label when every condition of any rule holds (`min<Fact>` is `facts.<fact> >= n`, other keys are equality); no match files a shadow ticket; a finding whose `categories` fact lists `SECURITY` never matches, and a rule naming `SECURITY` there is rejected |
 | `recheck` | boolean | `true` | after the ticket is Done, ask the script whether the problem is gone; reopen once if not |
 | `recheckAfter` | duration | `24h` | how long after Done the recheck runs |
+| `judge` | `{ minWorth, minFixable }`, both numbers 0–1 | none | lets the [judge](intake.md#judge) add the ready label when both scores reach these floors, size is not `l` and there is no `SECURITY` fact; without it the judge only scores and comments |
 
 The script's flags (e.g. the Sentry script's `--org`, `--min-events`, `--no-fixes`, the Postgres scripts' `--min-mean-ms`) are listed with each [example script](intake.md#example-scripts). The output protocol is in [Script protocol](intake.md#script-protocol).
 

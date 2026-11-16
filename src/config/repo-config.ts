@@ -92,7 +92,7 @@ export function parseRepoConfig(entries: Entry[]): RepoConfig {
   return c;
 }
 
-const INTAKE_KEYS = ["name", "run", "args", "every", "maxPerRun", "secrets", "network", "autoLabel", "labels", "recheck", "recheckAfter", "private", "loopback"];
+const INTAKE_KEYS = ["name", "run", "args", "every", "maxPerRun", "secrets", "network", "autoLabel", "labels", "recheck", "recheckAfter", "private", "loopback", "judge"];
 export const DURATION = /^([1-9]\d{0,3})([mhd])$/;
 /** A `categories` fact listing SECURITY, as splinter's lints do: such a finding never gets the ready label. */
 export const securityFact = (v: unknown) => typeof v === "string" && v.toUpperCase().split(",").some((c) => c.trim() === "SECURITY");
@@ -127,6 +127,10 @@ function parseIntake(raw: unknown, check: Check): IntakeRule[] {
     check(list(rule.autoLabel, (x) => obj(x) && Object.keys(x).length > 0 && Object.entries(x).every(([k, v]) => FACT.test(k) && (typeof v === "string" || Number.isFinite(v)))), `${at}.autoLabel: list of { fact: value, minFact: number } rules`);
     check(list(rule.labels, (x) => typeof x === "string" && LABEL.test(x), 5), `${at}.labels: at most 5 label names, no commas or colons`);
     for (const k of ["recheck", "private", "loopback"] as const) check(typeof rule[k] === "boolean", `${at}.${k}: boolean`);
+    const j = o.judge;
+    const unit = (v: unknown) => typeof v === "number" && v >= 0 && v <= 1;
+    check(j === undefined || (obj(j) && Object.keys(j).every((k) => ["minWorth", "minFixable"].includes(k)) && unit(j.minWorth) && unit(j.minFixable)), `${at}.judge: { minWorth, minFixable }, both numbers 0-1`);
+    if (obj(j)) rule.judge = { minWorth: j.minWorth, minFixable: j.minFixable };
     check(!Array.isArray(rule.autoLabel) || !rule.autoLabel.some((x) => obj(x) && securityFact(x.categories)), `${at}.autoLabel: a SECURITY finding never gets the ready label; a human decides access policies`);
     return rule;
   });

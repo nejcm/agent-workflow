@@ -116,6 +116,11 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
       await write(io, ["gh", "issue", "edit", t.ref, "--repo", t.repo!, "--remove-label", l.readyLabel]);
       await write(io, ["gh", "issue", "reopen", t.ref, "--repo", t.repo!]);
     },
+    async view(t) {
+      const i = JSON.parse(await read(io, ["gh", "issue", "view", t.ref, "--repo", t.repo!, "--json", "title,body,labels,state"]));
+      return { title: String(i.title ?? ""), body: String(i.body ?? ""), labels: (i.labels ?? []).map((x: any) => String(x.name)), open: i.state === "OPEN" };
+    },
+    addLabels: (t, labels) => write(io, ["gh", "issue", "edit", t.ref, "--repo", t.repo!, ...labels.flatMap((x) => ["--add-label", x])]).then(() => {}),
     listPhases: async (parent) =>
       (JSON.parse(await read(io, ["gh", "api", `repos/${parent.repo}/issues/${parent.ref}/sub_issues?per_page=100`])) as any[]).map((i) => ({ ref: String(i.number), title: i.title })),
     setPhase: (parent, ref, status) =>

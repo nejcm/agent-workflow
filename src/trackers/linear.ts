@@ -139,6 +139,10 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
     if (nodes.length !== 1) throw new Error(`linear project ${JSON.stringify(name)}: ${nodes.length} found, need exactly one`);
     return nodes[0].id as string;
   };
+  const addLabel = async (t: Ticket, name: string) => {
+    const d = await gql(`mutation($id: String!, $l: String!) { issueAddLabel(id: $id, labelId: $l) { success } }`, { id: t.ref, l: await labelId(name) }, true);
+    if (!io.dry && !d.issueAddLabel?.success) throw new Error(`linear issueAddLabel: not successful for ${t.id}`);
+  };
   const hostLabel = `host:${host}`;
   const listMine = (state: string, labels: string[], complete = false) => defaultHost ? list(state, labels, complete).then((r) => r.filter((t) => ours(t, host, true))) : list(state, [...labels, hostLabel], complete);
   return {
@@ -174,10 +178,7 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
       },
     }),
     done: (t) => move(t.ref, l.done[0]!),
-    async park(t) {
-      const d = await gql(`mutation($id: String!, $l: String!) { issueAddLabel(id: $id, labelId: $l) { success } }`, { id: t.ref, l: await labelId(l.needsHumanLabel) }, true);
-      if (!io.dry && !d.issueAddLabel?.success) throw new Error(`linear issueAddLabel: not successful for ${t.id}`);
-    },
+    park: (t) => addLabel(t, l.needsHumanLabel),
     parked: async (t) =>
       hasLabel(labelNames((await gql(`query($id: String!) { issue(id: $id) { labels { nodes { name parent { name } } } } }`, { id: t.ref })).issue?.labels), l.needsHumanLabel),
     comment,
@@ -212,6 +213,14 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
       const d = await gql(`mutation($id: String!, $l: String!) { issueRemoveLabel(id: $id, labelId: $l) { success } }`, { id: t.ref, l: await labelId(l.readyLabel) }, true);
       if (!io.dry && !d.issueRemoveLabel?.success) throw new Error(`linear issueRemoveLabel: not successful for ${t.id}`);
       await move(t.ref, l.todo);
+    },
+    async view(t) {
+      const i = (await gql(`query($id: String!) { issue(id: $id) { title description trashed state { type } labels { nodes { name parent { name } } } } }`, { id: t.ref })).issue;
+      if (!i) throw new Error(`linear issue ${t.id} not found`);
+      return { title: String(i.title ?? ""), body: String(i.description ?? ""), labels: labelNames(i.labels), open: !i.trashed && !["completed", "canceled", "duplicate"].includes(i.state?.type) };
+    },
+    async addLabels(t, labels) {
+      for (const x of labels) await addLabel(t, x);
     },
     listPhases: async (parent) =>
       (await gql(`query($id: String!) { issue(id: $id) { children(first: 100) { nodes { id title } } } }`, { id: parent.ref })).issue.children.nodes.map((i: any) => ({ ref: i.id, title: i.title })),

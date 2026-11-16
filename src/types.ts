@@ -55,6 +55,8 @@ export interface IntakeRule {
   private: boolean;
   /** The script gets its own network namespace with a usable loopback; egress still only through the `network` proxy. */
   loopback: boolean;
+  /** Unset: the judge only scores and comments; set: a verdict meeting both floors adds the ready label. */
+  judge?: { minWorth: number; minFixable: number };
 }
 
 /** Host and repo settings combined for one start or merge decision. */
@@ -103,6 +105,8 @@ export interface Config {
   sources: Source[];
   /** Rules as `owner/name:rule`; only `host` runs them. */
   intake?: { enabled: string[]; host: string };
+  /** Scores shadow intake tickets during `tender intake`; off when unset. */
+  judge?: { agent: AgentName; model: string; maxPerRun: number };
 }
 
 export interface Ticket {
@@ -165,6 +169,9 @@ export interface Tracker {
   findMarker(target: Target, marker: string): Promise<string | undefined>;
   /** Reopens a closed ticket (Linear: back to Todo) and removes the ready label. */
   reopen(t: Ticket): Promise<void>;
+  /** The ticket's current title, body, labels and whether it is open, read fresh. */
+  view(t: Ticket): Promise<{ title: string; body: string; labels: string[]; open: boolean }>;
+  addLabels(t: Ticket, labels: string[]): Promise<void>;
   listPhases(parent: Ticket): Promise<{ ref: string; title: string }[]>;
   setPhase(parent: Ticket, ref: string, status: "in-progress" | "done"): Promise<void>;
 }
@@ -174,7 +181,7 @@ export type Target = { repo: string; project?: string };
 /** `env` replaces the inherited environment; output past `max` bytes on either stream kills the command. */
 export type Run = (argv: string[], cwd?: string, secs?: number, opts?: { env?: Record<string, string>; max?: number }) => Promise<{ code: number; out: string; err: string }>;
 
-export type EventKind = "start" | "claim" | "review" | "ready-to-merge" | "merged" | "done" | "park" | "stall" | "feedback-round" | "gate" | "handoff" | "intake-filed";
+export type EventKind = "start" | "claim" | "review" | "ready-to-merge" | "merged" | "done" | "park" | "stall" | "feedback-round" | "gate" | "handoff" | "intake-filed" | "judge";
 
 export interface Io {
   run: Run;

@@ -1,0 +1,147 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nolabs-ai/nono/main/crates/nono-cli/data/nono-profile.schema.json",
+  "meta": {
+    "name": "tender-judge",
+    "version": "0.1.0",
+    "description": "tender: the intake judge, a headless Claude or Codex call with no tools, no repo and only its model provider's network; tender sets the network for Codex per run"
+  },
+  "extends": "default",
+  "groups": {
+    "include": [],
+    "exclude": [
+      "system_write_linux",
+      "system_read_linux_core",
+      "user_tools"
+    ]
+  },
+  "linux": {
+    "af_unix_mediation": "pathname"
+  },
+  "workdir": {
+    "access": "none"
+  },
+  "filesystem": {
+    "write": [
+      "/dev/null",
+      "/dev/stdout",
+      "/dev/stderr",
+      "/dev/fd",
+      "/proc/self/fd"
+    ],
+    "read": [
+      "/bin",
+      "/sbin",
+      "/usr/bin",
+      "/usr/sbin",
+      "/usr/local/bin",
+      "/lib",
+      "/lib64",
+      "/lib/x86_64-linux-gnu",
+      "/lib/aarch64-linux-gnu",
+      "/usr/lib",
+      "/usr/lib64",
+      "/usr/lib/x86_64-linux-gnu",
+      "/usr/lib/aarch64-linux-gnu",
+      "/usr/local/lib",
+      "/usr/local/lib64",
+      "/etc/resolv.conf",
+      "/run/systemd/resolve",
+      "/etc/hosts",
+      "/etc/nsswitch.conf",
+      "/etc/gai.conf",
+      "/etc/group",
+      "/etc/ssl",
+      "/etc/pki",
+      "/etc/ca-certificates",
+      "/var/lib/ca-certificates",
+      "/etc/crypto-policies",
+      "/etc/fonts",
+      "/etc/ld.so.cache",
+      "/etc/ld.so.conf",
+      "/etc/ld.so.conf.d",
+      "/etc/localtime",
+      "/etc/timezone",
+      "/etc/locale.conf",
+      "/etc/locale.gen",
+      "/etc/alternatives",
+      "/etc/os-release",
+      "/etc/passwd",
+      "/etc/services",
+      "/etc/mime.types",
+      "/etc/manpath.config",
+      "/etc/man_db.conf",
+      "/var/cache/man",
+      "/run/systemd/userdb",
+      "/usr/share",
+      "/usr/share/locale",
+      "/usr/share/locale-langpack",
+      "/usr/share/zoneinfo",
+      "/usr/share/terminfo",
+      "/usr/share/ca-certificates",
+      "/lib/terminfo",
+      "/etc/terminfo",
+      "/dev/null",
+      "/dev/zero",
+      "/dev/random",
+      "/dev/urandom",
+      "/dev/full",
+      "/dev/console",
+      "/dev/stdin",
+      "/dev/stdout",
+      "/dev/stderr",
+      "/dev/fd",
+      "/proc/self",
+      "/proc/cpuinfo",
+      "/proc/meminfo",
+      "/proc/stat",
+      "/proc/loadavg",
+      "/proc/version",
+      "/proc/filesystems"
+    ]
+  },
+  "environment": {
+    "allow_vars": [
+      "PATH",
+      "HOME",
+      "LANG",
+      "LC_*",
+      "TZ",
+      "TMPDIR",
+      "CLAUDE_CONFIG_DIR",
+      "CLAUDE_CODE_TMPDIR",
+      "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+      "DISABLE_AUTOUPDATER",
+      "CODEX_HOME"
+    ]
+  },
+  "network": {
+    "allow_domain": [
+      "api.anthropic.com"
+    ],
+    "credentials": [
+      "anthropic_oauth"
+    ],
+    "custom_credentials": {
+      "anthropic_oauth": {
+        "upstream": "https://api.anthropic.com",
+        "credential_key": "cmd://anthropic_oauth",
+        "env_var": "CLAUDE_CODE_OAUTH_TOKEN",
+        "credential_format": "Bearer {}"
+      }
+    }
+  },
+  "credential_capture": {
+    "anthropic_oauth": {
+      "command": [
+        "/bin/sh",
+        "-p",
+        "-c",
+        "cd / && exec /usr/bin/env -i HOME=\"$HOME\" \"$TENDER_BUN\" --no-env-file -e \"$1\"",
+        "sh",
+        "try{const f=require(\"node:fs\"),d=process.env.HOME+\"/.claude/\",w=Date.now()+3000;while(f.existsSync(d+\".oauth_refresh.lock\")&&Date.now()<w)Bun.sleepSync(50);const c=JSON.parse(f.readFileSync(d+\".credentials.json\",\"utf8\"));const o=c!==null&&typeof c===\"object\"&&!Array.isArray(c)&&Object.hasOwn(c,\"claudeAiOauth\")?c.claudeAiOauth:null;const t=o?.accessToken,e=o?.expiresAt;if(typeof t===\"string\"&&/^[A-Za-z0-9._-]+$/.test(t)&&Number.isSafeInteger(e)&&e>Date.now()+30000){process.stdout.write(t);process.exit(0)}}catch{}process.exit(1)"
+      ],
+      "timeout_secs": 5,
+      "cache_ttl_secs": 0
+    }
+  }
+}

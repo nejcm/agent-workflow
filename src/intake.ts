@@ -202,7 +202,8 @@ async function runRule(cfg: Config, io: Io, db: Database, work: string, id: stri
   const own = [s.readyLabel, s.needsHumanLabel, ...(s.tracker === "github" ? [s.inProgressLabel, s.inReviewLabel, s.readyToMergeLabel] : [])];
   const taken = rule.labels.filter((x) => hasLabel(own, x));
   if (taken.length) throw new Error(`labels: ${taken.join(", ")} ${taken.length > 1 ? "are" : "is"} tender's own; use autoLabel for the ready label`);
-  if (rule.private && s.tracker === "github") {
+  // The fix PR lands on the GitHub repo whatever the tracker, so `private` checks it for Linear too.
+  if (rule.private) {
     if (!vis.has(r.key)) vis.set(r.key, (await read(io, ["gh", "repo", "view", r.key, "--json", "visibility", "--jq", ".visibility"])).trim());
     const v = vis.get(r.key)!;
     if (!["PRIVATE", "INTERNAL"].includes(v)) throw new Error(`private: ${r.key} is ${/^[A-Z]{1,20}$/.test(v) ? v : "of unknown visibility"}, so this rule files nothing there`);

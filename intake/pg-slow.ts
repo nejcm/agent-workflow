@@ -1,6 +1,6 @@
 #!/usr/bin/env -S bun --no-env-file
 // tender intake example: one ticket per query that got slow since the last run, from pg_stat_statements. Needs PG_INTAKE_URL, the database host in `network`, and `loopback: true`.
-// Copy with pg.ts to .tender/intake/ (this file executable) and add a rule with `labels: [supabase]` and `private: true`; see docs/intake.md.
+// Copy with pg.ts to .tender/intake/ (this file executable) and add a rule with `labels: [supabase]`; `private: true` is required, as tickets show query shapes. See docs/intake.md.
 import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { open as openPg, type Open, type Query } from "./pg";
@@ -9,6 +9,8 @@ import { open as openPg, type Open, type Query } from "./pg";
 export interface Snapshot {
   at: string;
   reset: string | null;
+  /** The `--user` list the counters were summed over. */
+  users?: string[];
   q: Record<string, [number, number]>;
 }
 export interface Slow {
@@ -21,9 +23,12 @@ export interface Slow {
 // Only plain DML: utility statements (SET, ALTER ROLE … PASSWORD) are not query shapes to fix, and older servers keep their literals.
 const DML = /^(?:\s+|\/\*[\s\S]*?\*\/|--[^\n]*\n)*(select|insert|update|delete|with|merge|values|table)\b/i;
 
-/** Queries over both thresholds in the window `prev`..`now`; none across a stats reset, and a query whose counters went down starts over. */
+const comparable = (prev: Snapshot, now: Snapshot) => prev.reset === now.reset && String(prev.users) === String(now.users);
+
+/** Queries over both thresholds in the window `prev`..`now`; none across a stats reset or a changed `--user` list, and a query whose counters went down starts over. */
+// shortcut: an entry evicted and re-created with more calls than before reads as one window of inflated delta; use PG17's per-entry stats_since if that bites.
 export function slow(prev: Snapshot, now: Snapshot, min: { calls: number; meanMs: number }): Slow[] {
-  if (prev.reset !== now.reset) return [];
+  if (!comparable(prev, now)) return [];
   const out: Slow[] = [];
   for (const [queryid, [calls, total]] of Object.entries(now.q)) {
     const [pc, pt] = prev.q[queryid] ?? [0, 0];
@@ -42,12 +47,14 @@ async function stats(q: Query, users: string[]) {
   const rows = await q(
     `select s.queryid::text as queryid, min(left(s.query, 4000)) as query, sum(s.calls)::float8 as calls, sum(s.total_exec_time)::float8 as total
      from ${schema}.pg_stat_statements s join pg_database d on d.oid = s.dbid join pg_roles r on r.oid = s.userid
-     where d.datname = current_database() and s.queryid is not null and (cardinality($1::text[]) = 0 or r.rolname = any($1::text[]))
+     where d.datname = current_database() and (cardinality($1::text[]) = 0 or r.rolname = any($1::text[]))
      group by s.queryid`,
     [users],
   );
+  // Without pg_read_all_stats, other roles' rows come back with a null queryid and `<insufficient privilege>` as text.
+  if (rows.some((r) => r.queryid === null)) throw new Error(`cannot read other roles' queries in pg_stat_statements: grant pg_read_all_stats to this role, or pass --user for the roles it may read`);
   const dml = rows.filter((r) => DML.test(r.query));
-  const snap: Snapshot = { at: new Date().toISOString(), reset: info?.reset ?? null, q: Object.fromEntries(dml.map((r) => [r.queryid, [r.calls, r.total]])) };
+  const snap: Snapshot = { at: new Date().toISOString(), reset: info?.reset ?? null, users, q: Object.fromEntries(dml.map((r) => [r.queryid, [r.calls, r.total]])) };
   return { snap, text: Object.fromEntries(dml.map((r) => [r.queryid, r.query as string])) };
 }
 
@@ -92,12 +99,14 @@ export async function main(argv: string[], env = process.env, open: Open = openP
     // The window must start after the merge; the next collect moves it there, so failing now retries then.
     if (!prev || Date.parse(prev.at) < done) throw new Error(`no snapshot since ${env.TENDER_DONE_AT} yet; retried after the next collect`);
     const now = await withDb(open, a.ca, (q) => stats(q, a.user));
-    if (now.snap.reset !== prev.reset) throw new Error("pg_stat_statements was reset since the last snapshot; retried after the next collect");
+    if (!comparable(prev, now.snap)) throw new Error("pg_stat_statements was reset or --user changed since the last snapshot; retried after the next collect");
     const [pc, pt] = prev.q[id] ?? [0, 0];
     // Gone from both snapshots means no calls since the last collect; gone only from now means evicted or filtered, so undecided.
     if (prev.q[id] && !now.snap.q[id]) throw new Error(`queryid ${id} left pg_stat_statements since the last snapshot; retried after the next collect`);
     const [c, t] = now.snap.q[id] ?? [0, 0];
     if (c < pc || t < pt) throw new Error(`queryid ${id} restarted its counters; retried after the next collect`);
+    const [dc, dt] = [c - pc, t - pt];
+    if (dc > 0 && dc < min.calls && dt / dc >= min.meanMs) throw new Error(`queryid ${id} ran ${dc} times since the last snapshot, still slow but under --min-calls; retried after the next collect`);
     const hit = slow({ ...prev, q: { [id]: [pc, pt] } }, { ...now.snap, q: { [id]: [c, t] } }, min)[0];
     const window = `between ${prev.at} and ${now.snap.at}`;
     return JSON.stringify(hit ? { state: "still", detail: `${hit.calls} calls ${window}, mean ${hit.meanMs} ms.` } : { state: "gone", detail: `${c - pc} calls ${window}${c > pc ? `, mean ${Math.round(((t - pt) / (c - pc)) * 10) / 10} ms` : ""}: under the thresholds.` });

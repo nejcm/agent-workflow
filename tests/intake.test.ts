@@ -461,11 +461,15 @@ test("private: a rule refuses a public or unknown GitHub repo before running its
   }
 });
 
-test("private: Linear trackers are never public, so no visibility lookup", async () => {
+test("private: with a Linear tracker the GitHub repo is still checked, since the fix PR lands there", async () => {
   await withLinearKey(async () => {
-    const s = setup(() => ({ out: "" }), {}, { sources: [src({ tracker: "linear", team: "ENG" })] }, RULE + "    private: true\ntracker:\n  linear:\n    project: Web\n");
-    await s.go();
-    expect(s.runs).toHaveLength(1);
+    for (const [i, [vis, runs]] of ([["PUBLIC", 0], ["PRIVATE", 1]] as const).entries()) {
+      const s = setup(() => ({ out: "" }), {}, { sources: [src({ tracker: "linear", team: "ENG" })] }, RULE + "    private: true\ntracker:\n  linear:\n    project: Web\n");
+      const run = s.io.run;
+      s.io.run = (argv, ...rest) => (argv.includes("visibility") ? Promise.resolve({ code: 0, out: `${vis}\n`, err: "" }) : run(argv, ...rest));
+      await s.go(T0 + i * 2 * HOUR);
+      expect(s.runs).toHaveLength(runs);
+    }
   });
 });
 

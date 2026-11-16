@@ -1,12 +1,14 @@
 #!/usr/bin/env -S bun --no-env-file
 // tender intake example: one ticket per Supabase database lint (splinter, the Supabase advisors' SQL). Needs PG_INTAKE_URL, the database host in `network`, and `loopback: true`.
-// Copy with pg.ts and splinter.sql to .tender/intake/ (this file executable) and add a rule with `labels: [supabase]` and `private: true`; see docs/intake.md.
+// Copy with pg.ts and splinter.sql to .tender/intake/ (this file executable) and add a rule with `labels: [supabase]`; `private: true` is required, as tickets show the schema. See docs/intake.md.
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { open as openPg, type Open, type Query } from "./pg";
 
 const LEVELS = ["INFO", "WARN", "ERROR"];
+// PERFORMANCE in splinter, but fixed by rewriting RLS policies, so the SECURITY fact keeps them from the ready label.
+const POLICY_LINTS = ["auth_rls_initplan", "multiple_permissive_policies"];
 
 export interface Lint {
   name: string;
@@ -43,7 +45,7 @@ function line(l: Lint) {
     `Splinter cache_key: \`${l.cache_key}\``,
     "Proof in the PR: run splinter.sql against the local database after the change and show this cache_key is gone.",
   ];
-  return JSON.stringify({ key: lintKey(l), title: `${l.title}: ${md(l.detail)}`, body: body.join("\n\n"), facts: { name: l.name, level: l.level, categories: l.categories.join(",") } });
+  return JSON.stringify({ key: lintKey(l), title: `${l.title}: ${md(l.detail)}`, body: body.join("\n\n"), facts: { name: l.name, level: l.level, categories: [...l.categories, ...(POLICY_LINTS.includes(l.name) ? ["SECURITY"] : [])].join(",") } });
 }
 
 /** stdout for `argv`: one line per lint at or above `--min-level`, most severe first, or the `--recheck` verdict. */

@@ -1,11 +1,11 @@
 import { lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { AGENTS, agentOf } from "./agents";
-import { repoDir, validRepo } from "./config";
+import { repoDir, validRepo } from "../config/config";
 import { stopSession, windows } from "./launcher";
-import { transcript, withFile } from "./tail";
-import type { AgentName, Config, Io } from "./types";
-import { diskRepos, passLocked, put, SAFE_ID } from "./util";
+import { transcript, withFile } from "../ui/tail";
+import type { AgentName, Config, Io } from "../types";
+import { diskRepos, passLocked, put, SAFE_ID } from "../util";
 
 export const TOOLS = ["claude", "codex", "t3", "editor"] as const;
 export type Tool = (typeof TOOLS)[number];

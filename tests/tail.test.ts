@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { appendFileSync, chmodSync, mkdirSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { claudeDir, claudeHome, codexHome } from "../src/agents";
-import { argSummary, events, lastSay, newest, tail, transcript, worktreesFor } from "../src/tail";
+import { claudeDir, claudeHome, codexHome } from "../src/session/agents";
+import { argSummary, events, lastSay, newest, tail, transcript, worktreesFor } from "../src/ui/tail";
 import { clean } from "../src/util";
 import { claudeFile, config, root, useTempRoot, worktree } from "./helpers";
 

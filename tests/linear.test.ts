@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { allowedRepo } from "../src/config";
+import { allowedRepo } from "../src/config/config";
 import { LINEAR_ISSUES, linear, linearRepo, linearTicket, type ProjectClaim, projectRepo } from "../src/trackers/linear";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";

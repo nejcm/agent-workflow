@@ -1,14 +1,14 @@
-import type { Row } from "../src/status";
+import type { Row } from "../src/ui/status";
 import { afterEach, beforeEach } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CLAUDE_TOKEN, claudeDir } from "../src/agents";
-import { CREDENTIALS } from "../src/claude-auth";
-import { parseConfig } from "../src/config";
+import { CLAUDE_TOKEN, claudeDir } from "../src/session/agents";
+import { CREDENTIALS } from "../src/session/claude-auth";
+import { parseConfig } from "../src/config/config";
 import { canonCache } from "../src/github";
-import { hatchCache } from "../src/merge";
-import { configCache } from "../src/repo-config";
+import { hatchCache } from "../src/review/merge";
+import { configCache } from "../src/config/repo-config";
 import type { Config, GitHubSource, Io, LinearSource, Ticket, Tracker } from "../src/types";
 import { TENDER_DIR, GIT, hasLabel } from "../src/util";
 

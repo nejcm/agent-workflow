@@ -4,8 +4,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { AGENTS, agentOf, INBOX_WAITER, type Lookup } from "./agents";
 import { resolve, type State } from "./state";
-import type { AgentName, Io, Repo, Ticket, TicketComment, Tracker } from "./types";
-import { mtime, put, read, readRun, removeRun, write, writeRun } from "./util";
+import type { AgentName, Io, Repo, Ticket, TicketComment, Tracker } from "../types";
+import { mtime, put, read, readRun, removeRun, write, writeRun } from "../util";
 
 const MAX_QUESTION_BYTES = 64 * 1024;
 const MAX_QUESTION_CHARS = 8000;

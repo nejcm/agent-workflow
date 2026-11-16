@@ -1,14 +1,14 @@
 import { expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { validRepo } from "../src/config";
+import { validRepo } from "../src/config/config";
 import { canonCache } from "../src/github";
 import { github } from "../src/trackers/github";
-import { authStamp, CODEX_AUTH, codexHooksWarning, codexLogin, codexRefresh, launcher, render, scopeUnit, sweepScopes, seedClaude, seedCodex } from "../src/launcher";
+import { authStamp, CODEX_AUTH, codexHooksWarning, codexLogin, codexRefresh, launcher, render, scopeUnit, sweepScopes, seedClaude, seedCodex } from "../src/session/launcher";
 import { events, openDb, recorder } from "../src/db";
 import { endedNotice, pass } from "../src/pass";
-import { liveStates, pickAnswer } from "../src/question";
-import type { State } from "../src/state";
+import { liveStates, pickAnswer } from "../src/session/question";
+import type { State } from "../src/session/state";
 import type { AgentName, Config, Io, Ticket, TicketComment, Tracker } from "../src/types";
 import { GIT, SLOW_SECS } from "../src/util";
 import { claudeFile, config, fakeIo, repoFiles, fakeTracker, noPr, root, src, ticket, two, useTempRoot, web, windowsOut, worktree } from "./helpers";

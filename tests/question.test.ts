@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { INBOX_WAITER } from "../src/agents";
+import { INBOX_WAITER } from "../src/session/agents";
 import { pass } from "../src/pass";
-import { agentPane, answerFrame, liveStates, pickAnswer, POINTER } from "../src/question";
-import type { State } from "../src/state";
+import { agentPane, answerFrame, liveStates, pickAnswer, POINTER } from "../src/session/question";
+import type { State } from "../src/session/state";
 import type { TicketComment } from "../src/types";
 import { config, fakeIo, fakeTracker, noPr, root, ticket, useTempRoot, windowsOut, worktree } from "./helpers";
 

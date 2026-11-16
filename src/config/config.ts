@@ -1,8 +1,8 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import type { Config, Repo, Source } from "./types";
-import { TRACKERS } from "./trackers";
-import { validBranch } from "./util";
+import type { Config, Repo, Source } from "../types";
+import { TRACKERS } from "../trackers";
+import { validBranch } from "../util";
 
 const NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
 export const INTAKE_NAME = NAME;

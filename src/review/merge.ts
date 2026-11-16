@@ -1,10 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { AUTO_MERGE, repoDir } from "./config";
-import { canonical, findPr, sameRepo } from "./github";
+import { AUTO_MERGE, repoDir } from "../config/config";
+import { canonical, findPr, sameRepo } from "../github";
 import { hatchInWorker } from "./hatch";
-import type { AutoMerge, Config, Io, Session, Ticket, Tracker } from "./types";
-import { put, read, readRun, remove, write } from "./util";
+import type { AutoMerge, Config, Io, Session, Ticket, Tracker } from "../types";
+import { put, read, readRun, remove, write } from "../util";
 
 const MAX_MERGE_BYTES = 4 * 1024;
 const MAX_DIFF_BYTES = 2 * 1024 * 1024;

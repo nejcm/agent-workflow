@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { autoLabels, changed, intake, marker, parseCollect, parseRecheck, ticketAt } from "../src/intake";
 import { MIGRATIONS, openDb, schemaVersion } from "../src/db";
-import { parseRepoConfig } from "../src/repo-config";
+import { parseRepoConfig } from "../src/config/repo-config";
 import { TENDER_DIR } from "../src/util";
 import { spawnRun } from "../tender";
 import { config, fakeIo, fakeTracker, repoFiles, root, setBaseSha, useTempRoot } from "./helpers";

@@ -1,10 +1,10 @@
 import { closeSync, constants as C, existsSync, fstatSync, openSync, readlinkSync, readSync, realpathSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { type Agent, AGENTS, recordedAgent } from "./agents";
-import { repoDir, validRepo } from "./config";
-import type { AgentName, Config } from "./types";
-import { clean, diskRepos, mtime, SAFE_ID } from "./util";
+import { type Agent, AGENTS, recordedAgent } from "../session/agents";
+import { repoDir, validRepo } from "../config/config";
+import type { AgentName, Config } from "../types";
+import { clean, diskRepos, mtime, SAFE_ID } from "../util";
 
 const CHUNK = 256 * 1024;
 

@@ -1,9 +1,9 @@
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AUTO_MERGE, INTAKE_NAME } from "./config";
-import { baseBranch } from "./github";
-import type { AutoMerge, Check, IntakeRule, Io, Repo, RepoConfig, Session } from "./types";
-import { GIT, hasLabel, read, TENDER_DIR, write } from "./util";
+import { baseBranch } from "../github";
+import type { AutoMerge, Check, IntakeRule, Io, Repo, RepoConfig, Session } from "../types";
+import { GIT, hasLabel, read, TENDER_DIR, write } from "../util";
 
 const MAX_FILE = 64 * 1024;
 const PROMPT = /^[a-z0-9-]+\.md$/;

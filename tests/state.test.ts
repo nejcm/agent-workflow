@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { AGENTS, codexState } from "../src/agents";
-import { resolve, STALE_MS, UNKNOWN } from "../src/state";
-import { snapshot, table } from "../src/status";
+import { AGENTS, codexState } from "../src/session/agents";
+import { resolve, STALE_MS, UNKNOWN } from "../src/session/state";
+import { snapshot, table } from "../src/ui/status";
 import { config, fakeIo, root, session, useTempRoot, windowsOut, worktree } from "./helpers";
 
 useTempRoot();

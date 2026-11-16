@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { action, attachCmd, exclusive, installed, openable, reduce, reselect, type View, watch } from "../src/dash";
+import { action, attachCmd, exclusive, installed, openable, reduce, reselect, type View, watch } from "../src/ui/dash";
 import { statusRow as row } from "./helpers";
 
 const v = (over: Partial<View> = {}): View => ({ sel: 0, pane: "list", max: false, help: false, back: 0, ...over });

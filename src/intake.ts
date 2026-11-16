@@ -3,10 +3,10 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DB_FILE, memoryDb, openDb } from "./db";
-import { sanitized, unmention } from "./findings";
-import { nonoRun } from "./launcher";
+import { sanitized, unmention } from "./review/findings";
+import { nonoRun } from "./session/launcher";
 import { makeTracker } from "./pass";
-import { DURATION, loadSession } from "./repo-config";
+import { DURATION, loadSession } from "./config/repo-config";
 import type { Config, IntakeRule, Io, Session, Source, Target, Ticket, Tracker } from "./types";
 import { clean, GIT, hasLabel, hasMarker, read, SLOW_SECS } from "./util";
 

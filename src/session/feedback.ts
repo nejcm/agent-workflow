@@ -1,11 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { checkState, PR_FIELDS } from "./merge";
+import { checkState, PR_FIELDS } from "../review/merge";
 import { agentOf } from "./agents";
 import { byOperator, deliveryPane, nudge } from "./question";
 import type { State } from "./state";
-import type { Io, Repo, Ticket, TicketComment, Tracker } from "./types";
-import { put, read, writeRun } from "./util";
+import type { Io, Repo, Ticket, TicketComment, Tracker } from "../types";
+import { put, read, writeRun } from "../util";
 
 const DEBOUNCE_MS = 2 * 60_000;
 export const MAX_ROUNDS = 3;

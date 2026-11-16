@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { claudeDir, codexHome } from "../src/agents";
-import { handoff, shellLine, ticketClone, toolArgv } from "../src/handoff";
-import { resume, scopeUnit } from "../src/launcher";
+import { claudeDir, codexHome } from "../src/session/agents";
+import { handoff, shellLine, ticketClone, toolArgv } from "../src/session/handoff";
+import { resume, scopeUnit } from "../src/session/launcher";
 import { passLocked } from "../src/util";
 import { pass } from "../src/pass";
 import { claudeFile, config, fakeIo, fakeTracker, noPr, root, ticket, useTempRoot, windowsOut, worktree } from "./helpers";

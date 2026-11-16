@@ -43,6 +43,9 @@ Example scripts live in tender's [`intake/`](../intake) dir; copy one into the r
 - `sentry.ts`: one ticket per unresolved Sentry issue in a project and environment, most frequent first, keyed `sentry:<issue id>`. See [Sentry](#sentry).
 - `posthog-errors.ts`: one ticket per active PostHog error tracking issue, most frequent first, keyed `posthog:<issue id>`. See [PostHog](#posthog).
 - `pg-lint.ts` and `pg-slow.ts`: one ticket per Supabase database lint, and one per query that got slow since the last run. See [Postgres and Supabase](#postgres-and-supabase).
+- `contract.ts`: one ticket per broken piece of the repo's tender contract. See [Contract](#contract).
+
+The plan named a shell script for the contract; it is TypeScript like the others, so it is tested.
 
 ### Sentry
 
@@ -186,6 +189,36 @@ intake:
 - **Slow queries** need a local database with realistic seed data for the agent to reproduce a plan, so turn on `autoLabel` for `pg-slow.ts` only in such repos.
 - **Recheck:** for a lint, `still` while splinter still reports that `cache_key`. For a slow query, `still` while it is over both thresholds in the window from the last collect's snapshot to now; that window must start after the merge (`TENDER_DONE_AT`), so a recheck before the first collect after the merge, across a stats reset or a changed `--user` list, after the query's counters went down, while it is still over `--min-mean-ms` on fewer calls than `--min-calls`, or after it left `pg_stat_statements` since that snapshot fails and is retried next run; a query in neither snapshot had no calls, so it is `gone`. The window is one `every`, so give it enough traffic, and make `recheckAfter` cover the deploy: a merged migration or query change that has not reached the database still shows as `still`.
 - **Private:** both example rules set `private: true`, since tickets show schema and query shapes; see [Filing](#filing).
+
+### Contract
+
+Checks the repo's own tender setup in the clone, one ticket per broken item, in this order:
+
+- **Config:** `.tender/` passes `tender check`, using tender's own parser (`src/config/repo-config.ts`). Only when the script runs from tender's checkout (`bun <tender>/intake/contract.ts`, as the [`tender-maintain`](../skills/tender-maintain/SKILL.md) skill does): a copy in a repo has no parser beside it and the sandbox cannot read tender's, so it skips this check. Under `tender intake` that loses nothing, because tender runs a repo's rules only when its config parses. Key `contract:config:check`. Facts: `check: config`.
+- **Globs:** every `criticalPaths` glob and every `trust` rule's `paths` glob matches at least one file in `git ls-files`, with the matcher tender's auto-merge uses. Key `contract:<criticalPaths | trust>:<glob, sanitized>-<hash of the glob>`. Facts: `check` (the field), `glob`.
+
+The repo config has no verify skill or smoke command, so the plan's "verify skill still exists and its smoke command runs" has nothing to check.
+
+- **Recheck:** runs the same check: `still` while the item is reported, `gone` once it passes or its glob has left the config. The config key without tender's parser, or a glob while `config.yaml` does not parse, cannot be decided: non-zero exit, retried next run.
+- **Errors:** a failed `git ls-files`, an unparseable `config.yaml` (when the config check cannot report it), or arguments other than `--recheck` with a key of a check above exit non-zero and print nothing.
+- **Cap:** at most 100 items, tender's collect limit, config first; the rest wait for a later run.
+
+```yaml
+intake:
+  - name: contract
+    run: .tender/intake/contract.ts
+    args: []
+    every: 1d
+    maxPerRun: 3
+    secrets: []
+    network: []
+    labels: [contract]
+    autoLabel: []
+    recheck: true
+    recheckAfter: 1h
+```
+
+Fixes land in `.tender/**`, a critical path, so tender never auto-merges them; keep `autoLabel: []`.
 
 ## Script protocol
 

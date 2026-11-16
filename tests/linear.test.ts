@@ -439,6 +439,27 @@ test("linear adapter: a ticket assigned to another user carries their name; unas
   expect(LINEAR_ISSUES).toContain("assignee { id name }");
 });
 
+test("linear adapter: intake files with rule labels resolved by name, and a missing label files nothing", async () => {
+  const bodies: any[] = [];
+  const { io } = fakeIo();
+  io.fetch = (async (_url: string, init: any) => {
+    const b = JSON.parse(init.body);
+    bodies.push(b);
+    if (b.query.includes("issueLabels")) return Response.json({ data: { issueLabels: { nodes: b.variables.n === "missing" ? [] : [{ id: `l-${b.variables.n}`, parent: null }] } } });
+    if (b.query.includes("workflowStates")) return Response.json({ data: { workflowStates: { nodes: [{ id: "s-todo", name: "Todo" }] } } });
+    if (b.query.includes("teams")) return Response.json({ data: { teams: { nodes: [{ id: "t-eng" }] } } });
+    return Response.json({ data: { issueCreate: { issue: { id: "i-1", url: "https://linear.app/acme/issue/ENG-1/t" } } } });
+  }) as any;
+  await withLinearKey(async () => {
+    const tr = linear(lin(config({ sources: [src({ tracker: "linear", team: "ENG" })] })), "box", io);
+    expect(await tr.fileTicket({ repo: "acme/web" }, "T", "B", ["sentry", "agent"])).toBe("https://linear.app/acme/issue/ENG-1/t");
+    expect(bodies.find((b) => b.query.includes("issueCreate")).variables.i.labelIds).toEqual(["l-sentry", "l-agent"]);
+    bodies.length = 0;
+    await expect(tr.fileTicket({ repo: "acme/web" }, "T", "B", ["missing"])).rejects.toThrow('linear label "missing" not found');
+    expect(bodies.some((b) => b.query.includes("issueCreate"))).toBe(false);
+  });
+});
+
 test("linear adapter: intake markers match whole lines only; reopen drops the ready label before Todo and stops if it cannot", async () => {
   const m = "tender-intake: acme/web:errs:a";
   let removed = true;

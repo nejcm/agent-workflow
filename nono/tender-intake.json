@@ -110,7 +110,8 @@
       "TZ",
       "TMPDIR",
       "TENDER_STATE",
-      "TENDER_RULE"
+      "TENDER_RULE",
+      "TENDER_DONE_AT"
     ]
   },
   "network": {

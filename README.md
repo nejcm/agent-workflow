@@ -52,7 +52,7 @@ Move a GitHub issue or Linear ticket to **ready**, and `tender` starts a Claude 
 - `tmux attach -t tender`: the live terminals, where you can steer an agent directly.
 
 **[Intake](docs/intake.md)**
-- `intake`: repo scripts that print JSON lines become deduped, sanitized tickets, unlabelled until a rule's `autoLabel` trusts them, and rechecked after they are Done. Runs on one host, on a 15-minute timer, in nono.
+- `intake`: repo scripts that print JSON lines become deduped, sanitized tickets, carrying the rule's `labels`, without the ready label until its `autoLabel` trusts them, and rechecked after they are Done. Runs on one host, on a 15-minute timer, in nono.
 
 ## How it works
 

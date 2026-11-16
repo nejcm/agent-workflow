@@ -221,6 +221,10 @@ test("github adapter: intake files with labels, finds a marker only in a body th
   expect(cmds.at(-1)).toBe(`gh issue list --repo acme/web --state all --limit 100 --search "${m}" in:body --json url,body`);
   expect(await tr.fileTicket({ repo: "acme/web" }, "T", "B", ["agent", "host:box"])).toBe("https://github.com/acme/web/issues/3");
   expect(cmds.at(-1)).toBe("gh issue create --repo acme/web --label agent --label host:box --title T --body B");
+  await tr.fileTicket({ repo: "acme/web" }, "T", "B", ["sentry"]);
+  expect(cmds.at(-1)).toBe("gh issue create --repo acme/web --label sentry --title T --body B");
+  const noLabel = fakeIo((a) => (a[2] === "create" ? { code: 1, err: "could not add label: 'sentry' not found" } : undefined));
+  await expect(github(gh(), "box", noLabel.io, false, ["acme/web"]).fileTicket({ repo: "acme/web" }, "T", "B", ["sentry"])).rejects.toThrow("'sentry' not found");
   await tr.reopen({ ...ticket(3), repo: "acme/web" });
   expect(cmds.slice(-2)).toEqual(["gh issue edit 3 --repo acme/web --remove-label agent", "gh issue reopen 3 --repo acme/web"]);
   const failing = fakeIo((a) => (a[2] === "edit" ? { code: 1 } : undefined));

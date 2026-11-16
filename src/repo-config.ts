@@ -92,13 +92,15 @@ export function parseRepoConfig(entries: Entry[]): RepoConfig {
   return c;
 }
 
-const INTAKE_KEYS = ["name", "run", "every", "maxPerRun", "secrets", "network", "autoLabel", "recheck", "recheckAfter"];
+const INTAKE_KEYS = ["name", "run", "args", "every", "maxPerRun", "secrets", "network", "autoLabel", "labels", "recheck", "recheckAfter"];
 export const DURATION = /^([1-9]\d{0,3})([mhd])$/;
 const SECRET = /^[A-Z][A-Z0-9_]{0,63}$/;
 // No gh token and no tracker key ever reach a script; the rest is the environment tender sets itself.
 const RESERVED = /^(GH|GITHUB|LINEAR|TENDER|NONO|CLAUDE|ANTHROPIC|OPENAI|CODEX)_|^(PATH|HOME|LANG|TZ|TMPDIR|TMP|TEMP)$/;
 const DOMAIN = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 const FACT = /^[A-Za-z][A-Za-z0-9_]{0,39}$/;
+// No comma (gh --label splits on it) and no colon, so never host:<host>.
+const LABEL = /^(?=.{1,50}$)[\w./-]+( [\w./-]+)*$/;
 const repoPath = (p: unknown) => typeof p === "string" && p.length <= 200 && p.split("/").every((x) => /^[A-Za-z0-9_.-]+$/.test(x) && x !== "." && x !== "..") && !p.startsWith("-");
 
 function parseIntake(raw: unknown, check: Check): IntakeRule[] {
@@ -112,14 +114,16 @@ function parseIntake(raw: unknown, check: Check): IntakeRule[] {
     check(obj(r), `${at}: mapping`);
     const o: Record<string, any> = obj(r) ? r : {};
     for (const k of Object.keys(o)) check(INTAKE_KEYS.includes(k), `${at}.${k}: unknown key`);
-    const rule: IntakeRule = { name: o.name, run: o.run, every: o.every ?? "1h", maxPerRun: o.maxPerRun ?? 3, secrets: o.secrets ?? [], network: o.network ?? [], autoLabel: o.autoLabel ?? [], recheck: o.recheck ?? true, recheckAfter: o.recheckAfter ?? "24h" };
+    const rule: IntakeRule = { name: o.name, run: o.run, args: o.args ?? [], every: o.every ?? "1h", maxPerRun: o.maxPerRun ?? 3, secrets: o.secrets ?? [], network: o.network ?? [], autoLabel: o.autoLabel ?? [], labels: o.labels ?? [], recheck: o.recheck ?? true, recheckAfter: o.recheckAfter ?? "24h" };
     check(typeof rule.name === "string" && INTAKE_NAME.test(rule.name), `${at}.name: required, [a-z0-9-]`);
     check(repoPath(rule.run), `${at}.run: required, a path inside the repo`);
+    check(list(rule.args, (x) => typeof x === "string" && x.length <= 200 && !/\p{Cc}/u.test(x)), `${at}.args: at most 20 strings of at most 200 chars, no control characters`);
     for (const k of ["every", "recheckAfter"] as const) check(typeof rule[k] === "string" && DURATION.test(rule[k]), `${at}.${k}: duration like 15m, 1h or 1d`);
     check(Number.isInteger(rule.maxPerRun) && rule.maxPerRun > 0 && rule.maxPerRun <= 20, `${at}.maxPerRun: integer 1-20`);
     check(list(rule.secrets, (x) => typeof x === "string" && SECRET.test(x) && !RESERVED.test(x)), `${at}.secrets: env var names (no GH_, GITHUB_, LINEAR_ or other reserved names)`);
     check(list(rule.network, (x) => typeof x === "string" && DOMAIN.test(x)), `${at}.network: list of lowercase host names the script may reach`);
     check(list(rule.autoLabel, (x) => obj(x) && Object.keys(x).length > 0 && Object.entries(x).every(([k, v]) => FACT.test(k) && (typeof v === "string" || Number.isFinite(v)))), `${at}.autoLabel: list of { fact: value, minFact: number } rules`);
+    check(list(rule.labels, (x) => typeof x === "string" && LABEL.test(x), 5), `${at}.labels: at most 5 label names, no commas or colons`);
     check(typeof rule.recheck === "boolean", `${at}.recheck: boolean`);
     return rule;
   });

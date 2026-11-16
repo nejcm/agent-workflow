@@ -1,6 +1,6 @@
 #!/usr/bin/env -S bun --no-env-file
 // tender intake example: one ticket per `shortcut:` comment in the repo. Needs only the clone: no network, no secrets.
-// Copy to .tender/intake/shortcuts.ts (executable) and add an intake rule; see docs/intake.md.
+// Copy to .tender/intake/shortcuts.ts (executable) and add an intake rule with `labels: [shortcuts]`; see docs/intake.md.
 import { createHash } from "node:crypto";
 
 const grep = Bun.spawnSync(["git", "grep", "-n", "-I", "-E", "(//|#) ?shortcut: ", "--", ".", ":!*.md", ":!intake/", ":!.tender/intake/"]);

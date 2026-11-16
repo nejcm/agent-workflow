@@ -8,7 +8,7 @@ import { MIGRATIONS, openDb, schemaVersion } from "../src/db";
 import { parseRepoConfig } from "../src/config/repo-config";
 import { TENDER_DIR } from "../src/util";
 import { spawnRun } from "../tender";
-import { config, fakeIo, fakeTracker, repoFiles, root, setBaseSha, useTempRoot } from "./helpers";
+import { config, fakeIo, fakeTracker, repoFiles, root, setBaseSha, src, useTempRoot, withLinearKey } from "./helpers";
 
 useTempRoot();
 
@@ -353,6 +353,17 @@ test("sandbox: nono with the rule's network allowlist, only declared secrets, no
   }
 });
 
+test("sandbox: loopback gives the script its own network namespace, egress still only through the proxy", async () => {
+  const s = setup(() => ({ out: "" }), {}, {}, RULE + "    network: [db.example.com]\n    loopback: true\n");
+  await s.go();
+  expect(s.runs[0]!.profile.linux).toEqual({ af_unix_mediation: "pathname", isolate: { network: true, loopback: true } });
+  expect(s.runs[0]!.profile.network).toEqual({ allow_domain: ["db.example.com"] });
+  setBaseSha("d".repeat(40));
+  const plain = setup(() => ({ out: "" }));
+  await plain.go(T0, "errs");
+  expect(plain.runs[0]!.profile.linux.isolate).toBeUndefined();
+});
+
 test("sandbox: nono even for a repo whose sessions run without it", async () => {
   const s = setup(() => ({ out: "" }), {}, { defaults: { sandbox: "none" } });
   await s.go();
@@ -416,7 +427,7 @@ test("autoLabel: min<Fact> is a floor, other keys equality, any rule matching la
 
 test("repo config: intake rules get defaults and every problem is listed", () => {
   const file = (text: string) => [{ name: "config.yaml", regular: true, size: text.length, text }];
-  expect(parseRepoConfig(file(RULE)).intake).toEqual([{ name: "errs", run: ".tender/intake/errs.sh", args: [], every: "1h", maxPerRun: 2, secrets: [], network: [], autoLabel: [{ minEvents: 100, level: "error" }], labels: [], recheck: true, recheckAfter: "24h" }]);
+  expect(parseRepoConfig(file(RULE)).intake).toEqual([{ name: "errs", run: ".tender/intake/errs.sh", args: [], every: "1h", maxPerRun: 2, secrets: [], network: [], autoLabel: [{ minEvents: 100, level: "error" }], labels: [], recheck: true, recheckAfter: "24h", private: false, loopback: false }]);
   expect(parseRepoConfig(file(RULE + "    labels: [sentry, needs triage]\n")).intake[0]!.labels).toEqual(["sentry", "needs triage"]);
   expect(parseRepoConfig(file(RULE + '    args: [--org, acme, "a b; $(x)"]\n')).intake[0]!.args).toEqual(["--org", "acme", "a b; $(x)"]);
   for (const a of ["--org", "[1]", `[${"x".repeat(201)}]`, '["a\\nb"]', `[${Array(21).fill("a").join(", ")}]`, '["a\\x85b"]']) expect(() => parseRepoConfig(file(RULE + `    args: ${a}\n`))).toThrow("intake[0] (errs).args: at most 20 strings");
@@ -424,6 +435,38 @@ test("repo config: intake rules get defaults and every problem is listed", () =>
   const bad = "intake:\n  - name: Errs\n    run: ../x.sh\n    every: 1w\n    secrets: [GH_TOKEN, LINEAR_API_KEY]\n    network: [https://x.io]\n    maxPerRun: 0\n    nope: 1\n";
   expect(() => parseRepoConfig(file(bad))).toThrow(/name[\s\S]*run[\s\S]*every[\s\S]*maxPerRun[\s\S]*secrets[\s\S]*network/);
   expect(() => parseRepoConfig(file(bad))).toThrow("intake[0] (Errs).nope: unknown key");
+  expect(parseRepoConfig(file(RULE + "    private: true\n    loopback: true\n")).intake[0]).toMatchObject({ private: true, loopback: true });
+  expect(() => parseRepoConfig(file(RULE + "    private: yes please\n"))).toThrow("intake[0] (errs).private: boolean");
+  for (const c of ["SECURITY", "PERFORMANCE,security"]) expect(() => parseRepoConfig(file(RULE.replace("level: error }", `categories: "${c}" }`)))).toThrow("intake[0] (errs).autoLabel: a SECURITY finding never gets the ready label");
+  expect(parseRepoConfig(file(RULE.replace("{ minEvents: 100, level: error }", "{ categories: PERFORMANCE }"))).intake[0]!.autoLabel).toEqual([{ categories: "PERFORMANCE" }]);
+});
+
+test("autoLabel: a finding whose categories list SECURITY never gets the ready label, whatever the rules", () => {
+  expect(autoLabels([{ level: "WARN" }], { level: "WARN", categories: "SECURITY" })).toBe(false);
+  expect(autoLabels([{ name: "rls_disabled_in_public" }], { name: "rls_disabled_in_public", categories: "PERFORMANCE, security" })).toBe(false);
+  expect(autoLabels([{ level: "WARN" }], { level: "WARN", categories: "PERFORMANCE" })).toBe(true);
+});
+
+test("private: a rule refuses a public or unknown GitHub repo before running its script, asking gh once per run", async () => {
+  const yaml = RULE.replace("  - name: errs", "  - name: errs\n    private: true") + "  - name: more\n    run: .tender/intake/errs.sh\n    private: true\n";
+  for (const [i, [vis, files]] of ([["PUBLIC", false], ["", false], ["PRIVATE", true], ["INTERNAL", true]] as const).entries()) {
+    const s = setup(() => ({ out: line(`k${vis}`) }), {}, { intake: { enabled: ["acme/web:errs", "acme/web:more"], host: "box" } }, yaml);
+    const run = s.io.run;
+    const asked: string[][] = [];
+    s.io.run = (argv, ...rest) => (argv.includes("visibility") ? (asked.push(argv), Promise.resolve({ code: 0, out: `${vis}\n`, err: "" })) : run(argv, ...rest));
+    await s.go(T0 + i * 2 * HOUR);
+    expect(asked).toEqual([["gh", "repo", "view", "acme/web", "--json", "visibility", "--jq", ".visibility"]]);
+    expect(s.runs.length > 0).toBe(files);
+    if (!files) expect(s.logs).toContain(`intake acme/web:errs: failed: private: acme/web is ${vis || "of unknown visibility"}, so this rule files nothing there`);
+  }
+});
+
+test("private: Linear trackers are never public, so no visibility lookup", async () => {
+  await withLinearKey(async () => {
+    const s = setup(() => ({ out: "" }), {}, { sources: [src({ tracker: "linear", team: "ENG" })] }, RULE + "    private: true\ntracker:\n  linear:\n    project: Web\n");
+    await s.go();
+    expect(s.runs).toHaveLength(1);
+  });
 });
 
 test("host config: intake names repos in repos and one host", () => {

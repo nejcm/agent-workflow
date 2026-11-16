@@ -51,6 +51,10 @@ export interface IntakeRule {
   labels: string[];
   recheck: boolean;
   recheckAfter: string;
+  /** Files only into a private tracker: never a public GitHub repo. */
+  private: boolean;
+  /** The script gets its own network namespace with a usable loopback; egress still only through the `network` proxy. */
+  loopback: boolean;
 }
 
 /** Host and repo settings combined for one start or merge decision. */

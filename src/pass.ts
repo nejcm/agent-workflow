@@ -251,16 +251,27 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
   });
 }
 
-// Promoted from GitHub's view and tender's own state only. `<ID>.ready` is the head it was promoted at; ` pending` before that move,
-// ` demote <why>` before the move back, ` held` while a ticket moved back by hand stays In Review at that head.
+/** `<ID>.ready`: the head tender moved the ticket to Ready to merge at, or a move in flight, or a human's move back held at that head. */
+export type ReadyMark = { head: string } & ({ step: "moved" | "pending" | "held" } | { step: "demote"; why: string });
+
+export function readReady(f: string): ReadyMark | undefined {
+  if (!existsSync(f)) return;
+  const [head = "", step, ...why] = readFileSync(f, "utf8").split(" ");
+  if (step === "demote") return { head, step, why: why.join(" ") };
+  // An unknown suffix is never shown as ready nor held.
+  return { head, step: step === undefined ? "moved" : step === "held" ? "held" : "pending" };
+}
+
+const writeReady = (io: Io, f: string, m: ReadyMark) => put(io, f, m.step === "moved" ? m.head : m.step === "demote" ? `${m.head} demote ${m.why}` : `${m.head} ${m.step}`);
+
+// Promoted from GitHub's view and tender's own state only.
 async function syncReady(t: Ticket, tr: Tracker, io: Io, dir: string, pr: any, clear: boolean | undefined, done: () => Promise<boolean>) {
   const f = join(dir, `${t.id}.ready`);
   if (pr.state === "MERGED") return;
-  const saved = existsSync(f) ? readFileSync(f, "utf8") : undefined;
-  const [sha, tag, ...owed] = saved?.split(" ") ?? [];
+  const m = readReady(f);
   if (t.readyToMerge) {
     // Moved there by hand: the head first seen counts. The listing confirms a pending move.
-    const at = tag === "held" || !sha ? pr.headRefOid : sha;
+    const at = !m?.head || m.step === "held" ? pr.headRefOid : m.head;
     const why =
       pr.state !== "OPEN" ? `PR is ${pr.state}`
       : pr.isDraft ? "PR is a draft"
@@ -270,24 +281,24 @@ async function syncReady(t: Ticket, tr: Tracker, io: Io, dir: string, pr: any, c
       : pr.reviewDecision === "CHANGES_REQUESTED" ? "changes requested"
       : clear === false ? "new feedback"
       // A failed move back after delivered feedback: this poll finds nothing left to deliver.
-      : tag === "demote" ? owed.join(" ")
+      : m?.step === "demote" ? m.why
       : undefined;
-    if (!why) return void (saved !== at && put(io, f, at));
-    put(io, f, `${at} demote ${why}`);
+    if (!why) return void ((m?.step === "moved" && m.head === at) || writeReady(io, f, { head: at, step: "moved" }));
+    writeReady(io, f, { head: at, step: "demote", why });
     await tr.toReview(t, `back in review, ${why}: ${pr.url}`);
     return remove(io, f);
   }
-  // Tender's own move back is marked `demote` first, so a bare head here means a human moved it back.
-  if (sha === pr.headRefOid && (tag === undefined || tag === "held")) return void (tag || put(io, f, `${sha} held`));
+  // Tender's own move back is marked `demote` first, so `moved` here means a human moved it back.
+  if (m?.step === "held" && m.head === pr.headRefOid) return;
+  if (m?.step === "moved" && m.head === pr.headRefOid) return writeReady(io, f, { head: m.head, step: "held" });
   if (clear !== true || !prReady(pr) || !(await done())) return remove(io, f);
   // Before the move, so a move that lands without its comment still has a head to demote from.
-  put(io, f, pr.headRefOid + PENDING);
+  writeReady(io, f, { head: pr.headRefOid, step: "pending" });
   await tr.toReadyToMerge!(t, `ready to merge: ${pr.url}`);
-  put(io, f, pr.headRefOid);
+  writeReady(io, f, { head: pr.headRefOid, step: "moved" });
 }
 
 const IDLE_SECS = 5 * 60;
-const PENDING = " pending";
 
 export const worktreeIds = (dir: string) => subdirs(dir).filter((d) => SAFE_ID.test(d));
 

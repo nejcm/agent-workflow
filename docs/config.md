@@ -22,6 +22,8 @@ Settings in `tender.json` and in a repo's `.tender/config.yaml`. Upgrading from 
 | `defaults` / `repos[].autoMerge` | `off` | the ceiling for the repo's request and its `trust` rules: `off` \| `shadow` \| `intelligent` \| `all`, see [Auto-merge](auto-merge.md#auto-merge) |
 | `defaults` / `repos[].criticalPaths` | `[]` | a floor of extra globs never auto-merged, added to the built-in ones and the repo's; a per-repo list replaces the `defaults` one |
 | `defaults` / `repos[].feedbackAuthors` | `[]` | GitHub logins / Linear emails (case-insensitive) whose replies answer agent questions and whose PR reviews and comments go back to the session, see [Questions](lifecycle.md#questions) and [PR feedback](lifecycle.md#pr-feedback); a per-repo list replaces the `defaults` one |
+| `intake.enabled` | none | `"owner/name:rule"` entries; only these [intake](intake.md) rules run |
+| `intake.host` | required with `intake` | the one host that runs intake |
 | `sources[].name` | required | `[a-z0-9-]`, unique |
 | `sources[].tracker` | required | `github` \| `linear` |
 | `readyLabel` | `agent` | ready label, GitHub and Linear |
@@ -76,9 +78,10 @@ tracker:
 | `prompts.byLabel` | `{}` | ticket label to prompt file; the first entry whose label the ticket has wins, else `prompts.default` |
 | `tracker.linear.project` | none | the Linear project whose tickets come here when they name no repo themselves, see [Which repo a ticket goes to](lifecycle.md#which-repo-a-ticket-goes-to) |
 | `tracker.linear.team` | none | a Linear team key, only checked: a ticket routed here from another team's source is logged once |
+| `intake` | `[]` | up to 20 [intake](intake.md) rules: `name`, `run` (required), `every` (`1h`), `maxPerRun` (`3`, at most 20), `secrets` (`[]`), `network` (`[]`), `autoLabel` (`[]`), `recheck` (`true`), `recheckAfter` (`24h`); each runs only when `tender.json` enables it |
 
 `tender` reads `.tender/` only from `origin/<base>` in its own clone (`git ls-tree` and `git cat-file` on that commit, fetched before each start and once per poll before merge decisions or Linear project routing), never from a session clone, which the agent can write. A repo's config changes only when a commit to the base branch changes it; it is cached per base commit. Each file must be a regular file of at most 64 KiB, prompt files must be named `[a-z0-9-]+.md`, and unknown keys are errors. If it is invalid, that repo starts no tickets: `tender` logs the errors once per base commit and posts one `tender: not started` comment per base commit on the next ticket that names that repo and would have started (recorded in `<workspaceRoot>/.invalid-config/<owner>/<name>`). Meanwhile Linear tickets that rely on their project wait, with no comment. `.tender` itself must be a directory, not a symlink. Run `bun tender.ts check [path]` (default `.`) before committing: it validates `<path>/.tender/` from the working tree, prints the repo's settings with defaults filled in (the host's `autoMerge` ceiling and `criticalPaths` from `tender.json` still apply on top) and its tracker target (`tracker`, `null` if none), and exits non-zero if it is invalid.
 
 Prompt placeholders: `{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{testCmd}} {{tests}} {{repo}} {{planStep}}`. `{{tests}}` is `` `<testCmd>` ``, or "the project's tests (…)" when `testCmd` is unset; `{{testCmd}}` is then empty.
 
-CLI: `bun tender.ts <run|once|status|watch|tail|check|open|resume> [path|ID] [--dry-run] [--json] [--interval s] [--plain] [-n N] [--no-follow] [--tool t] [--exec] [--config tender.json]`.
+CLI: `bun tender.ts <run|once|status|watch|tail|check|open|resume|intake> [path|ID|rule] [--dry-run] [--json] [--interval s] [--plain] [-n N] [--no-follow] [--tool t] [--exec] [--config tender.json]`.

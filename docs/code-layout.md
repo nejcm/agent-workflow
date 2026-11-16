@@ -1,6 +1,6 @@
 # Code layout
 
-- `tender.ts`: CLI entry (`run`, `once`, `status`, `watch`, `tail`, `open`, `resume`, `check`).
+- `tender.ts`: CLI entry (`run`, `once`, `status`, `watch`, `tail`, `open`, `resume`, `intake`, `check`).
 - `src/types.ts`: shared types (`Config`, `Repo`, `Source`, `Ticket`, `Tracker`, `Io`).
 - `src/config.ts`: `tender.json` parsing and the repo allowlist.
 - `src/repo-config.ts`: a repo's `.tender/` read from its base branch, validated, cached per commit and combined with the host settings.
@@ -14,6 +14,8 @@
 - `src/agents.ts`: the Claude and Codex adapters: launch env and command, config dirs and transcript files, live state (Claude's session records, read as untrusted files; the Codex hook state file).
 - `src/launcher.ts`: base clone, session clone, prompt and launcher script, tmux window, stop and resume.
 - `src/handoff.ts`: `open`: ticket lookup, transcript copy into your own store, the command per tool.
+- `src/intake.ts`: `intake`: the script protocol, the sandboxed run in a fresh clone, dedupe, filing, open-ticket updates and recheck.
+- `intake/`: example intake scripts that repos copy into `.tender/intake/`.
 - `src/db.ts`: `tender.db` (bun:sqlite, WAL): ordered SQL migrations and the best-effort event recorder.
 - `src/pass.ts`: one poll: cleanup, start ready tickets by priority, reconcile.
 - `src/status.ts`: per-worktree status rows, the live-state snapshot and the table.

@@ -1,6 +1,6 @@
 import { canonical, sameRepo } from "../github";
 import type { Check, GitHubSource, Io, Ticket, Tracker } from "../types";
-import { hasLabel, labelPriority, nonEmpty, ours, read, write } from "../util";
+import { hasLabel, hasMarker, labelPriority, nonEmpty, ours, read, write } from "../util";
 
 export function parseGitHub(r: Record<string, any>, at: string, check: Check) {
   const s = { inProgressLabel: r.inProgressLabel ?? "in-progress", inReviewLabel: r.inReviewLabel ?? "in-review", readyToMergeLabel: r.readyToMergeLabel ?? "ready-to-merge" };
@@ -103,6 +103,19 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
       return n;
     },
     createTicket: async (from, title, body) => (await create(from, title, body)).trim(),
+    fileTicket: async (target, title, body, labels) => (await write(io, ["gh", "issue", "create", "--repo", target.repo, ...labels.flatMap((x) => ["--label", x]), "--title", title, "--body", body])).trim(),
+    async findMarker(target, marker) {
+      const found: any[] = JSON.parse(await read(io, ["gh", "issue", "list", "--repo", target.repo, "--state", "all", "--limit", "100", "--search", `${JSON.stringify(marker)} in:body`, "--json", "url,body"]));
+      const url = found.find((i) => typeof i.body === "string" && hasMarker(i.body, marker))?.url;
+      // A full page without the exact line may hide it on the next one; filing then could duplicate.
+      if (!url && found.length >= 100) throw new Error(`gh issue list: 100 issues mention ${marker}, none exactly; cannot rule out a duplicate`);
+      return url;
+    },
+    // Label first: a reopened ticket that still had it could be claimed before the removal lands.
+    async reopen(t) {
+      await write(io, ["gh", "issue", "edit", t.ref, "--repo", t.repo!, "--remove-label", l.readyLabel]);
+      await write(io, ["gh", "issue", "reopen", t.ref, "--repo", t.repo!]);
+    },
     listPhases: async (parent) =>
       (JSON.parse(await read(io, ["gh", "api", `repos/${parent.repo}/issues/${parent.ref}/sub_issues?per_page=100`])) as any[]).map((i) => ({ ref: String(i.number), title: i.title })),
     setPhase: (parent, ref, status) =>

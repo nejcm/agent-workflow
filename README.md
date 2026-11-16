@@ -51,7 +51,8 @@ Move a GitHub issue or Linear ticket to **ready**, and `tender` starts a Claude 
 - `open <ID>`: take a session over in Claude Code, Codex, T3 Code or your editor, outside the sandbox ([Hand-off](docs/hand-off.md#hand-off)); `resume <ID>` gives it back.
 - `tmux attach -t tender`: the live terminals, where you can steer an agent directly.
 
-Planned, not built: signal intake (perf regressions, Supabase advisors, slow queries) in [docs/improvements.md](docs/improvements.md#signal-intake).
+**[Intake](docs/intake.md)**
+- `intake`: repo scripts that print JSON lines become deduped, sanitized tickets, unlabelled until a rule's `autoLabel` trusts them, and rechecked after they are Done. Runs on one host, on a 15-minute timer, in nono.
 
 ## How it works
 
@@ -64,7 +65,7 @@ Every poll (default 60 s), `tender` looks for ready tickets (the `agent` label p
 
 ## History: `tender.db`
 
-`run`, `once` and `open` append an event (start, claim, review, ready-to-merge, merged, done, park, stall, feedback-round, gate, handoff) to `<workspaceRoot>/tender.db`, a SQLite file in WAL mode. It is history for later stats, never state: the tracker stays the truth. It sits outside every session clone and is never granted to the sandbox. A failed write is logged and skipped; `--dry-run` writes nothing. Safe to delete at any time (with its `-wal` and `-shm` files); the next event creates a fresh one.
+`run`, `once` and `open` append an event (start, claim, review, ready-to-merge, merged, done, park, stall, feedback-round, gate, handoff) to `<workspaceRoot>/tender.db`, a SQLite file in WAL mode. It is history for later stats, never state: the tracker stays the truth. It sits outside every session clone and is never granted to the sandbox. A failed write is logged and skipped; `--dry-run` writes nothing. Safe to delete at any time (with its `-wal` and `-shm` files); the next event creates a fresh one. [Intake](docs/intake.md) also keeps its seen keys and last runs there; without them the next intake run searches the tracker for each key again before filing.
 
 ## Docs
 
@@ -76,6 +77,7 @@ Every poll (default 60 s), `tender` looks for ready tickets (the `agent` label p
 - [Watching sessions](docs/watching.md): `status`, `watch`, `tail`, live state
 - [Config reference](docs/config.md): `tender.json` and `.tender/config.yaml`
 - [Clones, sandbox and cleanup](docs/sandbox.md): isolation details
+- [Intake](docs/intake.md): scripts that file tickets from signals
 - [Upgrading](docs/upgrading.md), [Code layout](docs/code-layout.md)
 - Design notes: [agent questions](docs/agent-questions.md), [known issues](docs/issues.md), [improvements](docs/improvements.md)
 

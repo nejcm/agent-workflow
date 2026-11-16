@@ -23,7 +23,13 @@ const linearLink = (w: string) =>
   [w, ...[...w.matchAll(/http/gi)].map((m) => w.slice(m.index))].some((c) => [host(c), host(`https://${c}`)].some((h) => h.endsWith("linear.app")));
 // Linear turns its profile URLs into mentions, so a word that resolves to linear.app is replaced whole (never decoded,
 // which could reintroduce controls); a zero-width space follows `@`. So filing pings no one.
-const unmention = (s: string) => s.replace(/\S+/g, (w) => (linearLink(w) ? "[linear[.]app link removed]" : w)).replace(/(?<!\w)@(?=\w)/g, "@\u200b");
+export const unmention = (s: string) => s.replace(/\S+/g, (w) => (linearLink(w) ? "[linear[.]app link removed]" : w)).replace(/(?<!\w)@(?=\w)/g, "@\u200b");
+
+/** Untrusted ticket text: one-line title of at most 120 chars, body of at most 4000, controls stripped, mentions and Linear links neutralized. */
+export const sanitized = (title: string, body: string) => ({
+  title: unmention(clean(title, 120)).slice(0, 120),
+  body: unmention(body.split("\n").map((l) => strip(l).trimEnd()).join("\n").trim().slice(0, 4000)).slice(0, 4000),
+});
 
 /** Validates the agent-written findings file and sanitizes each entry; it is untrusted, so a wrong shape throws. */
 export function parseFindings(raw: string): Finding[] {
@@ -32,9 +38,8 @@ export function parseFindings(raw: string): Finding[] {
   return a.flatMap((f, i) => {
     const ok = f && typeof f === "object" && Object.keys(f).every((k) => k === "title" || k === "body") && typeof f.title === "string" && typeof (f.body ?? "") === "string";
     if (!ok) throw new Error(`findings[${i}]: invalid`);
-    const title = unmention(clean(f.title, 120)).slice(0, 120);
-    const body = unmention((f.body ?? "").split("\n").map((l: string) => strip(l).trimEnd()).join("\n").trim().slice(0, 4000)).slice(0, 4000);
-    return title ? [{ title, body }] : [];
+    const s = sanitized(f.title, f.body ?? "");
+    return s.title ? [s] : [];
   });
 }
 

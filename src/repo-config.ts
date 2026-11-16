@@ -1,13 +1,13 @@
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { AUTO_MERGE } from "./config";
+import { AUTO_MERGE, INTAKE_NAME } from "./config";
 import { baseBranch } from "./github";
-import type { AutoMerge, Io, Repo, RepoConfig, Session } from "./types";
+import type { AutoMerge, Check, IntakeRule, Io, Repo, RepoConfig, Session } from "./types";
 import { GIT, hasLabel, read, TENDER_DIR, write } from "./util";
 
 const MAX_FILE = 64 * 1024;
 const PROMPT = /^[a-z0-9-]+\.md$/;
-const KEYS = ["agent", "testCmd", "planStep", "autoMerge", "criticalPaths", "testPaths", "trust", "escapeHatches", "prompts", "tracker"];
+const KEYS = ["agent", "testCmd", "planStep", "autoMerge", "criticalPaths", "testPaths", "trust", "escapeHatches", "prompts", "tracker", "intake"];
 const MAX_HATCHES = 20;
 const MAX_HATCH_CHARS = 200;
 
@@ -60,6 +60,7 @@ export function parseRepoConfig(entries: Entry[]): RepoConfig {
     escapeHatches: raw.escapeHatches === undefined ? [] : raw.escapeHatches,
     prompts: { default: obj(p) ? p.default : undefined, byLabel: obj(byLabel) ? byLabel : {} },
     tracker: raw.tracker,
+    intake: parseIntake(raw.intake, check),
     files,
   };
   check(["claude", "codex"].includes(c.agent), `agent: "claude" | "codex"`);
@@ -89,6 +90,41 @@ export function parseRepoConfig(entries: Entry[]): RepoConfig {
   if (obj(lt)) check(lt.team === undefined || (str(lt.team) && /^[A-Z0-9]+$/.test(lt.team)), "tracker.linear.team: Linear team key, e.g. ENG");
   if (errs.length) throw new Error(errs.join("\n  "));
   return c;
+}
+
+const INTAKE_KEYS = ["name", "run", "every", "maxPerRun", "secrets", "network", "autoLabel", "recheck", "recheckAfter"];
+export const DURATION = /^([1-9]\d{0,3})([mhd])$/;
+const SECRET = /^[A-Z][A-Z0-9_]{0,63}$/;
+// No gh token and no tracker key ever reach a script; the rest is the environment tender sets itself.
+const RESERVED = /^(GH|GITHUB|LINEAR|TENDER|NONO|CLAUDE|ANTHROPIC|OPENAI|CODEX)_|^(PATH|HOME|LANG|TZ|TMPDIR|TMP|TEMP)$/;
+const DOMAIN = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+const FACT = /^[A-Za-z][A-Za-z0-9_]{0,39}$/;
+const repoPath = (p: unknown) => typeof p === "string" && p.length <= 200 && p.split("/").every((x) => /^[A-Za-z0-9_.-]+$/.test(x) && x !== "." && x !== "..") && !p.startsWith("-");
+
+function parseIntake(raw: unknown, check: Check): IntakeRule[] {
+  if (raw === undefined) return [];
+  const obj = (v: unknown): v is Record<string, any> => !!v && typeof v === "object" && !Array.isArray(v);
+  const list = (v: unknown, ok: (x: unknown) => boolean, max = 20) => Array.isArray(v) && v.length <= max && v.every(ok);
+  check(Array.isArray(raw) && raw.length <= 20, "intake: list of at most 20 rules");
+  if (!Array.isArray(raw)) return [];
+  const rules = raw.map((r, i): IntakeRule => {
+    const at = `intake[${i}]${obj(r) && typeof r.name === "string" ? ` (${r.name})` : ""}`;
+    check(obj(r), `${at}: mapping`);
+    const o: Record<string, any> = obj(r) ? r : {};
+    for (const k of Object.keys(o)) check(INTAKE_KEYS.includes(k), `${at}.${k}: unknown key`);
+    const rule: IntakeRule = { name: o.name, run: o.run, every: o.every ?? "1h", maxPerRun: o.maxPerRun ?? 3, secrets: o.secrets ?? [], network: o.network ?? [], autoLabel: o.autoLabel ?? [], recheck: o.recheck ?? true, recheckAfter: o.recheckAfter ?? "24h" };
+    check(typeof rule.name === "string" && INTAKE_NAME.test(rule.name), `${at}.name: required, [a-z0-9-]`);
+    check(repoPath(rule.run), `${at}.run: required, a path inside the repo`);
+    for (const k of ["every", "recheckAfter"] as const) check(typeof rule[k] === "string" && DURATION.test(rule[k]), `${at}.${k}: duration like 15m, 1h or 1d`);
+    check(Number.isInteger(rule.maxPerRun) && rule.maxPerRun > 0 && rule.maxPerRun <= 20, `${at}.maxPerRun: integer 1-20`);
+    check(list(rule.secrets, (x) => typeof x === "string" && SECRET.test(x) && !RESERVED.test(x)), `${at}.secrets: env var names (no GH_, GITHUB_, LINEAR_ or other reserved names)`);
+    check(list(rule.network, (x) => typeof x === "string" && DOMAIN.test(x)), `${at}.network: list of lowercase host names the script may reach`);
+    check(list(rule.autoLabel, (x) => obj(x) && Object.keys(x).length > 0 && Object.entries(x).every(([k, v]) => FACT.test(k) && (typeof v === "string" || Number.isFinite(v)))), `${at}.autoLabel: list of { fact: value, minFact: number } rules`);
+    check(typeof rule.recheck === "boolean", `${at}.recheck: boolean`);
+    return rule;
+  });
+  check(new Set(rules.map((r) => r.name)).size === rules.length, "intake: rule names must be unique");
+  return rules;
 }
 
 /** The prompt template for a ticket: the first `byLabel` match, else the repo's default, else tender's. */

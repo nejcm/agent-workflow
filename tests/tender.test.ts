@@ -16,6 +16,9 @@ test("parseArgs accepts known commands and flags", () => {
   expect(parseArgs(["open", "PER-1"])).toMatchObject({ cmd: "open", id: "PER-1", tool: undefined });
   expect(parseArgs(["open", "acme/web/PER-1", "--tool", "editor", "--exec"])).toMatchObject({ cmd: "open", id: "acme/web/PER-1", tool: "editor" });
   expect(parseArgs(["resume", "PER-1"])).toMatchObject({ cmd: "resume", id: "PER-1" });
+  expect(parseArgs(["intake"])).toMatchObject({ cmd: "intake", id: undefined });
+  expect(parseArgs(["intake", "acme/web:errs", "--dry-run"])).toMatchObject({ cmd: "intake", id: "acme/web:errs" });
+  expect(parseArgs(["intake", "a", "b"])).toBeUndefined();
 });
 
 test("parseArgs rejects unknown flags, stray args and out-of-range numbers", () => {

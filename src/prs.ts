@@ -44,7 +44,7 @@ export function classify(pr: Pr, staleDays: number, now: number) {
 }
 
 /** The ticket id of a same-repo `agent/<ID>` PR, else undefined. */
-export const agentTicket = (pr: Pr) => {
+export const agentTicket = (pr: Pick<Pr, "headRefName" | "isCrossRepository">) => {
   const id = /^agent\/(.+)$/.exec(pr.headRefName)?.[1];
   return !pr.isCrossRepository && id && SAFE_ID.test(id) ? id : undefined;
 };

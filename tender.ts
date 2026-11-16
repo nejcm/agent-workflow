@@ -9,6 +9,7 @@ import { events } from "./src/db";
 import { handoff, shellLine, ticketClone, type Tool, TOOLS } from "./src/session/handoff";
 import { intake } from "./src/intake";
 import { prs } from "./src/prs";
+import { DEFAULT_DAYS, stats, statsTable } from "./src/stats";
 import { cloned, cloneAll, resume } from "./src/session/launcher";
 import { CRITICAL_PATHS, TEST_PATHS } from "./src/review/merge";
 import { makeTracker, pass } from "./src/pass";
@@ -84,8 +85,9 @@ const USAGE = `usage: bun tender.ts <command> [--config tender.json]
   resume <ID | owner/repo/ID>
   intake [owner/repo:rule | rule] [--dry-run]
   prs [--dry-run]
+  stats [--days 90] [--json]
   check [path]`;
-const VALUED = ["--config", "--interval", "-n", "--tool"];
+const VALUED = ["--config", "--interval", "-n", "--tool", "--days"];
 const FLAGS = [...VALUED, "--dry-run", "--json", "--no-follow", "--plain", "--exec"];
 const TARGETED = ["tail", "open", "resume"];
 
@@ -114,20 +116,25 @@ export function parseArgs(argv: string[]) {
   const interval = Number(opt("--interval") ?? 2);
   const n = Number(opt("-n") ?? 20);
   const tool = opt("--tool");
+  const days = Number(opt("--days") ?? DEFAULT_DAYS);
   const ok =
     argv.every((a, i) => !a.startsWith("-") || isValue(i) || FLAGS.includes(a)) &&
-    ["run", "once", "status", "watch", "check", "intake", "prs", ...TARGETED].includes(cmd ?? "") &&
+    ["run", "once", "status", "watch", "check", "intake", "prs", "stats", ...TARGETED].includes(cmd ?? "") &&
     !extra.length &&
     (cmd === "check" || cmd === "intake" || TARGETED.includes(cmd!) === (id !== undefined)) &&
     (tool === undefined || (cmd === "open" && TOOLS.includes(tool as Tool))) &&
-    !(argv.includes("--dry-run") && ["open", "resume"].includes(cmd!)) &&
+    !(argv.includes("--dry-run") && ["open", "resume", "stats"].includes(cmd!)) &&
+    (opt("--days") === undefined || cmd === "stats") &&
+    Number.isInteger(days) &&
+    days >= 1 &&
+    days <= 3650 &&
     Number.isFinite(interval) &&
     interval >= 1 &&
     Number.isInteger(n) &&
     n >= 1 &&
     n <= 10_000 &&
     opt("--config") !== "";
-  return ok ? { cmd: cmd!, id, interval, n, tool: tool as Tool | undefined, path: resolve(opt("--config") ?? "tender.json") } : undefined;
+  return ok ? { cmd: cmd!, id, interval, n, days, tool: tool as Tool | undefined, path: resolve(opt("--config") ?? "tender.json") } : undefined;
 }
 
 async function main(argv: string[]) {
@@ -136,7 +143,7 @@ async function main(argv: string[]) {
     console.error(USAGE);
     process.exit(2);
   }
-  const { cmd, id, interval, n, tool, path } = args;
+  const { cmd, id, interval, n, days, tool, path } = args;
   if (cmd === "check") process.exit(check(resolve(id ?? ".")) ? 0 : 1);
   let cfg: Config;
   try {
@@ -148,6 +155,10 @@ async function main(argv: string[]) {
   const dry = argv.includes("--dry-run");
   const log = (m: string) => console.log(`${new Date().toISOString()} ${m}`);
   const io: Io = { run: spawnRun, fetch, dry, log, home: homedir(), event: events(cfg, dry, log) };
+  if (cmd === "stats") {
+    const r = await stats(cfg, { ...io, log: (m) => console.error(m) }, { days });
+    return console.log(argv.includes("--json") ? JSON.stringify(r, null, 2) : statsTable(r));
+  }
   if (cmd === "status") return console.log(argv.includes("--json") ? JSON.stringify(await snapshot(cfg, io), null, 2) : await status(cfg, io));
   if (cmd === "watch")
     return watch({

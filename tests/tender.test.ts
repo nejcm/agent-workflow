@@ -21,6 +21,8 @@ test("parseArgs accepts known commands and flags", () => {
   expect(parseArgs(["intake", "a", "b"])).toBeUndefined();
   expect(parseArgs(["prs", "--dry-run"])).toMatchObject({ cmd: "prs", id: undefined });
   expect(parseArgs(["prs", "acme/web"])).toBeUndefined();
+  expect(parseArgs(["stats", "--json"])).toMatchObject({ cmd: "stats", days: 90 });
+  expect(parseArgs(["stats", "--days", "30"])).toMatchObject({ cmd: "stats", days: 30 });
 });
 
 test("parseArgs rejects unknown flags, stray args and out-of-range numbers", () => {
@@ -53,6 +55,12 @@ test("parseArgs rejects unknown flags, stray args and out-of-range numbers", () 
     ["tail", "PER-1", "-n", "100000"],
     ["tail", "PER-1", "-n", "-3"],
     ["status", "--config"],
+    ["stats", "--days", "0"],
+    ["stats", "--days", "1.5"],
+    ["stats", "--days"],
+    ["stats", "--dry-run"],
+    ["stats", "acme/web"],
+    ["prs", "--days", "7"],
   ])
     expect(parseArgs(argv)).toBeUndefined();
 });

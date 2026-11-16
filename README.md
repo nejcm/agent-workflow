@@ -68,7 +68,7 @@ Every poll (default 60 s), `tender` looks for ready tickets (the `agent` label p
 
 ## History: `tender.db`
 
-`run`, `once` and `open` append an event (start, claim, review, ready-to-merge, merged, done, park, stall, feedback-round, gate, handoff; `prs` adds pr-closed) to `<workspaceRoot>/tender.db`, a SQLite file in WAL mode. It is history for later stats, never state: the tracker stays the truth. It sits outside every session clone and is never granted to the sandbox. A failed write is logged and skipped; `--dry-run` writes nothing. Safe to delete at any time (with its `-wal` and `-shm` files); the next event creates a fresh one. [Intake](docs/intake.md) also keeps its seen keys and last runs there; without them the next intake run searches the tracker for each key again before filing.
+`run`, `once` and `open` append an event (start, claim, review, ready-to-merge, merged, done, park, stall, feedback-round, gate, handoff; `intake` adds intake-filed, judge, recheck; `prs` adds pr-closed) to `<workspaceRoot>/tender.db`, a SQLite file in WAL mode. It is history for later stats, never state: the tracker stays the truth. It sits outside every session clone and is never granted to the sandbox. A failed write is logged and skipped; `--dry-run` writes nothing. Safe to delete at any time (with its `-wal` and `-shm` files); the next event creates a fresh one. [Intake](docs/intake.md) also keeps its seen keys and last runs there; without them the next intake run searches the tracker for each key again before filing.
 
 ## Docs
 
@@ -82,6 +82,7 @@ Every poll (default 60 s), `tender` looks for ready tickets (the `agent` label p
 - [Clones, sandbox and cleanup](docs/sandbox.md): isolation details
 - [Intake](docs/intake.md): scripts that file tickets from signals
 - [PR sweep](docs/prs.md): `tender prs`, orphan agent PRs and the weekly report
+- [Trust signals](docs/stats.md): `tender stats`, per-path merge, revert and shadow numbers and recommendations
 - [Upgrading](docs/upgrading.md), [Code layout](docs/code-layout.md)
 - Design notes: [agent questions](docs/agent-questions.md), [known issues](docs/issues.md), [improvements](docs/improvements.md)
 

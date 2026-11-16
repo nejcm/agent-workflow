@@ -51,11 +51,11 @@ type Trust = Pick<Session, "autoMerge" | "ceiling" | "trust">;
 type PrFile = NonNullable<PrFacts["files"]>[number];
 const rank = (m: AutoMerge) => AUTO_MERGE.indexOf(m);
 const paths = (f: PrFile) => [f.filename, ...(f.previous_filename ? [f.previous_filename] : [])];
-const rule = (s: Trust, path: string) => s.trust.find((t) => t.paths.some((g) => globRe(g).test(path)));
+export const trustRule = (s: Pick<Session, "trust">, path: string) => s.trust.find((t) => t.paths.some((g) => globRe(g).test(path)));
 
 /** The lowest mode across the PR's files and old paths, capped by the host; without files, the highest any file could get. */
 export function prMode(s: Trust, files?: PrFile[]): AutoMerge {
-  const ranks = (files ?? []).flatMap(paths).map((p) => rank(rule(s, p)?.autoMerge ?? s.autoMerge));
+  const ranks = (files ?? []).flatMap(paths).map((p) => rank(trustRule(s, p)?.autoMerge ?? s.autoMerge));
   const r = !files ? Math.max(rank(s.autoMerge), ...s.trust.map((t) => rank(t.autoMerge))) : ranks.length ? Math.min(...ranks) : rank(s.autoMerge);
   return AUTO_MERGE[Math.min(r, rank(s.ceiling))]!;
 }
@@ -90,7 +90,7 @@ export const checkState = (c: any) =>
 export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Session, "autoMerge" | "ceiling" | "trust" | "criticalPaths" | "testPaths" | "baseBranch">, ticketLabels: string[] = []): { merge: boolean | "wait"; reason: string } {
   const no = (reason: string) => ({ merge: false, reason });
   const mode = prMode(s, pr.files);
-  const offAt = pr.files?.flatMap(paths).find((p) => rule(s, p)?.autoMerge === "off");
+  const offAt = pr.files?.flatMap(paths).find((p) => trustRule(s, p)?.autoMerge === "off");
   if (mode === "off") return no(offAt ? `trust sets ${offAt} to off` : "autoMerge is off");
   if (pr.isCrossRepository) return no("PR is from a fork");
   if (pr.baseRefName !== s.baseBranch) return no(`PR targets ${pr.baseRefName}, not ${s.baseBranch}`);

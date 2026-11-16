@@ -240,10 +240,15 @@ async function sweep(io: Io, db: Database, save: Save, tr: Tracker, repo: string
   for (const row of rows(db, id).filter((x) => ["open", "reopened", "done", "reopening"].includes(x.state))) {
     const t = ticketAt(row.ticket_url!, repo);
     if (!t) continue;
+    const recorded = (state: "gone" | "still") => io.event?.("recheck", repo, t.id, { rule: id, key: row.key, state }, `${id}:${row.key}`);
     const st = await tr.closed(t.id, repo);
     if (!st) {
       if (row.state === "done") set(row.key, "open");
-      if (row.state === "reopening") set(row.key, "reopened");
+      // Open while reopening: tender's reopen may have landed; without its marked comment it never got that far, so a human reopened it.
+      if (row.state === "reopening") {
+        set(row.key, "reopened");
+        if (await rechecked(tr, t, recheckMarker(id, row.key))) recorded("still");
+      }
       continue;
     }
     if (st === "canceled" || !rule.recheck || row.state === "reopened") {
@@ -254,6 +259,7 @@ async function sweep(io: Io, db: Database, save: Save, tr: Tracker, repo: string
     if (row.state === "reopening") {
       await reopenOnce(tr, t, m, id, "");
       set(row.key, "reopened");
+      recorded("still");
       continue;
     }
     const doneAt = row.state === "done" ? row.done_at! : ((await mergedAt(io, repo, t.id)) ?? iso);
@@ -269,11 +275,13 @@ async function sweep(io: Io, db: Database, save: Save, tr: Tracker, repo: string
       io.log(`intake ${id}: recheck ${row.key} (${t.id}): ${state}`);
       if (state === "gone") {
         set(row.key, "closed");
+        recorded("gone");
         continue;
       }
       set(row.key, "reopening");
       await reopenOnce(tr, t, m, id, detail);
       set(row.key, "reopened");
+      recorded("still");
     } catch (e) {
       io.log(`intake ${id}: recheck ${row.key} failed: ${(e as Error).message}`);
     }

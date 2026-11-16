@@ -438,3 +438,35 @@ test("linear adapter: a ticket assigned to another user carries their name; unas
   expect(queries.filter((q) => q.includes("viewer"))).toHaveLength(1);
   expect(LINEAR_ISSUES).toContain("assignee { id name }");
 });
+
+test("linear adapter: intake markers match whole lines only; reopen drops the ready label before Todo and stops if it cannot", async () => {
+  const m = "tender-intake: acme/web:errs:a";
+  let removed = true;
+  let more = false;
+  const bodies: any[] = [];
+  const { io } = fakeIo();
+  io.fetch = (async (_url: string, init: any) => {
+    const b = JSON.parse(init.body);
+    bodies.push(b);
+    if (b.query.includes("description: { contains")) return Response.json({ data: { issues: { nodes: [{ url: "u-abc", description: `${m}bc` }, { url: "u-quoted", description: `see ${m}` }, ...(more ? [] : [{ url: "u-a", description: `x\n${m}` }])], pageInfo: { hasNextPage: more } } } });
+    if (b.query.includes("issueLabels")) return Response.json({ data: { issueLabels: { nodes: [{ id: "l-agent", parent: null }] } } });
+    if (b.query.includes("issueRemoveLabel")) return Response.json({ data: { issueRemoveLabel: { success: removed } } });
+    if (b.query.includes("workflowStates")) return Response.json({ data: { workflowStates: { nodes: [{ id: "s-todo", name: "Todo" }] } } });
+    return Response.json({ data: { issueUpdate: { success: true } } });
+  }) as any;
+  const t = { id: "ENG-1", ref: "ENG-1", title: "t", body: "", url: "u" };
+  await withLinearKey(async () => {
+    const tr = linear(lin(config({ sources: [src({ tracker: "linear", team: "ENG" })] })), "box", io);
+    expect(await tr.findMarker({ repo: "acme/web" }, m)).toBe("u-a");
+    more = true;
+    await expect(tr.findMarker({ repo: "acme/web" }, m)).rejects.toThrow("cannot rule out a duplicate");
+    more = false;
+    await tr.reopen(t);
+    const mutations = bodies.filter((b) => b.query.startsWith("mutation")).map((b) => /\{ (\w+)\(/.exec(b.query)![1]);
+    expect(mutations).toEqual(["issueRemoveLabel", "issueUpdate"]);
+    removed = false;
+    bodies.length = 0;
+    await expect(tr.reopen(t)).rejects.toThrow("issueRemoveLabel: not successful");
+    expect(bodies.some((b) => b.query.includes("issueUpdate"))).toBe(false);
+  });
+});

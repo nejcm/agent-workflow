@@ -14,7 +14,7 @@ const count = (db: Database) => db.query<{ n: number }, []>("SELECT count(*) AS 
 test("a new db is migrated to the current version in WAL mode", () => {
   const db = openDb(file());
   expect(schemaVersion(db)).toBe(MIGRATIONS.length);
-  expect(tables(db)).toEqual(["events", "intake_seen", "schema_version"]);
+  expect(tables(db)).toEqual(["events", "intake_runs", "intake_seen", "schema_version"]);
   expect(db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get()!.journal_mode).toBe("wal");
   db.close();
   const again = openDb(file());

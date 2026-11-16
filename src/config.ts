@@ -5,6 +5,7 @@ import { TRACKERS } from "./trackers";
 import { validBranch } from "./util";
 
 const NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
+export const INTAKE_NAME = NAME;
 
 // Owner may not start with "-" (flag to gh/git) or "." (tender's own dirs in workspaceRoot); keys map 1:1 to <owner>/<name> dirs.
 const REPO = /^[A-Za-z0-9_][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+$/;
@@ -98,8 +99,14 @@ export function parseConfig(raw: any, base: string): Config {
   });
   const names = sources.map((s) => s.name);
   check(new Set(names).size === names.length, "source names must be unique");
+  const intake = raw.intake;
+  check(intake === undefined || (obj(intake) && Object.keys(intake).every((k) => ["enabled", "host"].includes(k))), "intake: object with enabled and host");
+  if (obj(intake)) {
+    check(str(intake.host) && /^[A-Za-z0-9._-]+$/.test(intake.host), "intake.host: required, the one host that runs intake");
+    check(Array.isArray(intake.enabled) && intake.enabled.every((e: unknown) => typeof e === "string" && keys.includes(e.slice(0, e.lastIndexOf(":"))) && INTAKE_NAME.test(e.slice(e.lastIndexOf(":") + 1))), `intake.enabled: array of "owner/name:rule" for repos in repos`);
+  }
   if (errs.length) throw new Error(`invalid config:\n  ${errs.join("\n  ")}`);
-  return { host: raw.host, defaultHost, pollIntervalMs, workspaceRoot: expand(raw.workspaceRoot ?? "~/agent-ws", base), reposRoot, tmuxSession, maxConcurrent, maxInReview: raw.maxInReview, stallMinutes, repos, sources };
+  return { host: raw.host, defaultHost, pollIntervalMs, workspaceRoot: expand(raw.workspaceRoot ?? "~/agent-ws", base), reposRoot, tmuxSession, maxConcurrent, maxInReview: raw.maxInReview, stallMinutes, repos, sources, ...(obj(intake) && { intake: { enabled: intake.enabled, host: intake.host } }) };
 }
 
 export const repoDir = (cfg: Config, key: string) => join(cfg.workspaceRoot, key);

@@ -1,5 +1,5 @@
 import type { Check, Io, LinearSource, Ticket, Tracker } from "../types";
-import { hasLabel, nonEmpty, ours } from "../util";
+import { hasLabel, hasMarker, nonEmpty, ours } from "../util";
 
 export function parseLinear(r: Record<string, any>, at: string, check: Check) {
   const s = { team: r.team, todo: r.todo ?? "Todo", inProgress: r.inProgress ?? "In Progress", inReview: r.inReview ?? "In Review", readyToMerge: r.readyToMerge, done: r.done ?? ["Done"] };
@@ -126,6 +126,19 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
     if (typeof i?.id !== "string" || !i.id) throw new Error("linear issueCreate: no id returned");
     return { id: i.id, url: i.url };
   };
+  const labelId = async (name: string) => {
+    const q = `query($n: String!, $t: String!) { issueLabels(filter: { name: { eqIgnoreCase: $n }, or: [{ team: { key: { eq: $t } } }, { team: { null: true } }] }) { nodes { id parent { name } } } }`;
+    const nodes: any[] = (await gql(q, { n: name, t: l.team })).issueLabels.nodes;
+    // A grouped label lists as `<group>:<name>`, which the label checks would not match.
+    const id = nodes.find((x) => !x.parent)?.id;
+    if (!id) throw new Error(`linear label "${name}" ${nodes.length ? "is inside a label group; use an ungrouped label" : `not found in team ${l.team} or the workspace`}`);
+    return id as string;
+  };
+  const projectOf = async (name: string) => {
+    const nodes: any[] = (await gql(`query($n: String!) { projects(filter: { name: { eqIgnoreCase: $n } }) { nodes { id } } }`, { n: name })).projects.nodes;
+    if (nodes.length !== 1) throw new Error(`linear project ${JSON.stringify(name)}: ${nodes.length} found, need exactly one`);
+    return nodes[0].id as string;
+  };
   const hostLabel = `host:${host}`;
   const listMine = (state: string, labels: string[], complete = false) => defaultHost ? list(state, labels, complete).then((r) => r.filter((t) => ours(t, host, true))) : list(state, [...labels, hostLabel], complete);
   return {
@@ -162,12 +175,7 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
     }),
     done: (t) => move(t.ref, l.done[0]!),
     async park(t) {
-      const q = `query($n: String!, $t: String!) { issueLabels(filter: { name: { eqIgnoreCase: $n }, or: [{ team: { key: { eq: $t } } }, { team: { null: true } }] }) { nodes { id parent { name } } } }`;
-      const nodes: any[] = (await gql(q, { n: l.needsHumanLabel, t: l.team })).issueLabels.nodes;
-      // A grouped label lists as `<group>:<name>`, which the parked checks would not match.
-      const id = nodes.find((x) => !x.parent)?.id;
-      if (!id) throw new Error(`linear label "${l.needsHumanLabel}" ${nodes.length ? "is inside a label group; use an ungrouped label" : `not found in team ${l.team} or the workspace`}`);
-      const d = await gql(`mutation($id: String!, $l: String!) { issueAddLabel(id: $id, labelId: $l) { success } }`, { id: t.ref, l: id }, true);
+      const d = await gql(`mutation($id: String!, $l: String!) { issueAddLabel(id: $id, labelId: $l) { success } }`, { id: t.ref, l: await labelId(l.needsHumanLabel) }, true);
       if (!io.dry && !d.issueAddLabel?.success) throw new Error(`linear issueAddLabel: not successful for ${t.id}`);
     },
     parked: async (t) =>
@@ -187,6 +195,24 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
     },
     createPhase: async (parent, title, description) => (await create({ parentId: parent.ref, title, description })).id,
     createTicket: async (_from, title, description) => (await create({ title, description })).url,
+    async fileTicket(target, title, description, labels) {
+      const projectId = target.project === undefined ? undefined : await projectOf(target.project);
+      const labelIds = await Promise.all(labels.map(labelId));
+      return (await create({ title, description, ...(projectId && { projectId }), ...(labelIds.length && { labelIds }) })).url;
+    },
+    async findMarker(_target, marker) {
+      const q = `query($t: String!, $m: String!) { issues(filter: { team: { key: { eq: $t } }, description: { contains: $m } }, first: 100, includeArchived: true) { nodes { url description } pageInfo { hasNextPage } } }`;
+      const { nodes, pageInfo } = (await gql(q, { t: l.team, m: marker })).issues;
+      const url = nodes.find((i: any) => typeof i.description === "string" && hasMarker(i.description, marker))?.url;
+      if (!url && pageInfo?.hasNextPage) throw new Error(`linear: over 100 issues mention ${marker}, none exactly; cannot rule out a duplicate`);
+      return url;
+    },
+    // Label first: a ticket back in Todo that still had it could be claimed before the removal lands.
+    async reopen(t) {
+      const d = await gql(`mutation($id: String!, $l: String!) { issueRemoveLabel(id: $id, labelId: $l) { success } }`, { id: t.ref, l: await labelId(l.readyLabel) }, true);
+      if (!io.dry && !d.issueRemoveLabel?.success) throw new Error(`linear issueRemoveLabel: not successful for ${t.id}`);
+      await move(t.ref, l.todo);
+    },
     listPhases: async (parent) =>
       (await gql(`query($id: String!) { issue(id: $id) { children(first: 100) { nodes { id title } } } }`, { id: parent.ref })).issue.children.nodes.map((i: any) => ({ ref: i.id, title: i.title })),
     setPhase: (_parent, ref, status) => move(ref, status === "done" ? l.done[0]! : l.inProgress),

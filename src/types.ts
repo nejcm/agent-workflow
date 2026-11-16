@@ -31,7 +31,22 @@ export interface RepoConfig {
   prompts: { default?: string; byLabel: Record<string, string> };
   /** The Linear project whose tickets go to this repo; `team` is only checked against the ticket's source. */
   tracker?: { linear?: { project: string; team?: string } };
+  intake: IntakeRule[];
   files: Record<string, string>;
+}
+
+/** One `intake` entry of a repo's `.tender/config.yaml`; durations are `<n>m|h|d`. */
+export interface IntakeRule {
+  name: string;
+  run: string;
+  every: string;
+  maxPerRun: number;
+  secrets: string[];
+  network: string[];
+  /** A rule matches when every condition holds: `min<Fact>` is `facts.<fact> >= n`, any other key is equality. */
+  autoLabel: Record<string, string | number>[];
+  recheck: boolean;
+  recheckAfter: string;
 }
 
 /** Host and repo settings combined for one start or merge decision. */
@@ -78,6 +93,8 @@ export interface Config {
   stallMinutes: number;
   repos: Record<string, Repo>;
   sources: Source[];
+  /** Rules as `owner/name:rule`; only `host` runs them. */
+  intake?: { enabled: string[]; host: string };
 }
 
 export interface Ticket {
@@ -134,13 +151,22 @@ export interface Tracker {
   createPhase(parent: Ticket, title: string, body: string): Promise<string>;
   /** Creates a standalone ticket with no labels in `from`'s repo or team; returns its URL ("" in dry-run). */
   createTicket(from: Ticket, title: string, body: string): Promise<string>;
+  /** Creates a ticket for a repo, in its Linear project when set; returns its URL ("" in dry-run). */
+  fileTicket(target: Target, title: string, body: string, labels: string[]): Promise<string>;
+  /** The URL of a ticket in any state whose body contains `marker`, if any. */
+  findMarker(target: Target, marker: string): Promise<string | undefined>;
+  /** Reopens a closed ticket (Linear: back to Todo) and removes the ready label. */
+  reopen(t: Ticket): Promise<void>;
   listPhases(parent: Ticket): Promise<{ ref: string; title: string }[]>;
   setPhase(parent: Ticket, ref: string, status: "in-progress" | "done"): Promise<void>;
 }
 
-export type Run = (argv: string[], cwd?: string, secs?: number) => Promise<{ code: number; out: string; err: string }>;
+export type Target = { repo: string; project?: string };
 
-export type EventKind = "start" | "claim" | "review" | "ready-to-merge" | "merged" | "done" | "park" | "stall" | "feedback-round" | "gate" | "handoff";
+/** `env` replaces the inherited environment; output past `max` bytes on either stream kills the command. */
+export type Run = (argv: string[], cwd?: string, secs?: number, opts?: { env?: Record<string, string>; max?: number }) => Promise<{ code: number; out: string; err: string }>;
+
+export type EventKind = "start" | "claim" | "review" | "ready-to-merge" | "merged" | "done" | "park" | "stall" | "feedback-round" | "gate" | "handoff" | "intake-filed";
 
 export interface Io {
   run: Run;

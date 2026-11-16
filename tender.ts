@@ -7,7 +7,8 @@ import { parseConfig } from "./src/config";
 import { dashboard, watch } from "./src/dash";
 import { events } from "./src/db";
 import { handoff, shellLine, ticketClone, type Tool, TOOLS } from "./src/handoff";
-import { cloneAll, resume } from "./src/launcher";
+import { intake } from "./src/intake";
+import { cloned, cloneAll, resume } from "./src/launcher";
 import { CRITICAL_PATHS, TEST_PATHS } from "./src/merge";
 import { makeTracker, pass } from "./src/pass";
 import { dirEntries, parseRepoConfig } from "./src/repo-config";
@@ -30,15 +31,26 @@ async function status(cfg: Config, io: Io) {
 
 // timeout signals its whole group and still fires if tender is killed. The drain bound covers what outlives it holding the pipes;
 // shortcut: a grandchild ignoring TERM keeps running (signalling after the reap could hit a reused group id).
-export const spawnRun: Run = async (argv, cwd, secs = 60) => {
+export const spawnRun: Run = async (argv, cwd, secs = 60, { env, max = Infinity } = {}) => {
   const start = performance.now();
   const cmd = argv.slice(0, 3).join(" ");
-  const p = Bun.spawn(["timeout", "-k", "5", String(secs), ...argv], { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const p = Bun.spawn(["timeout", "-k", "5", String(secs), ...argv], { cwd, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const readers = [p.stdout.getReader(), p.stderr.getReader()];
+  let over = false;
   const text = async (r: ReadableStreamDefaultReader<Uint8Array>) => {
     const d = new TextDecoder();
     let s = "";
-    for (let c = await r.read(); !c.done; c = await r.read()) s += d.decode(c.value, { stream: true });
+    let bytes = 0;
+    for (let c = await r.read(); !c.done; c = await r.read()) {
+      bytes += c.value.length;
+      if (bytes > max) {
+        over = true;
+        p.kill();
+        r.cancel().catch(() => {});
+        return "";
+      }
+      s += d.decode(c.value, { stream: true });
+    }
     return s + d.decode();
   };
   const output = Promise.all(readers.map(text));
@@ -51,6 +63,7 @@ export const spawnRun: Run = async (argv, cwd, secs = 60) => {
     return { code: code || 1, out: "", err: timedOut ? `${cmd} timed out after ${secs}s` : `${cmd} exited ${code} but left its output open` };
   }
   const [out, err] = drained;
+  if (over) return { code: code || 1, out: "", err: `${cmd} printed over ${max} bytes` };
   return { code, out, err: timedOut ? `${cmd} timed out after ${secs}s ${err.trim()}`.trim() : err };
 };
 
@@ -68,6 +81,7 @@ const USAGE = `usage: bun tender.ts <command> [--config tender.json]
   tail <ID | owner/repo/ID> [-n 20] [--no-follow]
   open <ID | owner/repo/ID> [--tool claude|codex|t3|editor] [--exec]
   resume <ID | owner/repo/ID>
+  intake [owner/repo:rule | rule] [--dry-run]
   check [path]`;
 const VALUED = ["--config", "--interval", "-n", "--tool"];
 const FLAGS = [...VALUED, "--dry-run", "--json", "--no-follow", "--plain", "--exec"];
@@ -100,9 +114,9 @@ export function parseArgs(argv: string[]) {
   const tool = opt("--tool");
   const ok =
     argv.every((a, i) => !a.startsWith("-") || isValue(i) || FLAGS.includes(a)) &&
-    ["run", "once", "status", "watch", "check", ...TARGETED].includes(cmd ?? "") &&
+    ["run", "once", "status", "watch", "check", "intake", ...TARGETED].includes(cmd ?? "") &&
     !extra.length &&
-    (cmd === "check" || TARGETED.includes(cmd!) === (id !== undefined)) &&
+    (cmd === "check" || cmd === "intake" || TARGETED.includes(cmd!) === (id !== undefined)) &&
     (tool === undefined || (cmd === "open" && TOOLS.includes(tool as Tool))) &&
     !(argv.includes("--dry-run") && ["open", "resume"].includes(cmd!)) &&
     Number.isFinite(interval) &&
@@ -169,6 +183,16 @@ async function main(argv: string[]) {
       console.error(e.message);
       process.exit(1);
     });
+  if (cmd === "intake") {
+    const held = join(cfg.workspaceRoot, ".intake.lock");
+    if (!io.dry && !holdLock(held)) {
+      console.error(`another tender intake holds ${held}`);
+      process.exit(1);
+    }
+    for (const key of new Set(cfg.intake?.host === cfg.host ? cfg.intake.enabled.map((e) => e.slice(0, e.lastIndexOf(":"))) : []))
+      await cloned(cfg, io, cfg.repos[key]!).catch((e) => io.log(`clone ${key} failed: ${e.message}`));
+    return intake(cfg, io, TENDER_DIR, { only: id });
+  }
   // Dry runs change nothing, so the preflight in scripts/run.sh still works while the service runs.
   const lock = join(cfg.workspaceRoot, ".lock");
   if (!io.dry && !holdLock(lock)) {

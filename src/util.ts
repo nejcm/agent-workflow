@@ -14,6 +14,9 @@ export const diskRepos = (cfg: Config) => subdirs(cfg.workspaceRoot).filter((o) 
 // Second layer for tender's own git calls: hook files, fsmonitor, auto-gc and risky transports only, not every config that runs code.
 export const GIT = ["git", ...["core.hooksPath=/dev/null", "core.fsmonitor=false", "core.alternateRefsCommand=", "maintenance.auto=false", "protocol.ext.allow=never", "protocol.file.allow=never", "protocol.git.allow=never"].flatMap((c) => ["-c", c])];
 
+/** Whether `body` has `marker` as a whole line, so a marker for key `a` never matches one for `abc`. */
+export const hasMarker = (body: string, marker: string) => body.split("\n").some((l) => l.trim() === marker);
+
 export const nonEmpty = (v: unknown): v is string => typeof v === "string" && v.length > 0;
 
 // Untrusted text: drop ESC sequences and invisible chars, blank controls and bidi; ZWJ/ZWNJ stay (emoji, Persian, Indic).

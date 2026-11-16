@@ -22,7 +22,7 @@ const errors = (entries: Entry[]) => {
 };
 
 test("repo config: no files means built-in defaults", () => {
-  expect(parseRepoConfig([])).toEqual({ agent: "claude", testCmd: undefined, planStep: "Plan and implement the ticket.", autoMerge: undefined, criticalPaths: [], testPaths: [], trust: [], escapeHatches: [], prompts: { default: undefined, byLabel: {} }, files: {} });
+  expect(parseRepoConfig([])).toEqual({ agent: "claude", testCmd: undefined, planStep: "Plan and implement the ticket.", autoMerge: undefined, criticalPaths: [], testPaths: [], trust: [], escapeHatches: [], prompts: { default: undefined, byLabel: {} }, intake: [], files: {} });
   expect(parseRepoConfig([file("config.yaml", "")]).agent).toBe("claude");
 });
 

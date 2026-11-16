@@ -211,3 +211,21 @@ test("github adapter: tickets assigned only to others carry them; unassigned or 
   const { io: noUser } = fakeIo((a) => (a[2] === "list" ? { out: JSON.stringify([issue(3, "alice")]) } : undefined));
   await expect(github(gh(), "box", noUser, false, ["acme/web"]).listReady()).rejects.toThrow("gh api user: no login");
 });
+
+test("github adapter: intake files with labels, finds a marker only in a body that holds it, reopens without the ready label", async () => {
+  const m = "tender-intake: acme/web:errs:a";
+  const found = [{ url: "https://github.com/acme/web/issues/1", body: "mentions tender intake acme web errs a" }, { url: "https://github.com/acme/web/issues/4", body: `x\n${m}bc` }, { url: "https://github.com/acme/web/issues/5", body: `quoted ${m} inline` }, { url: "https://github.com/acme/web/issues/2", body: `x\n${m}` }];
+  const { io, cmds } = fakeIo((a) => (a[2] === "list" ? { out: JSON.stringify(found) } : a[2] === "create" ? { out: "https://github.com/acme/web/issues/3\n" } : undefined));
+  const tr = github(gh(), "box", io, false, ["acme/web"]);
+  expect(await tr.findMarker({ repo: "acme/web" }, m)).toBe("https://github.com/acme/web/issues/2");
+  expect(cmds.at(-1)).toBe(`gh issue list --repo acme/web --state all --limit 100 --search "${m}" in:body --json url,body`);
+  expect(await tr.fileTicket({ repo: "acme/web" }, "T", "B", ["agent", "host:box"])).toBe("https://github.com/acme/web/issues/3");
+  expect(cmds.at(-1)).toBe("gh issue create --repo acme/web --label agent --label host:box --title T --body B");
+  await tr.reopen({ ...ticket(3), repo: "acme/web" });
+  expect(cmds.slice(-2)).toEqual(["gh issue edit 3 --repo acme/web --remove-label agent", "gh issue reopen 3 --repo acme/web"]);
+  const failing = fakeIo((a) => (a[2] === "edit" ? { code: 1 } : undefined));
+  await expect(github(gh(), "box", failing.io, false, ["acme/web"]).reopen({ ...ticket(3), repo: "acme/web" })).rejects.toThrow();
+  expect(failing.cmds.some((c) => c.includes("reopen"))).toBe(false);
+  const many = fakeIo((a) => (a[2] === "list" ? { out: JSON.stringify(Array.from({ length: 100 }, (_, i) => ({ url: `u${i}`, body: `${m}${i}` }))) } : undefined));
+  await expect(github(gh(), "box", many.io, false, ["acme/web"]).findMarker({ repo: "acme/web" }, m)).rejects.toThrow("cannot rule out a duplicate");
+});

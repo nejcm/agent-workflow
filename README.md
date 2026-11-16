@@ -7,6 +7,52 @@ Move a GitHub issue or Linear ticket to **ready**, and `tender` starts a Claude 
 - **No moving parts to babysit.** A small Bun + TypeScript program, no database: state is the tracker, the tmux windows and the session clones. Polls instead of webhooks, so nothing listens on a port.
 - **Your setup, read-only.** Agents use your `CLAUDE.md`, `AGENTS.md` and skills, but run from their own config dirs (a fresh `<ID>.claude` per Claude ticket and `<ID>.codex` per ticket) and cannot modify yours.
 
+![tender watch: ticket list with phase progress bars, selected ticket detail and live transcript](docs/dashboard.png)
+
+## Features
+
+**Picking up work**
+- **Sources:** GitHub issues, with labels over the repos you allowlist, or Linear tickets from a team. Several sources can run side by side.
+- **Ready means:** the `agent` label plus `host:<host>`, so a laptop and a VM never take the same ticket. One machine can also take unlabelled tickets (`defaultHost`).
+- **Which repo, in what order:**
+  - Repo allowlist, checked against GitHub renames and redirects.
+  - A Linear ticket names its repo with a label or a `repo:` line in the ticket; otherwise its project picks the repo that claims it in `.tender/config.yaml`.
+  - Most urgent tickets start first: Linear priority, or a GitHub `priority:*` label.
+- **Limits:** at most `maxConcurrent` sessions in total and per repo; optionally no new starts while `maxInReview` tickets wait in review.
+
+**Running agents**
+- **Agents:** Claude Code or Codex, chosen per repo.
+- **Isolation:** one git clone and branch `agent/<ID>` per ticket, in its own tmux window.
+- **Sandbox:** [nono](https://github.com/nolabs-ai/nono), or none on a VM where the VM is the boundary.
+- **Your config, read-only:** a fresh agent config dir per ticket. Agents use your `CLAUDE.md`, `AGENTS.md` and skills but cannot change them.
+- **Claude login:** the sandbox holds only a phantom token. `tender` refreshes the host login itself before it expires ([Claude auth](docs/auth.md#claude-auth)).
+
+**While it works**
+- **[Phases](docs/lifecycle.md#phases):** a phased plan is mirrored into sub-tickets that track its status.
+- **[Questions](docs/lifecycle.md#questions):** a blocked agent's question is posted to the ticket, and your reply is delivered back to the session.
+- **[Findings](docs/lifecycle.md#findings):** problems outside the ticket's scope become new tickets, not drive-by fixes.
+- **Stall detection:** a session that writes nothing for `stallMinutes` gets `needs-human` and a comment with its last pane lines.
+
+**After the PR**
+- **Ticket status:** moves to In Review once the PR exists, then to [Ready to merge](docs/lifecycle.md#ready-to-merge) once the PR is clean and nothing waits on the agent; back to In Review on new commits, a failed check or new feedback.
+- **[PR feedback](docs/lifecycle.md#pr-feedback):**
+  - Review comments, failed checks and merge conflicts are delivered to the live session.
+  - After 3 rounds the ticket is parked with `needs-human`.
+- **[Auto-merge](docs/auto-merge.md#auto-merge):** modes `off`, `all`, `shadow` and `intelligent`, set per path by the repo's `trust` rules. Critical paths and escape hatches (`@ts-ignore`, `eslint-disable`, …) on added lines hold back any mode; `intelligent` adds gates for deleted tests, PR size and the agent's own confidence.
+- **Cleanup:**
+  - A done ticket ends its session, and its clone is deleted once nothing is unpushed.
+  - A canceled ticket ends its session and keeps its clone.
+  - A ticket reassigned to someone else is stopped the same way, with one comment.
+
+**Watching**
+- `status [--json]`: every session's state, runtime, phases and PR.
+- `watch`: a terminal dashboard with a live transcript and attach and open-PR keys ([Watching sessions](docs/watching.md#watching-sessions)).
+- `tail <ID>`: follow one session's transcript.
+- `open <ID>`: take a session over in Claude Code, Codex, T3 Code or your editor, outside the sandbox ([Hand-off](docs/hand-off.md#hand-off)); `resume <ID>` gives it back.
+- `tmux attach -t tender`: the live terminals, where you can steer an agent directly.
+
+Planned, not built: signal intake (perf regressions, Supabase advisors, slow queries) in [docs/improvements.md](docs/improvements.md#signal-intake).
+
 ## How it works
 
 Every poll (default 60 s), `tender` looks for ready tickets (the `agent` label plus `host:<host>`) in the repos you allowlist, and for each one:

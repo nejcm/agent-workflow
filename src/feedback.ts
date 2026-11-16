@@ -109,7 +109,12 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
   ].join("\n");
   const wt = join(dir, t.id);
   io.log(`${io.dry ? "dry: " : ""}feedback ${t.id} round ${cur.rounds + 1} to ${wt}/.tender/run/feedback.md`);
-  if (!io.dry) writeRun(wt, "feedback.md", text);
-  await nudge(io, t.id, wt, pane, FEEDBACK_POINTER);
+  // The round is spent either way; false still tells Ready to merge to move it back.
+  try {
+    if (!io.dry) writeRun(wt, "feedback.md", text);
+    await nudge(io, t.id, wt, pane, FEEDBACK_POINTER);
+  } catch (e) {
+    io.log(`feedback ${t.id} round ${cur.rounds + 1} not delivered: ${(e as Error).message}`);
+  }
   return false;
 }

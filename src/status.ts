@@ -5,7 +5,7 @@ import { AGENTS, agentOf, type Lookup } from "./agents";
 import { repoDir } from "./config";
 import { PR_URL } from "./github";
 import { handedOff, windows, winName } from "./launcher";
-import { IN_REVIEW_FILE, PENDING, worktreeIds } from "./pass";
+import { IN_REVIEW_FILE, worktreeIds } from "./pass";
 import { phaseProgress, type PhaseStatus } from "./phases";
 import { openQuestion } from "./question";
 import { resolve, type State } from "./state";
@@ -84,7 +84,7 @@ export function rows(cfg: Config, wins: Map<string, string>, home = homedir(), n
         phases: progress(dir, id),
         pr,
         merge: existsSync(join(dir, `${id}.merge`)) ? "held" : null,
-        ready: existsSync(join(dir, `${id}.ready`)) && !readFileSync(join(dir, `${id}.ready`), "utf8").endsWith(PENDING),
+        ready: existsSync(join(dir, `${id}.ready`)) && !readFileSync(join(dir, `${id}.ready`), "utf8").includes(" "),
         transcript: t,
         window: session === "running" ? wins.get(winName(r.key, id)) ?? null : null,
       };

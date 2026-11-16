@@ -251,15 +251,16 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
   });
 }
 
-// Promoted from GitHub's view and tender's own state only. `<ID>.ready` holds the head it was promoted at, so it can only demote.
+// Promoted from GitHub's view and tender's own state only. `<ID>.ready` is the head it was promoted at; ` pending` before that move,
+// ` demote <why>` before the move back, ` held` while a ticket moved back by hand stays In Review at that head.
 async function syncReady(t: Ticket, tr: Tracker, io: Io, dir: string, pr: any, clear: boolean | undefined, done: () => Promise<boolean>) {
   const f = join(dir, `${t.id}.ready`);
   if (pr.state === "MERGED") return;
+  const saved = existsSync(f) ? readFileSync(f, "utf8") : undefined;
+  const [sha, tag, ...owed] = saved?.split(" ") ?? [];
   if (t.readyToMerge) {
     // Moved there by hand: the head first seen counts. The listing confirms a pending move.
-    const saved = existsSync(f) ? readFileSync(f, "utf8") : undefined;
-    const at = saved?.replace(PENDING, "") ?? pr.headRefOid;
-    if (saved !== at) put(io, f, at);
+    const at = tag === "held" || !sha ? pr.headRefOid : sha;
     const why =
       pr.state !== "OPEN" ? `PR is ${pr.state}`
       : pr.isDraft ? "PR is a draft"
@@ -268,11 +269,16 @@ async function syncReady(t: Ticket, tr: Tracker, io: Io, dir: string, pr: any, c
       : pr.statusCheckRollup.some((c: any) => checkState(c) === "failed") ? "a check failed"
       : pr.reviewDecision === "CHANGES_REQUESTED" ? "changes requested"
       : clear === false ? "new feedback"
+      // A failed move back after delivered feedback: this poll finds nothing left to deliver.
+      : tag === "demote" ? owed.join(" ")
       : undefined;
-    if (!why) return;
+    if (!why) return void (saved !== at && put(io, f, at));
+    put(io, f, `${at} demote ${why}`);
     await tr.toReview(t, `back in review, ${why}: ${pr.url}`);
     return remove(io, f);
   }
+  // Tender's own move back is marked `demote` first, so a bare head here means a human moved it back.
+  if (sha === pr.headRefOid && (tag === undefined || tag === "held")) return void (tag || put(io, f, `${sha} held`));
   if (clear !== true || !prReady(pr) || !(await done())) return remove(io, f);
   // Before the move, so a move that lands without its comment still has a head to demote from.
   put(io, f, pr.headRefOid + PENDING);
@@ -281,7 +287,7 @@ async function syncReady(t: Ticket, tr: Tracker, io: Io, dir: string, pr: any, c
 }
 
 const IDLE_SECS = 5 * 60;
-export const PENDING = " pending";
+const PENDING = " pending";
 
 export const worktreeIds = (dir: string) => subdirs(dir).filter((d) => SAFE_ID.test(d));
 

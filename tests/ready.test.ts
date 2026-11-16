@@ -23,15 +23,21 @@ const facts = (over: object = {}): any => ({
   statusCheckRollup: [ok], labels: [], headRefOid: "a", reviewDecision: "", mergeStateStatus: "CLEAN", reviews: [], comments: [], ...over,
 });
 
-function setup(o: { autoMerge?: string; file?: string; authors?: string[]; win?: boolean; quiet?: number; tmux?: { code?: number; out?: string }; slow?: number } = {}) {
+function setup(o: { autoMerge?: string; file?: string; authors?: string[]; win?: boolean; quiet?: number; tmux?: { code?: number; out?: string }; slow?: number; pane?: boolean; pasteFails?: boolean } = {}) {
   worktree("gh-1");
+  if (o.pane) {
+    writeFileSync(join(root, "acme/web/gh-1.agent"), "codex");
+    mkdirSync(join(root, "acme/web/gh-1/.tender/run"), { recursive: true });
+  }
   const t = ticket(1);
   const f = fakeTracker({ inReview: [t], readyToMerge: true });
   let pr = facts();
   const queue: any[] = [];
   let state: State = "idle";
   const { io, cmds } = fakeIo((a) =>
-    a[1] === "list-windows" ? o.tmux ?? windowsOut(o.win ? ["acme/web/gh-1"] : [], o.quiet === undefined ? undefined : Math.floor(Date.now() / 1000) - o.quiet)
+    o.pasteFails && a[1] === "paste-buffer" ? { code: 1, err: "pane gone" }
+    : o.pane && a[1] === "list-panes" ? { out: `%5 0 ${join(root, "acme/web/gh-1")}.sh\n` }
+    : a[1] === "list-windows" ? o.tmux ?? windowsOut(o.win ? ["acme/web/gh-1"] : [], o.quiet === undefined ? undefined : Math.floor(Date.now() / 1000) - o.quiet)
     : a[1] === "pr" && a[2] === "list" ? { out: JSON.stringify([{ url: URL, state: pr.state }]) }
     : a[1] === "pr" && a[2] === "view" ? (o.slow && setSystemTime(new Date(Date.now() + o.slow * 1000)), { out: JSON.stringify(a.at(-1) === "state" ? { state: "MERGED" } : queue.shift() ?? pr) })
     : a[1] === "api" && a[3]?.endsWith("/files?per_page=100") ? { out: JSON.stringify({ filename: o.file ?? "package.json", status: "modified", additions: 1, deletions: 0 }) }
@@ -214,6 +220,52 @@ test("back to review: closed, a draft, changes requested or conflicting on the s
     await d.run();
     expect([d.calls, d.marker()]).toEqual([[`review gh-1 back in review, ${why}: ${URL}`], undefined]);
   }
+});
+
+test("ready to merge: moved back to In Review by hand, it stays there until a new head", async () => {
+  const d = setup();
+  await d.run();
+  d.t.readyToMerge = undefined;
+  await d.run();
+  d.pr({ statusCheckRollup: [pending] });
+  await d.run();
+  d.pr({});
+  await d.run();
+  expect([d.calls, d.marker(), d.shown()]).toEqual([[`ready gh-1 ready to merge: ${URL}`], "a held", false]);
+  d.pr({ headRefOid: "c" });
+  d.t.readyToMerge = true;
+  await d.run();
+  expect([d.calls.length, d.marker()]).toEqual([1, "c"]);
+  d.t.readyToMerge = undefined;
+  await d.run();
+  d.pr({ headRefOid: "b" });
+  await d.run();
+  expect(d.calls).toEqual([`ready gh-1 ready to merge: ${URL}`, `ready gh-1 ready to merge: ${URL}`]);
+  expect(d.marker()).toBe("b");
+});
+
+test("back to review: a failed move after delivered feedback is retried once nothing is left to deliver", async () => {
+  const d = setup({ win: true, quiet: 600, authors: ["op"], pane: true });
+  await d.run();
+  const move = d.tr.toReview;
+  d.tr.toReview = async () => {
+    throw new Error("move failed");
+  };
+  d.pr({ comments: [{ id: "c1", author: { login: "op" }, body: "fix it", createdAt: new Date(Date.now() - 5 * 60_000).toISOString() }] });
+  await d.run();
+  expect([d.cmds.some((c) => c.startsWith("tmux paste-buffer")), d.marker(), d.shown()]).toEqual([true, "a demote new feedback", false]);
+  d.tr.toReview = move;
+  d.setState("working");
+  await d.run();
+  expect([d.calls, d.marker()]).toEqual([[`ready gh-1 ready to merge: ${URL}`, `review gh-1 back in review, new feedback: ${URL}`], undefined]);
+});
+
+test("back to review: feedback whose paste fails still moves it back", async () => {
+  const d = setup({ win: true, quiet: 600, authors: ["op"], pane: true, pasteFails: true });
+  await d.run();
+  d.pr({ comments: [{ id: "c1", author: { login: "op" }, body: "fix it", createdAt: new Date(Date.now() - 5 * 60_000).toISOString() }] });
+  await d.run();
+  expect([d.calls, d.marker()]).toEqual([[`ready gh-1 ready to merge: ${URL}`, `review gh-1 back in review, new feedback: ${URL}`], undefined]);
 });
 
 test("ready to merge: a ticket moved there by hand keeps its head; a session going busy does not move it back", async () => {

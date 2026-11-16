@@ -48,6 +48,24 @@ export function put(io: Io, path: string, data: string, mode = 0o644) {
   renameSync(`${path}.tmp`, path);
 }
 
+/** Runs `fn` holding `<workspaceRoot>/.pass.lock`, waiting for any holder, so a poll, `open` and `resume` never interleave. */
+export async function passLocked<T>(cfg: Config, log: (m: string) => void, fn: () => Promise<T>): Promise<T> {
+  const file = join(cfg.workspaceRoot, ".pass.lock");
+  mkdirSync(cfg.workspaceRoot, { recursive: true });
+  const fd = openSync(file, "a");
+  // flock locks the open file description, which `fd` keeps after the child exits; closing it releases the lock.
+  const lock = (wait: boolean) => Bun.spawn(["flock", ...(wait ? [] : ["-n"]), "3"], { stdio: ["ignore", "ignore", "ignore", fd] }).exited;
+  try {
+    if ((await lock(false)) !== 0) {
+      log(`waiting for the poll holding ${file}`);
+      if ((await lock(true)) !== 0) throw new Error(`could not lock ${file}`);
+    }
+    return await fn();
+  } finally {
+    closeSync(fd);
+  }
+}
+
 // An agent-writable dir: pin it by fd (no symlink) so a swap can't redirect tender elsewhere. Linux only.
 export function inDir<T>(dir: string, fn: (dir: string) => T): T {
   const d = openSync(dir, C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW);

@@ -411,7 +411,7 @@ test("done: kills window, removes the session clone, files and config dir; keeps
   const c = config();
   for (const id of ["gh-1", "gh-2", "gh-3"]) {
     mkdirSync(join(root, "acme/web", id, ".git"), { recursive: true });
-    for (const ext of [".prompt.md", ".sh", ".ended", ".pr", ".question", ".findings", ".ready"]) writeFileSync(join(root, "acme/web", id + ext), "");
+    for (const ext of [".prompt.md", ".sh", ".ended", ".pr", ".question", ".findings", ".ready", ".handoff"]) writeFileSync(join(root, "acme/web", id + ext), "");
     writeFileSync(join(root, "acme/web", `${id}.source`), "web\n");
     mkdirSync(join(root, "acme/web", `${id}.claude/projects/p`), { recursive: true });
     mkdirSync(join(root, "acme/web", `${id}.codex/sessions`), { recursive: true });
@@ -435,6 +435,7 @@ test("done: kills window, removes the session clone, files and config dir; keeps
   expect(existsSync(join(root, "acme/web/gh-1.question"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.findings"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.ready"))).toBe(false);
+  expect(existsSync(join(root, "acme/web/gh-1.handoff"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.claude"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.codex"))).toBe(false);
   expect(existsSync(join(root, "acme/web/gh-1.tmpdir"))).toBe(false);

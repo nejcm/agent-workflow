@@ -13,6 +13,9 @@ test("parseArgs accepts known commands and flags", () => {
   expect(parseArgs(["watch", "--plain", "--interval", "7"])).toMatchObject({ cmd: "watch", interval: 7 });
   expect(parseArgs(["tail", "acme/web/PER-1", "-n", "5", "--no-follow"])).toMatchObject({ cmd: "tail", id: "acme/web/PER-1", n: 5 });
   expect(parseArgs(["once", "--dry-run"])).toMatchObject({ cmd: "once" });
+  expect(parseArgs(["open", "PER-1"])).toMatchObject({ cmd: "open", id: "PER-1", tool: undefined });
+  expect(parseArgs(["open", "acme/web/PER-1", "--tool", "editor", "--exec"])).toMatchObject({ cmd: "open", id: "acme/web/PER-1", tool: "editor" });
+  expect(parseArgs(["resume", "PER-1"])).toMatchObject({ cmd: "resume", id: "PER-1" });
 });
 
 test("parseArgs rejects unknown flags, stray args and out-of-range numbers", () => {
@@ -24,6 +27,14 @@ test("parseArgs rejects unknown flags, stray args and out-of-range numbers", () 
     ["status", "PER-1"],
     ["tail"],
     ["tail", "PER-1", "PER-2"],
+    ["open"],
+    ["resume"],
+    ["open", "PER-1", "--tool", "vim"],
+    ["open", "PER-1", "--tool"],
+    ["resume", "PER-1", "--tool", "claude"],
+    ["open", "PER-1", "--dry-run"],
+    ["open", "PER-1", "--dry-run", "--exec"],
+    ["resume", "PER-1", "--dry-run"],
     ["watch", "--interval", "0"],
     ["watch", "--interval", "0.5"],
     ["watch", "--interval", "Infinity"],

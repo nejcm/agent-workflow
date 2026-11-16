@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { AGENTS, agentOf, type Lookup } from "./agents";
 import { repoDir } from "./config";
 import { PR_URL } from "./github";
-import { windows, winName } from "./launcher";
+import { handedOff, windows, winName } from "./launcher";
 import { IN_REVIEW_FILE, PENDING, worktreeIds } from "./pass";
 import { phaseProgress, type PhaseStatus } from "./phases";
 import { openQuestion } from "./question";
@@ -18,7 +18,7 @@ export interface Row {
   repo: string;
   agent: AgentName;
   /** tmux/marker view: `running` has a window, `ended` an `<ID>.ended`, `orphan` neither. */
-  session: "running" | "ended" | "orphan";
+  session: "running" | "ended" | "handoff" | "orphan";
   state: State;
   stateSince: number | null;
   waitingFor: string | null;
@@ -64,7 +64,7 @@ export function rows(cfg: Config, wins: Map<string, string>, home = homedir(), n
       const ended = mtime(join(dir, `${id}.ended`));
       const agent = agentOf(dir, id);
       const t = transcript(wt, agent, home, started) ?? null;
-      const session = ended !== undefined ? "ended" : wins.has(winName(r.key, id)) ? "running" : "orphan";
+      const session = ended !== undefined ? "ended" : wins.has(winName(r.key, id)) ? "running" : handedOff(dir, id) ? "handoff" : "orphan";
       const idleMs = t ? Math.max(0, now - (mtime(t) ?? now)) : null;
       const resolved = resolve(session, feeds[agent]?.(wt, started ?? 0, now), idleMs, now);
       const pr = savedPr(dir, id);
@@ -113,8 +113,8 @@ export const dur = (ms: number | null) => {
   return `${Math.floor(s / 86400)}d${Math.floor((s % 86400) / 3600)}h`;
 };
 
-/** `state`, except a session with neither tmux window nor `.ended` marker shows as `orphan`. */
-export const label = (r: Pick<Row, "session" | "state">) => (r.session === "orphan" ? "orphan" : r.state);
+/** `state`, except a session with neither tmux window nor `.ended` marker shows as `handoff` (with `<ID>.handoff`) or `orphan`. */
+export const label = (r: Pick<Row, "session" | "state">) => (r.session === "orphan" || r.session === "handoff" ? r.session : r.state);
 
 export const prLabel = (r: Row) => [r.pr && `#${/\d+$/.exec(r.pr)![0]}`, r.merge, r.ready && "ready"].filter(Boolean).join(" ") || "-";
 

@@ -5,7 +5,7 @@ import { deliverFeedback, feedbackFields } from "./feedback";
 import { fileFindings } from "./findings";
 import { agentOf } from "./agents";
 import { baseBranch, canonical, findPr, sameRepo } from "./github";
-import { claim, cloned, nonoRun, scopeUnit, start, stopScope, sweepScopes, windows, winName } from "./launcher";
+import { claim, cloned, handedOff, nonoRun, scopeUnit, start, stopSession, sweepScopes, windows, winName } from "./launcher";
 import { autoMerge, checkState, PR_FIELDS, prMode, prReady, viewPr } from "./merge";
 import { syncPhases } from "./phases";
 import { agentPane, deliverAnswer, liveStates, syncQuestion } from "./question";
@@ -74,7 +74,7 @@ async function startReady(cfg: Config, s: Source, tr: Tracker, io: Io, t: Ticket
     return;
   }
   const r = cfg.repos[key]!;
-  if (wins.has(winName(key, t.id)) || (running.get(key) ?? 0) >= (r.maxConcurrent ?? Infinity) || (reviewing.get(key) ?? 0) >= (r.maxInReview ?? Infinity)) return;
+  if (wins.has(winName(key, t.id)) || handedOff(repoDir(cfg, key), t.id) || (running.get(key) ?? 0) >= (r.maxConcurrent ?? Infinity) || (reviewing.get(key) ?? 0) >= (r.maxInReview ?? Infinity)) return;
   const owner = sourceOf(repoDir(cfg, key), t.id);
   if (owner !== undefined && owner !== s.name) return io.log(`skip ${t.id}: ${key}/${t.id} belongs to source ${JSON.stringify(owner)}`);
   const other = tr.globalIds && startedElsewhere(cfg, key, t.id, wins);
@@ -136,17 +136,6 @@ async function checkStall(cfg: Config, s: Source, t: Ticket, tr: Tracker, io: Io
   put(io, file, String(at));
 }
 
-async function stopSession(cfg: Config, io: Io, key: string, id: string, wins: Map<string, string>) {
-  await stopScope(cfg, io, key, id);
-  const w = wins.get(winName(key, id));
-  // Killing the scope usually closes the window first.
-  if (w)
-    await write(io, ["tmux", "kill-window", "-t", w]).catch((e) => {
-      if (!/can't find window/.test(e.message)) throw e;
-    });
-  wins.delete(winName(key, id));
-}
-
 // Like a cancel, plus one comment per reassignment: `<ID>.reassigned` is marked before posting and removed if the post fails.
 async function stopReassigned(cfg: Config, tr: Tracker, io: Io, t: Ticket & { repo: string }, wins: Map<string, string>) {
   const dir = repoDir(cfg, t.repo);
@@ -177,21 +166,22 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
         const w = { ...t, repo: key };
         if (t.otherAssignee) return stopReassigned(cfg, tr, io, w, wins);
         const dir = repoDir(cfg, key);
+        const parked = hasLabel(t.labels, s.needsHumanLabel) || handedOff(dir, t.id);
         const pr = await findPr(key, t.id, io, dir);
         await step(io, `phases ${t.id}`, () => syncPhases(w, tr, io, dir, !!pr));
         if (pr) {
-          if (!hasLabel(t.labels, s.needsHumanLabel)) await step(io, `findings ${t.id}`, () => fileFindings(w, tr, io, dir));
+          if (!parked) await step(io, `findings ${t.id}`, () => fileFindings(w, tr, io, dir));
           return tr.toReview(w, `PR: ${pr}`);
         }
         const ended = join(dir, `${t.id}.ended`);
         const win = wins.get(winName(key, t.id));
         if (win) {
-          if (!hasLabel(t.labels, s.needsHumanLabel)) await step(io, `stall ${t.id}`, () => checkStall(cfg, s, w, tr, io, dir, win, state));
+          if (!parked) await step(io, `stall ${t.id}`, () => checkStall(cfg, s, w, tr, io, dir, win, state));
           await step(io, `question ${t.id}`, () => syncQuestion(w, tr, io, dir, join(dir, t.id)));
           return step(io, `answer ${t.id}`, () => deliverAnswer(cfg.repos[key]!, w, tr, io, dir, win, scopeUnit(cfg, key, t.id), () => state(dir, t.id)));
         }
         // The in-progress listing can lag a close that cleanup already acted on.
-        if (hasLabel(t.labels, s.needsHumanLabel)) return;
+        if (parked) return;
         if (existsSync(ended)) {
           const seen = `${ended}@${statSync(ended).mtimeMs}`;
           if (warned.has(seen) || (await tr.closed(t.id, key))) return;
@@ -217,9 +207,11 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
       const dir = repoDir(cfg, key);
       const r = cfg.repos[key]!;
       const win = wins.get(winName(key, t.id));
+      // A hand-off parks too, so its killed window never reads as a finished session for Ready to merge.
+      const handoff = handedOff(dir, t.id);
       // checkStall marks w parked, so feedback and auto-merge stop in the same poll.
-      if (win && !hasLabel(w.labels, s.needsHumanLabel)) await step(io, `stall ${t.id}`, () => checkStall(cfg, s, w, tr, io, dir, win, state));
-      const parked = hasLabel(w.labels, s.needsHumanLabel);
+      if (win && !handoff && !hasLabel(w.labels, s.needsHumanLabel)) await step(io, `stall ${t.id}`, () => checkStall(cfg, s, w, tr, io, dir, win, state));
+      const parked = handoff || hasLabel(w.labels, s.needsHumanLabel);
       await step(io, `phases ${t.id}`, () => syncPhases(w, tr, io, dir, true));
       if (!parked) await step(io, `findings ${t.id}`, () => fileFindings(w, tr, io, dir));
       const share: { fields: string; pr?: any } | undefined = parked ? undefined : { fields: feedbackFields(r) };
@@ -381,7 +373,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
       await step(x.io, `cleanup ${r.key}/${id}`, async () => {
         const end = await x.tr.closed(id, r.key);
         const pending = join(dir, `${id}.claim`);
-        if (!end && wins.has(winName(r.key, id)) && existsSync(pending)) {
+        if (!end && (wins.has(winName(r.key, id)) || handedOff(dir, id)) && existsSync(pending)) {
           // Only a ticket still ready is claimed, so a newer move by a human wins.
           const t = (await listReady(x)).find((k) => k.id === id && allowedRepo(cfg, k.repo) === r.key);
           if (t) await claim(x.io, x.tr, pending, { ...t, repo: r.key });
@@ -406,7 +398,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
         // rm never follows symlinks.
         await write(x.io, ["rm", "-rf", "--one-file-system", "--", wt], undefined, SLOW_SECS);
         // After the clone, so a delete that fails keeps the transcripts too.
-        for (const ext of [".claude", ".codex", ".tmpdir", ".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".stall", ".findings", ".claim", ".agent", ".source", ".reassigned", ".ready"]) remove(x.io, join(dir, id + ext));
+        for (const ext of [".claude", ".codex", ".tmpdir", ".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".stall", ".findings", ".claim", ".agent", ".source", ".reassigned", ".ready", ".handoff"]) remove(x.io, join(dir, id + ext));
       });
     }
   }

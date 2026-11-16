@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { State } from "../src/state";
-import { dur, rows, table } from "../src/status";
+import { dur, label, rows, table } from "../src/status";
 import { claudeFile, config, phase, root, useTempRoot, worktree, writePhases } from "./helpers";
 
 useTempRoot();
@@ -39,6 +39,15 @@ test("running, ended and orphan rows with runtime, idle, phases and PR", () => {
   expect(t[2]).toMatch(/ended\s+ended\s+9m\s+-\s+-\s+held$/);
   expect(t[3]).toMatch(/^PER-3\s+acme\/web\s+claude\s+orphan\s+orphan\s/);
   expect(table([])).toBe("no worktrees");
+});
+
+test("a handed-off ticket shows as handoff, not orphan; a window or an end marker still wins", () => {
+  for (const id of ["PER-1", "PER-2", "PER-3", "PER-4"]) worktree(id);
+  for (const id of ["PER-1", "PER-2", "PER-3"]) writeFileSync(join(dir(), `${id}.handoff`), "claude\n");
+  writeFileSync(join(dir(), "PER-3.ended"), "");
+  const rs = rows(config(), wins("PER-2"), root, T * 1000);
+  expect(rs.map((r) => [r.id, r.session, label(r)])).toEqual([["PER-1", "handoff", "handoff"], ["PER-2", "running", "unknown"], ["PER-3", "ended", "ended"], ["PER-4", "orphan", "orphan"]]);
+  expect(table(rs).split("\n")[1]).toMatch(/^PER-1\s+acme\/web\s+claude\s+handoff\s+handoff\s/);
 });
 
 test("the PR comes from <ID>.pr for any agent; a forged or oversize one is ignored", () => {

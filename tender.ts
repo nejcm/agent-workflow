@@ -5,13 +5,15 @@ import { dirname, join, resolve } from "node:path";
 import { hostLogin } from "./src/claude-auth";
 import { parseConfig } from "./src/config";
 import { dashboard, watch } from "./src/dash";
-import { cloneAll } from "./src/launcher";
+import { handoff, shellLine, ticketClone, type Tool, TOOLS } from "./src/handoff";
+import { cloneAll, resume } from "./src/launcher";
 import { CRITICAL_PATHS, TEST_PATHS } from "./src/merge";
 import { makeTracker, pass } from "./src/pass";
 import { dirEntries, parseRepoConfig } from "./src/repo-config";
 import { reviewLimit, snapshot, table } from "./src/status";
 import { tail } from "./src/tail";
 import type { Config, Io, RepoConfig, Run } from "./src/types";
+import { passLocked, TENDER_DIR } from "./src/util";
 
 async function status(cfg: Config, io: Io) {
   const full = reviewLimit(cfg);
@@ -63,9 +65,12 @@ const USAGE = `usage: bun tender.ts <command> [--config tender.json]
   status [--json]
   watch [--interval 2] [--plain]
   tail <ID | owner/repo/ID> [-n 20] [--no-follow]
+  open <ID | owner/repo/ID> [--tool claude|codex|t3|editor] [--exec]
+  resume <ID | owner/repo/ID>
   check [path]`;
-const VALUED = ["--config", "--interval", "-n"];
-const FLAGS = [...VALUED, "--dry-run", "--json", "--no-follow", "--plain"];
+const VALUED = ["--config", "--interval", "-n", "--tool"];
+const FLAGS = [...VALUED, "--dry-run", "--json", "--no-follow", "--plain", "--exec"];
+const TARGETED = ["tail", "open", "resume"];
 
 /** Validates `<dir>/.tender/` from the working tree and prints the repo's settings with defaults filled in; false if invalid. */
 export function check(dir: string, print = console.log, fail = console.error) {
@@ -91,18 +96,21 @@ export function parseArgs(argv: string[]) {
   const [cmd, id, ...extra] = argv.filter((a, i) => !a.startsWith("-") && !isValue(i));
   const interval = Number(opt("--interval") ?? 2);
   const n = Number(opt("-n") ?? 20);
+  const tool = opt("--tool");
   const ok =
     argv.every((a, i) => !a.startsWith("-") || isValue(i) || FLAGS.includes(a)) &&
-    ["run", "once", "status", "watch", "tail", "check"].includes(cmd ?? "") &&
+    ["run", "once", "status", "watch", "check", ...TARGETED].includes(cmd ?? "") &&
     !extra.length &&
-    (cmd === "check" || (cmd === "tail") === (id !== undefined)) &&
+    (cmd === "check" || TARGETED.includes(cmd!) === (id !== undefined)) &&
+    (tool === undefined || (cmd === "open" && TOOLS.includes(tool as Tool))) &&
+    !(argv.includes("--dry-run") && ["open", "resume"].includes(cmd!)) &&
     Number.isFinite(interval) &&
     interval >= 1 &&
     Number.isInteger(n) &&
     n >= 1 &&
     n <= 10_000 &&
     opt("--config") !== "";
-  return ok ? { cmd: cmd!, id, interval, n, path: resolve(opt("--config") ?? "tender.json") } : undefined;
+  return ok ? { cmd: cmd!, id, interval, n, tool: tool as Tool | undefined, path: resolve(opt("--config") ?? "tender.json") } : undefined;
 }
 
 async function main(argv: string[]) {
@@ -111,7 +119,7 @@ async function main(argv: string[]) {
     console.error(USAGE);
     process.exit(2);
   }
-  const { cmd, id, interval, n, path } = args;
+  const { cmd, id, interval, n, tool, path } = args;
   if (cmd === "check") process.exit(check(resolve(id ?? ".")) ? 0 : 1);
   let cfg: Config;
   try {
@@ -139,6 +147,24 @@ async function main(argv: string[]) {
       console.error(e.message);
       process.exit(1);
     });
+  if (cmd === "open") {
+    const env = process.env;
+    const stores = { claude: env.CLAUDE_CONFIG_DIR || join(io.home, ".claude"), codex: env.CODEX_HOME || join(io.home, ".codex") };
+    const h = await handoff(cfg, { ...io, log: (m) => console.error(m) }, id!, tool, stores, env.VISUAL || env.EDITOR).catch((e) => {
+      console.error(e.message);
+      process.exit(1);
+    });
+    console.error(`${h.key}/${h.id} is handed off; \`tender resume ${h.key}/${h.id}\` gives it back`);
+    if (!h.argv.length) return console.log(h.wt);
+    if (!argv.includes("--exec")) return console.log(shellLine(h.wt, h.argv));
+    const { LINEAR_API_KEY: _, ...rest } = env;
+    process.exit(await Bun.spawn(h.argv, { cwd: h.wt, env: rest, stdio: ["inherit", "inherit", "inherit"] }).exited);
+  }
+  if (cmd === "resume")
+    return (async () => resume(cfg, io, ticketClone(cfg, id!), TENDER_DIR))().catch((e) => {
+      console.error(e.message);
+      process.exit(1);
+    });
   // Dry runs change nothing, so the preflight in scripts/run.sh still works while the service runs.
   const lock = join(cfg.workspaceRoot, ".lock");
   if (!io.dry && !holdLock(lock)) {
@@ -152,11 +178,12 @@ async function main(argv: string[]) {
       })
     : undefined;
   await cloneAll(cfg, io);
-  if (cmd === "once") return pass(cfg, io);
+  const poll = () => (io.dry ? pass(cfg, io) : passLocked(cfg, io.log, () => pass(cfg, io)));
+  if (cmd === "once") return poll();
   // Its own timer: a pass can block for minutes, longer than Claude's 5-minute refresh window.
   if (refresh) setInterval(refresh, 60_000);
   for (;;) {
-    await pass(cfg, io);
+    await poll();
     await Bun.sleep(cfg.pollIntervalMs);
   }
 }

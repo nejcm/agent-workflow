@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { bar, card, chips, clip, counts, cut, detail, event, layout, type Line, type Model, palette, screen, scroll, segments, sortRows, tailView, wrap } from "../src/dash-view";
 import { statusRow as row } from "./helpers";
-import type { PhaseItem } from "../src/status";
+import { label, type PhaseItem } from "../src/status";
 
 const C = palette({});
 const M = palette({ NO_COLOR: "1" });
@@ -50,10 +50,11 @@ test("clip, cut and wrap work in display columns", () => {
 });
 
 test("sorting puts waiting then question first and orders by state then ID; counts label orphans apart", () => {
-  const rs = [row({ id: "Q", state: "question" }), row({ id: "B", state: "ended", session: "ended" }), row({ id: "C", state: "ended", session: "orphan" }), row({ id: "Z", state: "waiting" }), row({ id: "A", state: "idle" }), row({ id: "B", state: "working" }), row({ id: "A", state: "working" }), row({ id: "U", state: "unknown" })];
-  expect(sortRows(rs).map((r) => `${r.id}:${r.session === "orphan" ? "orphan" : r.state}`)).toEqual(["Z:waiting", "Q:question", "A:working", "B:working", "A:idle", "U:unknown", "C:orphan", "B:ended"]);
-  expect(counts(rs)).toEqual({ waiting: 1, question: 1, working: 2, idle: 1, unknown: 1, orphan: 1, ended: 1 });
-  expect(text(chips(rs, C, false))).toBe(" ◆ 1 waiting  ◇ 1 question  ● 2 working  ○ 1 idle  ? 1 unknown  ◌ 1 orphan  ✕ 1 ended ");
+  const rs = [row({ id: "Q", state: "question" }), row({ id: "B", state: "ended", session: "ended" }), row({ id: "C", state: "ended", session: "orphan" }), row({ id: "Z", state: "waiting" }), row({ id: "A", state: "idle" }), row({ id: "B", state: "working" }), row({ id: "A", state: "working" }), row({ id: "U", state: "unknown" }), row({ id: "H", state: "ended", session: "handoff" })];
+  expect(sortRows(rs).map((r) => `${r.id}:${label(r)}`)).toEqual(["Z:waiting", "Q:question", "A:working", "B:working", "A:idle", "U:unknown", "H:handoff", "C:orphan", "B:ended"]);
+  expect(counts(rs)).toEqual({ waiting: 1, question: 1, working: 2, idle: 1, unknown: 1, handoff: 1, orphan: 1, ended: 1 });
+  expect(text(chips(rs, C, false))).toBe(" ◆ 1 waiting  ◇ 1 question  ● 2 working  ○ 1 idle  ? 1 unknown  ◐ 1 handoff  ◌ 1 orphan  ✕ 1 ended ");
+  expect(text(chips(rs.filter((r) => r.id !== "H"), C, false))).not.toContain("handoff");
   expect(text(chips([], C, true))).toBe(" ◆0  ●0  ○0  ◌0  ✕0 ");
   expect(text(chips([row({ state: "question" })], C, true))).toBe(" ◆0  ◇1  ●0  ○0  ◌0  ✕0 ");
   const waiting = chips([row({ state: "waiting" })], C, false)[0]!;

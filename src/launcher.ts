@@ -7,7 +7,7 @@ import { repoDir } from "./config";
 import { canonical, sameRepo } from "./github";
 import { configCache, loadSession, promptFor } from "./repo-config";
 import type { Config, Io, Repo, Session, Source, Ticket, Tracker } from "./types";
-import { GIT, inDir, inRun, put, read, remove, SLOW_SECS, write } from "./util";
+import { GIT, inDir, inRun, passLocked, put, read, remove, SLOW_SECS, write } from "./util";
 
 export const render = (tpl: string, vars: Record<string, string>) => tpl.replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? m);
 
@@ -58,6 +58,18 @@ export function launcher(l: Pick<Session, "agent" | "sandbox" | "path">, wt: str
   const box = nono ? `unset CLAUDE_CODE_OAUTH_TOKEN\nexport GH_CONFIG_DIR=${q(wt)}.gh XDG_CACHE_HOME=${q(join(tmp, "cache"))} TENDER_BUN=${q(bun)}\n` : "";
   const scope = ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--unit", q(unit), "--"];
   return `#!/usr/bin/env bash\ncd ${q(wt)} || exit 1\nunset LINEAR_API_KEY\nexport TMPDIR=${q(tmp)} TMP=${q(tmp)} TEMP=${q(tmp)}\n${box}${env}\nexec ${[...scope, ...wrap, ...cmd].join(" ")}\n`;
+}
+
+/** Kills the session's scope, then its window, as for a canceled ticket; drops it from `wins`. */
+export async function stopSession(cfg: Config, io: Io, key: string, id: string, wins: Map<string, string>) {
+  await stopScope(cfg, io, key, id);
+  const w = wins.get(winName(key, id));
+  // Killing the scope usually closes the window first.
+  if (w)
+    await write(io, ["tmux", "kill-window", "-t", w]).catch((e) => {
+      if (!/can't find window/.test(e.message)) throw e;
+    });
+  wins.delete(winName(key, id));
 }
 
 /** Window ids by name; `activity` is each window's last pane output in epoch seconds, as the tmux server saw it; `listed` only if every row parsed. */
@@ -268,10 +280,42 @@ export async function start(cfg: Config, s: Source, host: Repo, t: Ticket, tr: T
     }
     return false;
   }
-  const wt = join(dir, t.id);
-  const branch = `agent/${t.id}`;
-  const promptFile = join(dir, `${t.id}.prompt.md`);
-  const script = join(dir, `${t.id}.sh`);
+  await launch(cfg, io, r, t.id, (vars) => render(promptFor(r, t.labels), { ...vars, title: t.title, body: t.body, url: t.url }), tenderDir, s.name);
+  await claim(io, tr, join(dir, `${t.id}.claim`), t).catch((e) => io.log(`${t.id}: claim failed, session left running and the claim retried next poll: ${e.message}`));
+  return true;
+}
+
+const CONTINUE = "You are taking ticket {{id}} back after a human worked on it outside tender. Before changing anything, read `git status`, `git log origin/{{base}}..HEAD`, the PR for branch {{branch}} if there is one, and `.tender/run/`, then finish the task below from where it stands.\n\n";
+
+/** Starts a new session in `<ID>`'s existing clone after a hand-off, with the original prompt behind a continue note. */
+export const resume = (cfg: Config, io: Io, target: { key: string; id: string }, tenderDir: string) => passLocked(cfg, io.log, () => resumeLocked(cfg, io, target, tenderDir));
+
+async function resumeLocked(cfg: Config, io: Io, { key, id }: { key: string; id: string }, tenderDir: string) {
+  const dir = repoDir(cfg, key);
+  const host = Object.hasOwn(cfg.repos, key) ? cfg.repos[key]! : undefined;
+  if (!host) throw new Error(`${key} is not in tender.json`);
+  if (!handedOff(dir, id)) throw new Error(`${key}/${id} is not handed off`);
+  if (existsSync(join(dir, `${id}.ended`))) throw new Error(`${key}/${id} ended (canceled or reassigned) while handed off; not resumed`);
+  if ((await windows(cfg, io)).has(winName(key, id))) throw new Error(`${key}/${id} already has a tmux window`);
+  const r = await loadSession(io, host, SLOW_SECS);
+  if (!r) throw new Error(`${key}'s .tender/ on its base branch is invalid; run \`tender check\` in the repo for details`);
+  const old = readFileSync(join(dir, `${id}.prompt.md`), "utf8");
+  await launch(cfg, io, r, id, (vars) => {
+    const head = render(CONTINUE, vars);
+    return old.startsWith(head) ? old : head + old;
+  }, tenderDir);
+  remove(io, join(dir, `${id}.handoff`));
+}
+
+export const handedOff = (dir: string, id: string) => existsSync(join(dir, `${id}.handoff`));
+
+// `source` marks a fresh start: it records the owner, clears the end markers and writes `<ID>.claim` for the caller's claim.
+async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars: Record<string, string>) => string, tenderDir: string, source?: string) {
+  const dir = repoDir(cfg, r.key);
+  const wt = join(dir, id);
+  const branch = `agent/${id}`;
+  const promptFile = join(dir, `${id}.prompt.md`);
+  const script = join(dir, `${id}.sh`);
   const nono = r.sandbox === "nono";
   const token = join(io.home, CLAUDE_TOKEN);
   if (r.agent === "claude" && !nono && !existsSync(token)) throw new Error(`${token} is missing: run \`claude setup-token\` and save the token it prints there (chmod 600)`);
@@ -279,7 +323,7 @@ export async function start(cfg: Config, s: Source, host: Repo, t: Ticket, tr: T
   if (warn) io.log(warn);
   const bun = nono ? findBun([cfg.workspaceRoot]) : "";
   // No window means any scope left under this name is a stale session, still writing the clone it is about to share.
-  await stopScope(cfg, io, r.key, t.id);
+  await stopScope(cfg, io, r.key, id);
   // Claude sessions run Codex only as a helper, so a missing Codex login does not stop them.
   const login = r.agent === "codex" ? await codexLogin(io) : await codexLogin(io).catch(() => undefined);
   const noHooks = r.agent === "codex" ? codexHooksWarning(io.home) : undefined;
@@ -289,17 +333,19 @@ export async function start(cfg: Config, s: Source, host: Repo, t: Ticket, tr: T
     rmSync(tmpHome(wt), { recursive: true, force: true });
     mkdirSync(join(tmpHome(wt), "cache"), { recursive: true, mode: 0o700 });
   }
-  put(io, join(dir, `${t.id}.source`), s.name);
-  put(io, join(dir, `${t.id}.agent`), r.agent);
-  remove(io, join(dir, `${t.id}.ended`));
-  remove(io, join(dir, `${t.id}.reassigned`));
+  if (source !== undefined) {
+    put(io, join(dir, `${id}.source`), source);
+    remove(io, join(dir, `${id}.ended`));
+    remove(io, join(dir, `${id}.reassigned`));
+  }
+  put(io, join(dir, `${id}.agent`), r.agent);
   if (existsSync(wt)) io.log(`reuse ${wt}`);
   else await cloneSession(io, r, wt, branch);
   const root = existsSync(wt) ? realpathSync(wt) : wt;
   seedCodex(io, codexHome(wt), login, root);
   if (r.agent === "claude" || nono) seedClaude(io, claudeHome(wt), root);
   const tests = r.testCmd ? `\`${r.testCmd}\`` : "the project's tests (find how they run: README, CI config, package or build files)";
-  const vars = { id: t.id, title: t.title, body: t.body, url: t.url, branch, base: r.baseBranch, testCmd: r.testCmd ?? "", tests, repo: r.key, planStep: r.planStep };
+  const vars = { id, branch, base: r.baseBranch, testCmd: r.testCmd ?? "", tests, repo: r.key, planStep: r.planStep };
   io.log(`${io.dry ? "dry: " : ""}write ${join(wt, ".tender", "run", ".gitignore")}`);
   if (!io.dry) {
     mkdirSync(join(wt, ".tender"), { recursive: true });
@@ -307,14 +353,11 @@ export async function start(cfg: Config, s: Source, host: Repo, t: Ticket, tr: T
     // Unlink + exclusive create: never write through a symlink or hardlink the agent left there.
     inRun(wt, (d) => (rmSync(`${d}/.gitignore`, { force: true }), writeFileSync(`${d}/.gitignore`, "*\n", { flag: "wx" })));
   }
-  put(io, promptFile, render(promptFor(r, t.labels), vars));
-  put(io, script, launcher(r, wt, promptFile, scopeUnit(cfg, r.key, t.id), tenderDir, bun), 0o755);
+  put(io, promptFile, prompt(vars));
+  put(io, script, launcher(r, wt, promptFile, scopeUnit(cfg, r.key, id), tenderDir, bun), 0o755);
   // Claimed last, so a failed start leaves the ticket ready; `<ID>.claim` goes first, so a claim lost to an error or a crash is retried while the window lives.
-  const pending = join(dir, `${t.id}.claim`);
-  put(io, pending, new Date().toISOString());
-  await write(io, ["tmux", "new-window", "-d", "-t", `=${cfg.tmuxSession}:`, "-n", winName(r.key, t.id), script]);
-  await claim(io, tr, pending, t).catch((e) => io.log(`${t.id}: claim failed, session left running and the claim retried next poll: ${e.message}`));
-  return true;
+  if (source !== undefined) put(io, join(dir, `${id}.claim`), new Date().toISOString());
+  await write(io, ["tmux", "new-window", "-d", "-t", `=${cfg.tmuxSession}:`, "-n", winName(r.key, id), script]);
 }
 
 /** Claims a started session's ticket; `<ID>.claim` marks it unclaimed until the claim succeeds. */

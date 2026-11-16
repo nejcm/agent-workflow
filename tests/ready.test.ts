@@ -1,5 +1,5 @@
 import { expect, setSystemTime, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { canonCache } from "../src/github";
 import { prReady } from "../src/merge";
@@ -245,6 +245,24 @@ test("merged by hand from ready to merge is done as from in review; parked ticke
   parked.pr({ headRefOid: "z" });
   await parked.run();
   expect(parked.calls).toEqual([]);
+});
+
+test("ready to merge: a hand-off parks the ticket, so its killed window never promotes it; a merge still moves it to Done", async () => {
+  const d = setup();
+  const file = join(root, "acme/web/gh-1.handoff");
+  writeFileSync(file, "claude\n");
+  await d.run();
+  expect(d.calls).toEqual([]);
+  expect(d.marker()).toBeUndefined();
+  rmSync(file);
+  await d.run();
+  expect(d.calls).toEqual([`ready gh-1 ready to merge: ${URL}`]);
+  const m = setup({ autoMerge: "intelligent" });
+  writeFileSync(file, "claude\n");
+  m.t.readyToMerge = true;
+  m.pr({ state: "MERGED" });
+  await m.run();
+  expect(m.calls).toEqual(["done gh-1"]);
 });
 
 test("github: ready-to-merge label listed with in review, skipped as ready; moves swap the labels", async () => {

@@ -65,6 +65,19 @@ test("github adapter: claim survives a failed pickup comment, not a failed label
   await expect(tr.claim({ ...ticket(7), repo: "acme/web" })).rejects.toThrow("gh issue edit: boom");
 });
 
+test("github adapter: status moves resolve once the label edit lands, whatever their comment does", async () => {
+  let failEdit = false;
+  const { io, logs } = fakeIo((a) => (a[2] === "comment" || (failEdit && a[2] === "edit") ? { code: 1 } : undefined));
+  const tr = github(gh(), "box", io, false, ["acme/web"]);
+  const t = { ...ticket(7), repo: "acme/web" };
+  await tr.toReview(t, "PR: u");
+  await tr.toReadyToMerge!(t, "ready to merge: u");
+  expect(logs.filter((m) => m.startsWith("gh-7: status comment failed"))).toHaveLength(2);
+  failEdit = true;
+  await expect(tr.toReview(t, "PR: u")).rejects.toThrow("gh issue edit: boom");
+  await expect(tr.toReadyToMerge!(t, "ready to merge: u")).rejects.toThrow("gh issue edit: boom");
+});
+
 test("github adapter: polls every repo of the source and tags tickets with it", async () => {
   const c = config({ repos: [{ name: "acme/web", path: "/a" }, { name: "acme/api", path: "/b" }] });
   const { io, cmds } = fakeIo((a) => (a[2] === "list" ? { out: JSON.stringify([{ number: 12, title: "t", body: "", url: "u", labels: [] }]) } : undefined));

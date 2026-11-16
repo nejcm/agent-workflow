@@ -152,12 +152,12 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
     },
     async toReview(t, note) {
       await move(t.ref, l.inReview);
-      await comment(t, note);
+      await comment(t, note).catch((e) => io.log(`${t.id}: status comment failed: ${e.message}`));
     },
     ...(l.readyToMerge && {
       async toReadyToMerge(t: Ticket, note: string) {
         await move(t.ref, l.readyToMerge!);
-        await comment(t, note);
+        await comment(t, note).catch((e) => io.log(`${t.id}: status comment failed: ${e.message}`));
       },
     }),
     done: (t) => move(t.ref, l.done[0]!),

@@ -131,6 +131,8 @@ async function checkStall(cfg: Config, s: Source, t: Ticket, tr: Tracker, io: Io
   const pane = await agentPane(io, win, `${wt}.sh`).catch(() => undefined);
   const lines = pane ? await read(io, ["tmux", "capture-pane", "-p", "-t", pane, "-S", "-20"]).catch(() => "") : "";
   await tr.park(t);
+  io.event?.("stall", t.repo!, t.id, { quietMinutes: Math.floor((now - at) / 60_000) });
+  io.event?.("park", t.repo!, t.id, { why: "stall" });
   t.labels = [...(t.labels ?? []), s.needsHumanLabel];
   await tr.comment(t, quoted(`session working with no activity for ${Math.floor((now - at) / 60_000)} min; parked with ${s.needsHumanLabel}, left running`, "Last pane lines", lines));
   put(io, file, String(at));
@@ -171,7 +173,8 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
         await step(io, `phases ${t.id}`, () => syncPhases(w, tr, io, dir, !!pr));
         if (pr) {
           if (!parked) await step(io, `findings ${t.id}`, () => fileFindings(w, tr, io, dir));
-          return tr.toReview(w, `PR: ${pr}`);
+          await tr.toReview(w, `PR: ${pr}`);
+          return io.event?.("review", key, t.id, { pr });
         }
         const ended = join(dir, `${t.id}.ended`);
         const win = wins.get(winName(key, t.id));
@@ -286,6 +289,7 @@ async function syncReady(t: Ticket, tr: Tracker, io: Io, dir: string, pr: any, c
     if (!why) return void ((m?.step === "moved" && m.head === at) || writeReady(io, f, { head: at, step: "moved" }));
     writeReady(io, f, { head: at, step: "demote", why });
     await tr.toReview(t, `back in review, ${why}: ${pr.url}`);
+    io.event?.("review", t.repo!, t.id, { pr: pr.url, why });
     return remove(io, f);
   }
   // Tender's own move back is marked `demote` first, so `moved` here means a human moved it back.
@@ -295,6 +299,7 @@ async function syncReady(t: Ticket, tr: Tracker, io: Io, dir: string, pr: any, c
   // Before the move, so a move that lands without its comment still has a head to demote from.
   writeReady(io, f, { head: pr.headRefOid, step: "pending" });
   await tr.toReadyToMerge!(t, `ready to merge: ${pr.url}`);
+  io.event?.("ready-to-merge", t.repo!, t.id, { pr: pr.url, head: pr.headRefOid });
   writeReady(io, f, { head: pr.headRefOid, step: "moved" });
 }
 
@@ -396,6 +401,11 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
           if (t) await claim(x.io, x.tr, pending, { ...t, repo: r.key });
         }
         if (!end) return;
+        if (end === "done") {
+          const pr = existsSync(join(dir, `${id}.pr`)) ? readFileSync(join(dir, `${id}.pr`), "utf8") : "";
+          // Keyed like merge's: a cleanup retried every poll, or after tender's own done, records it once.
+          x.io.event?.("done", r.key, id, pr ? { pr } : undefined, pr);
+        }
         const w = wins.get(winName(r.key, id));
         if (end === "canceled" && !w && existsSync(join(dir, `${id}.ended`))) return;
         await stopSession(cfg, x.io, r.key, id, wins);

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync
 import { join } from "node:path";
 import { addedLines, ESCAPE_HATCHES, escapeHatch, hatchInWorker } from "../src/hatch";
 import { type PrFacts, isCritical, isTest, mergeDecision, parseAssessment, prMode } from "../src/merge";
+import { openDb, recorder } from "../src/db";
 import { pass } from "../src/pass";
 import { configCache } from "../src/repo-config";
 import { config, fakeIo, fakeTracker, repoFiles, root, ticket, useTempRoot, web, windowsOut, worktree } from "./helpers";
@@ -127,9 +128,10 @@ test("auto-merge pass: merges only when enabled, pinned to the head; not-merged 
   const run = async (autoMerge: string, dry = false) => {
     const { tr, calls } = fakeTracker({ inReview: [ticket(1)] });
     const { io, cmds, logs } = fakeIo(respond, dry);
+    const events: string[] = [];
     worktree("gh-1");
-    await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge }] }), io, () => tr, "/tender");
-    return { calls, merges: [...cmds, ...logs].filter((x) => x.includes("gh pr merge")), cmds };
+    await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge }] }), { ...io, event: (kind, repo, id, data) => void events.push(`${kind} ${repo}/${id} ${JSON.stringify(data ?? {})}`) }, () => tr, "/tender");
+    return { calls, merges: [...cmds, ...logs].filter((x) => x.includes("gh pr merge")), cmds, events };
   };
 
   const off = await run("off");
@@ -143,6 +145,7 @@ test("auto-merge pass: merges only when enabled, pinned to the head; not-merged 
   expect(all.merges[0]).toBe(`gh pr merge 7 --repo acme/web --squash --delete-branch --match-head-commit ${"a".repeat(40)}`);
   expect(all.merges.join(" ")).not.toContain("--admin");
   expect(all.calls).toEqual(["comment gh-1 auto-merged https://github.com/acme/web/pull/7: autoMerge all", "done gh-1"]);
+  expect(all.events).toEqual(['merged acme/web/gh-1 {"pr":"https://github.com/acme/web/pull/7","auto":true,"mode":"all","reason":"autoMerge all"}', 'done acme/web/gh-1 {"pr":"https://github.com/acme/web/pull/7"}']);
   const files = "gh api --paginate repos/acme/web/pulls/7/files?per_page=100 --jq .[] | {filename, previous_filename, status, additions, deletions}";
   const diff = `bash -c set -o pipefail; gh api -H "Accept: application/vnd.github.diff" "$1" | head -c "$2" bash repos/acme/web/compare/${"f".repeat(40)}...${"a".repeat(40)} 2097153`;
   expect(dry.cmds.filter((x) => x.includes("gh api"))).toEqual([files, diff]);
@@ -166,9 +169,35 @@ test("auto-merge pass: merges only when enabled, pinned to the head; not-merged 
   facts = { ...facts, files: [file("src/a.ts")], changedFiles: 1, headRefOid: "e".repeat(40) };
   const shadow = [await run("shadow"), await run("shadow")];
   expect([shadow.flatMap((r) => r.calls), shadow.flatMap((r) => r.merges)]).toEqual([["comment gh-1 would auto-merge: small change"], []]);
+  expect(shadow.flatMap((r) => r.events)).toEqual([`gate acme/web/gh-1 {"pr":"https://github.com/acme/web/pull/7","head":"${"e".repeat(40)}","mode":"shadow","merge":true,"reason":"small change"}`]);
 
   facts = { ...facts, state: "MERGED" };
   expect((await run("intelligent")).calls).toEqual(["done gh-1"]);
+});
+
+test("a merge whose done fails is recorded once, as tender's, when the next poll completes it", async () => {
+  const facts: any = { ...prFacts(), number: 7, url: "https://github.com/acme/web/pull/7", baseRefOid: "f".repeat(40), headRefOid: "a".repeat(40) };
+  let merged = false;
+  const { io, logs } = fakeIo((a) =>
+    a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"OPEN"}]' }
+    : a[1] === "pr" && a[2] === "merge" ? void (merged = true)
+    : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(merged ? { ...facts, state: "MERGED" } : facts) }
+    : a[1] === "api" ? filesOut(facts) : undefined);
+  const event = recorder(join(root, "tender.db"), "box", (m) => logs.push(m));
+  const f = fakeTracker({ inReview: [ticket(1)] });
+  const done = f.tr.done;
+  f.tr.done = async () => {
+    throw new Error("done failed");
+  };
+  worktree("gh-1");
+  const c = config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "all" }] });
+  await pass(c, { ...io, event }, () => f.tr, "/tender");
+  f.tr.done = done;
+  await pass(c, { ...io, event }, () => f.tr, "/tender");
+  expect(f.calls.filter((x) => x.startsWith("done"))).toEqual(["done gh-1"]);
+  const db = openDb(join(root, "tender.db"));
+  expect(db.query<{ kind: string; data: string }, []>("SELECT kind, data FROM events").all().map((e) => [e.kind, JSON.parse(e.data).auto])).toEqual([["merged", true], ["done", undefined]]);
+  db.close();
 });
 
 test("auto-merge pass: parked tickets only get the merged-by-hand recovery; a fresh parked read gates the merge", async () => {

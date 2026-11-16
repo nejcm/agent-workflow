@@ -4,7 +4,7 @@ Move a GitHub issue or Linear ticket to **ready**, and `tender` starts a Claude 
 
 - **Watch and steer locally.** `tmux attach -t tender`, or open its clone in your editor. Codex sessions are interactive, so they also land in the ChatGPT/Codex app history. Claude sessions run without Remote Control: they hold an inference-only token (nono's phantom, or the setup-token without a sandbox), which cannot open Remote Control sessions.
 - **Runs where you are.** Directly on your machine (sandboxed by nono), or on a VM (`sandbox: "none"`, the VM is the boundary). Same code, same config.
-- **No moving parts to babysit.** A small Bun + TypeScript program, no database: state is the tracker, the tmux windows and the session clones. Polls instead of webhooks, so nothing listens on a port.
+- **No moving parts to babysit.** A small Bun + TypeScript program, no database server, nothing to back up: state is the tracker, the tmux windows and the session clones. Polls instead of webhooks, so nothing listens on a port.
 - **Your setup, read-only.** Agents use your `CLAUDE.md`, `AGENTS.md` and skills, but run from their own config dirs (a fresh `<ID>.claude` per Claude ticket and `<ID>.codex` per ticket) and cannot modify yours.
 
 ![tender watch: ticket list with phase progress bars, selected ticket detail and live transcript](docs/dashboard.png)
@@ -61,6 +61,10 @@ Every poll (default 60 s), `tender` looks for ready tickets (the `agent` label p
 2. starts the agent in a tmux window, sandboxed by nono, with a prompt built from the ticket and the repo's `.tender/` config;
 3. mirrors the agent's phases, questions and findings to the tracker;
 4. moves the ticket to In Review when the PR exists, feeds review comments, failed checks and conflicts back to the live session, and optionally auto-merges.
+
+## History: `tender.db`
+
+`run`, `once` and `open` append an event (start, claim, review, ready-to-merge, merged, done, park, stall, feedback-round, gate, handoff) to `<workspaceRoot>/tender.db`, a SQLite file in WAL mode. It is history for later stats, never state: the tracker stays the truth. It sits outside every session clone and is never granted to the sandbox. A failed write is logged and skipped; `--dry-run` writes nothing. Safe to delete at any time (with its `-wal` and `-shm` files); the next event creates a fresh one.
 
 ## Docs
 

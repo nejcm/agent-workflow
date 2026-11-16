@@ -284,6 +284,7 @@ export async function start(cfg: Config, s: Source, host: Repo, t: Ticket, tr: T
     return false;
   }
   await launch(cfg, io, r, t.id, (vars) => render(promptFor(r, t.labels), { ...vars, title: t.title, body: t.body, url: t.url }), tenderDir, s.name);
+  io.event?.("start", host.key, t.id, { agent: r.agent, source: s.name });
   await claim(io, tr, join(dir, `${t.id}.claim`), t).catch((e) => io.log(`${t.id}: claim failed, session left running and the claim retried next poll: ${e.message}`));
   return true;
 }
@@ -366,5 +367,6 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
 /** Claims a started session's ticket; `<ID>.claim` marks it unclaimed until the claim succeeds. */
 export async function claim(io: Io, tr: Tracker, file: string, t: Ticket) {
   await tr.claim(t);
+  io.event?.("claim", t.repo!, t.id);
   remove(io, file);
 }

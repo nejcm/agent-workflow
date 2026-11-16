@@ -118,9 +118,9 @@ export interface Tracker {
   /** Done (cleanup), canceled (stop, keep data) or still open. */
   closed(id: string, repo: string): Promise<"done" | "canceled" | undefined>;
   claim(t: Ticket): Promise<void>;
-  /** Moves to In Review from In Progress or Ready to merge, posting `note`. */
+  /** Moves to In Review from In Progress or Ready to merge, then posts `note` best-effort. */
   toReview(t: Ticket, note: string): Promise<void>;
-  /** Unset when the tracker has no Ready to merge status. */
+  /** Unset when the tracker has no Ready to merge status; `note` is best-effort, as for toReview. */
   toReadyToMerge?(t: Ticket, note: string): Promise<void>;
   done(t: Ticket): Promise<void>;
   /** Adds the needs-human label, which pauses start, feedback, auto-merge and the ended comment until a human removes it. */
@@ -140,10 +140,14 @@ export interface Tracker {
 
 export type Run = (argv: string[], cwd?: string, secs?: number) => Promise<{ code: number; out: string; err: string }>;
 
+export type EventKind = "start" | "claim" | "review" | "ready-to-merge" | "merged" | "done" | "park" | "stall" | "feedback-round" | "gate" | "handoff";
+
 export interface Io {
   run: Run;
   fetch: typeof fetch;
   dry: boolean;
   log: (msg: string) => void;
   home: string;
+  /** Appends to `tender.db`'s events, once per `once` key when given; unset in dry runs. Never throws. */
+  event?: (kind: EventKind, repo: string, ticket: string, data?: object, once?: string) => void;
 }

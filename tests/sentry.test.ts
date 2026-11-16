@@ -80,6 +80,13 @@ test("collect: argument thresholds apply and the body has the frames, counts, da
     expect(f!.body).toContain(s);
 });
 
+test("collect: fixes carries the short ID unless --no-fixes or the ID looks wrong", async () => {
+  pages = [[issue(1, 500, 40), { ...issue(2, 400, 40), shortId: "WEB-2 @bob" }]];
+  const [a, b] = parseCollect((await run([])).out);
+  expect([a!.fixes, b!.fixes]).toEqual(["WEB-1", undefined]);
+  expect(parseCollect((await run(["--no-fixes"])).out)[0]!.fixes).toBeUndefined();
+});
+
 test("collect: output is capped at 100 lines", async () => {
   pages = [Array.from({ length: 100 }, (_, n) => issue(n + 1, 1000 - n, 50)), Array.from({ length: 20 }, (_, n) => issue(n + 200, 500, 50))];
   expect(parseCollect((await run(["--top", "0"])).out)).toHaveLength(100);

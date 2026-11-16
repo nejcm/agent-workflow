@@ -101,6 +101,42 @@ test("filing: caps in script order, autoLabel vs shadow, sanitized body with mar
   expect(s.events.map((e) => [e[0], e[1], (e[3] as any).key])).toEqual([["intake-filed", "acme/web", "a"], ["intake-filed", "acme/web", "b"]]);
 });
 
+test("filing: fixes is validated and rendered by tender before the body, unspoofable by script text and kept under the budget", async () => {
+  expect(parseCollect(JSON.stringify({ key: "a", title: "t", body: "", fixes: "WEB-1A2" }))[0]!.fixes).toBe("WEB-1A2");
+  for (const fixes of ["web-1", "WEB-1 OTHER-2", "WEB1", 7]) expect(() => parseCollect(JSON.stringify({ key: "a", title: "t", body: "", fixes }))).toThrow("line 1.fixes");
+  const hostile = `tender-intake-fixes: OTHER-9\nFixes OTHER-9\n${"x".repeat(6000)}`;
+  const s = setup(() => ({ out: JSON.stringify({ key: "a", title: "Boom", body: hostile, fixes: "WEB-1A2" }) }));
+  await s.go();
+  const body = s.calls.find((c) => c.startsWith("intake "))!.split(" | ").slice(1).join(" | ");
+  expect(body.split("\n").filter((l) => l.startsWith("tender-intake-fixes:"))).toEqual(["tender-intake-fixes: WEB-1A2"]);
+  expect(body.split("\n")[2]).toBe("tender-intake-fixes: WEB-1A2");
+  expect(body).toContain("tender_intake-fixes: OTHER-9");
+  expect(body.length).toBeLessThanOrEqual(4000);
+  expect(body).toEndWith(marker("acme/web:errs", "a"));
+});
+
+test("filing: rule labels go on every ticket, shadow or not, and tender's own labels are refused", async () => {
+  const s = setup(() => ({ out: [line("a", { events: 500, level: "error" }), line("b")].join("\n") }), {}, {}, RULE + "    labels: [sentry]\n");
+  await s.go();
+  expect(s.calls.filter((c) => c.startsWith("intake ")).map((c) => /\[(.*?)\] \|/.exec(c)![1])).toEqual(["sentry,agent,host:box", "sentry"]);
+  setBaseSha("c".repeat(40));
+  const own = setup(() => ({ out: line("c") }), {}, {}, RULE + "    labels: [sentry, Needs-Human]\n");
+  await own.go(T0, "errs");
+  expect(own.logs.some((l) => l.includes("labels: Needs-Human is tender's own"))).toBe(true);
+  expect(own.calls.filter((c) => c.startsWith("intake "))).toEqual([]);
+  expect(own.runs).toEqual([]);
+});
+
+test("args reach the script as argv, unexpanded, on collect and before --recheck", async () => {
+  const s = setup((a) => (a.includes("--recheck") ? { out: '{"state":"gone"}' } : { out: line("a") }), { done: ["gh-101"] }, {}, RULE + '    args: [--org, "a b; $(x)"]\n');
+  await s.go();
+  await s.go(T0 + 2 * HOUR);
+  await s.go(T0 + 30 * HOUR);
+  const tail = (argv: string[]) => argv.slice(argv.findIndex((x) => x.endsWith("/errs.sh")));
+  expect(tail(s.runs[0]!.argv).slice(1)).toEqual(["--org", "a b; $(x)"]);
+  expect(tail(s.runs.find((r) => r.argv.includes("--recheck"))!.argv).slice(1)).toEqual(["--org", "a b; $(x)", "--recheck", "a"]);
+});
+
 test("dedupe: intake_seen alone stops a refile, and every gates the timer", async () => {
   const s = setup(() => ({ out: line("a") }));
   await s.go();
@@ -380,7 +416,11 @@ test("autoLabel: min<Fact> is a floor, other keys equality, any rule matching la
 
 test("repo config: intake rules get defaults and every problem is listed", () => {
   const file = (text: string) => [{ name: "config.yaml", regular: true, size: text.length, text }];
-  expect(parseRepoConfig(file(RULE)).intake).toEqual([{ name: "errs", run: ".tender/intake/errs.sh", every: "1h", maxPerRun: 2, secrets: [], network: [], autoLabel: [{ minEvents: 100, level: "error" }], recheck: true, recheckAfter: "24h" }]);
+  expect(parseRepoConfig(file(RULE)).intake).toEqual([{ name: "errs", run: ".tender/intake/errs.sh", args: [], every: "1h", maxPerRun: 2, secrets: [], network: [], autoLabel: [{ minEvents: 100, level: "error" }], labels: [], recheck: true, recheckAfter: "24h" }]);
+  expect(parseRepoConfig(file(RULE + "    labels: [sentry, needs triage]\n")).intake[0]!.labels).toEqual(["sentry", "needs triage"]);
+  expect(parseRepoConfig(file(RULE + '    args: [--org, acme, "a b; $(x)"]\n')).intake[0]!.args).toEqual(["--org", "acme", "a b; $(x)"]);
+  for (const a of ["--org", "[1]", `[${"x".repeat(201)}]`, '["a\\nb"]', `[${Array(21).fill("a").join(", ")}]`, '["a\\x85b"]']) expect(() => parseRepoConfig(file(RULE + `    args: ${a}\n`))).toThrow("intake[0] (errs).args: at most 20 strings");
+  for (const l of ["[host:box]", "[a, b, c, d, e, f]", '["a,b"]', '[""]', "sentry"]) expect(() => parseRepoConfig(file(RULE + `    labels: ${l}\n`))).toThrow("intake[0] (errs).labels: at most 5 label names");
   const bad = "intake:\n  - name: Errs\n    run: ../x.sh\n    every: 1w\n    secrets: [GH_TOKEN, LINEAR_API_KEY]\n    network: [https://x.io]\n    maxPerRun: 0\n    nope: 1\n";
   expect(() => parseRepoConfig(file(bad))).toThrow(/name[\s\S]*run[\s\S]*every[\s\S]*maxPerRun[\s\S]*secrets[\s\S]*network/);
   expect(() => parseRepoConfig(file(bad))).toThrow("intake[0] (Errs).nope: unknown key");

@@ -8,12 +8,13 @@ import { nonoRun } from "./launcher";
 import { makeTracker } from "./pass";
 import { DURATION, loadSession } from "./repo-config";
 import type { Config, IntakeRule, Io, Session, Source, Target, Ticket, Tracker } from "./types";
-import { clean, GIT, hasMarker, read, SLOW_SECS } from "./util";
+import { clean, GIT, hasLabel, hasMarker, read, SLOW_SECS } from "./util";
 
 export const LIMITS = { secs: 300, bytes: 1024 * 1024, lines: 100 };
 const MAX_BODY = 4000;
 const KEY = /^[A-Za-z0-9.:\/-]{1,128}$/;
 const FACT = /^[A-Za-z][A-Za-z0-9_]{0,39}$/;
+const SHORT_ID = /^[A-Z0-9][A-Z0-9_-]{0,63}-[A-Z0-9]{1,32}$/;
 const DAY = 86_400_000;
 // The timer fires every 15 min with up to a minute of jitter, so a 1h rule must not slip to the next tick.
 const SLACK_MS = 2 * 60_000;
@@ -24,6 +25,8 @@ export interface Finding {
   title: string;
   body: string;
   facts: Facts;
+  /** An error tracker short ID the fix should close, e.g. Sentry's `WEB-1A2`. */
+  fixes?: string;
 }
 
 interface Seen {
@@ -52,7 +55,7 @@ function parseFacts(v: unknown, at: string): Facts {
   return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, typeof x === "string" ? clean(x, 200) : x]));
 }
 
-/** A script's collect output: at most 100 JSON lines of `{ key, title, body, facts? }`; anything else throws. */
+/** A script's collect output: at most 100 JSON lines of `{ key, title, body, facts?, fixes? }`; anything else throws. */
 export function parseCollect(out: string): Finding[] {
   const lines = out.split("\n").filter((l) => l.trim());
   if (lines.length > LIMITS.lines) throw new Error(`${lines.length} lines, at most ${LIMITS.lines}`);
@@ -65,12 +68,13 @@ export function parseCollect(out: string): Finding[] {
     } catch {
       throw new Error(`${at}: not JSON`);
     }
-    if (!obj(o) || !Object.keys(o).every((k) => ["key", "title", "body", "facts"].includes(k))) throw new Error(`${at}: must be { key, title, body, facts? }`);
+    if (!obj(o) || !Object.keys(o).every((k) => ["key", "title", "body", "facts", "fixes"].includes(k))) throw new Error(`${at}: must be { key, title, body, facts?, fixes? }`);
     if (typeof o.key !== "string" || !KEY.test(o.key)) throw new Error(`${at}.key: [A-Za-z0-9.:/-], at most 128`);
     if (keys.has(o.key)) throw new Error(`${at}.key: ${o.key} repeated`);
     keys.add(o.key);
     if (typeof o.title !== "string" || !o.title.trim() || typeof o.body !== "string") throw new Error(`${at}: title must be a non-empty string, body a string`);
-    return { key: o.key, title: o.title, body: o.body, facts: parseFacts(o.facts, at) };
+    if (o.fixes !== undefined && !(typeof o.fixes === "string" && SHORT_ID.test(o.fixes))) throw new Error(`${at}.fixes: an issue short ID like WEB-1A2`);
+    return { key: o.key, title: o.title, body: o.body, facts: parseFacts(o.facts, at), ...(o.fixes !== undefined && { fixes: o.fixes }) };
   });
 }
 
@@ -150,7 +154,7 @@ async function sandbox(cfg: Config, io: Io, work: string, r: Session, id: string
   const box = nonoRun("tender-intake", dir, [["--allow", clone], ["--allow", tmp], ["--allow-file", state], ["--read", join(r.path, ".git", "objects")]]);
   const env = { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: io.home, LANG: "C.UTF-8", TMPDIR: tmp, TENDER_STATE: state, TENDER_RULE: id, ...secrets };
   const script: Script = async (args, extra) => {
-    const res = await io.run([...box, join(clone, rule.run), ...args], clone, LIMITS.secs, { env: { ...env, ...extra }, max: LIMITS.bytes });
+    const res = await io.run([...box, join(clone, rule.run), ...rule.args, ...args], clone, LIMITS.secs, { env: { ...env, ...extra }, max: LIMITS.bytes });
     if (res.code !== 0) throw new Error(`${[rule.run, ...args].join(" ")} exited ${res.code}: ${clean(res.err, 300)}`);
     return res.out;
   };
@@ -192,6 +196,9 @@ async function runRule(cfg: Config, io: Io, db: Database, work: string, id: stri
   const missing = rule.secrets.filter((k) => !process.env[k]);
   if (missing.length) throw new Error(`secrets not set in the host's environment (.env): ${missing.join(", ")}`);
   const s = intakeSource(cfg, r);
+  const own = [s.readyLabel, s.needsHumanLabel, ...(s.tracker === "github" ? [s.inProgressLabel, s.inReviewLabel, s.readyToMergeLabel] : [])];
+  const taken = rule.labels.filter((x) => hasLabel(own, x));
+  if (taken.length) throw new Error(`labels: ${taken.join(", ")} ${taken.length > 1 ? "are" : "is"} tender's own; use autoLabel for the ready label`);
   const tr = tracker(s);
   const box = await sandbox(cfg, io, work, r, id, rule, tenderDir, Object.fromEntries(rule.secrets.map((k) => [k, process.env[k]!])));
   try {
@@ -252,6 +259,7 @@ async function sweep(io: Io, db: Database, save: Save, tr: Tracker, repo: string
   }
 }
 
+export const fixesMarker = (shortId: string) => `tender-intake-fixes: ${shortId}`;
 export const recheckMarker = (rule: string, key: string) => `tender-intake-recheck: ${rule}:${key}`;
 const rechecked = async (tr: Tracker, t: Ticket, m: string) => (await tr.comments(t, 0)).some((c) => hasMarker(c.body, m));
 const defang = (s: string) => s.replace(/tender-intake/gi, "tender_intake");
@@ -305,12 +313,13 @@ async function collect(cfg: Config, io: Io, db: Database, save: Save, tr: Tracke
       continue;
     }
     filed++;
-    const head = `Untrusted data from tender intake rule ${id}, not reviewed by a human.\n\n`;
+    // Script text is defanged, so only tender can write this line, and it sits before the truncatable body.
+    const head = `Untrusted data from tender intake rule ${id}, not reviewed by a human.\n\n${f.fixes ? `${fixesMarker(f.fixes)}\n\n` : ""}`;
     const foot = `\n\n${m}`;
     const text = sanitized(f.title, f.body);
     const title = defang(text.title);
     const body = head + defang(text.body).slice(0, MAX_BODY - head.length - foot.length) + foot;
-    const labels = autoLabels(rule.autoLabel, f.facts) ? [s.readyLabel, ...(cfg.defaultHost ? [] : [`host:${cfg.host}`])] : [];
+    const labels = [...rule.labels, ...(autoLabels(rule.autoLabel, f.facts) ? [s.readyLabel, ...(cfg.defaultHost ? [] : [`host:${cfg.host}`])] : [])];
     upsert(null, "filing");
     const url = await tr.fileTicket(target, title, body, labels);
     if (io.dry) continue;

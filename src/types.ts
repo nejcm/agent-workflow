@@ -39,12 +39,16 @@ export interface RepoConfig {
 export interface IntakeRule {
   name: string;
   run: string;
+  /** Passed to `run` as argv on collect and `--recheck`, never through a shell. */
+  args: string[];
   every: string;
   maxPerRun: number;
   secrets: string[];
   network: string[];
   /** A rule matches when every condition holds: `min<Fact>` is `facts.<fact> >= n`, any other key is equality. */
   autoLabel: Record<string, string | number>[];
+  /** Added to every ticket the rule files, shadow or not. */
+  labels: string[];
   recheck: boolean;
   recheckAfter: string;
 }

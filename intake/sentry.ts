@@ -1,6 +1,6 @@
 #!/usr/bin/env -S bun --no-env-file
 // tender intake example: one ticket per frequent unresolved Sentry issue. Needs SENTRY_TOKEN (project:read, event:read) and the Sentry host in `network`.
-// Copy to .tender/intake/sentry.ts (executable) with a wrapper that passes --org and --project; see docs/intake.md.
+// Copy to .tender/intake/sentry.ts (executable) and add a rule with `labels: [sentry]` and `args: [--org, <org>, --project, <project>]`; see docs/intake.md.
 import { parseArgs } from "node:util";
 
 const { values: a } = parseArgs({
@@ -14,6 +14,7 @@ const { values: a } = parseArgs({
     "min-users": { type: "string", default: "3" },
     "period-days": { type: "string", default: "14" },
     top: { type: "string", default: "10" },
+    "no-fixes": { type: "boolean", default: false },
     recheck: { type: "string" },
   },
 });
@@ -85,5 +86,6 @@ for (const [n, i] of issues.slice(0, 100).entries()) {
     i.permalink && `Sentry: ${i.permalink}`,
   ].filter(Boolean);
   const facts = { events: Number(i.count), users: i.userCount, level: String(i.level ?? "unknown"), firstSeen: String(i.firstSeen), ...(release ? { release } : {}) };
-  console.log(JSON.stringify({ key: `sentry:${i.id}`, title: `${i.shortId ?? "Sentry"}: ${i.title}`, body: body.join("\n\n"), facts }));
+  const fixes = !a["no-fixes"] && /^[A-Z0-9][A-Z0-9_-]{0,63}-[A-Z0-9]{1,32}$/.test(i.shortId ?? "") ? { fixes: i.shortId } : {};
+  console.log(JSON.stringify({ key: `sentry:${i.id}`, title: `${i.shortId ?? "Sentry"}: ${i.title}`, body: body.join("\n\n"), facts, ...fixes }));
 }

@@ -38,13 +38,13 @@ export function parseConfig(raw: any, base: string): Config {
   const stallMinutes = raw.stallMinutes ?? 30;
   check(posInt(stallMinutes), "stallMinutes: positive integer");
   const reposRoot = expand(raw.reposRoot ?? "~/agent-repos", base);
-  check(raw.lanes === undefined, "lanes: replaced by sources + repos + defaults (see README)");
+  check(raw.lanes === undefined, "lanes: replaced by sources + repos + defaults (see docs/upgrading.md)");
   const defaults = raw.defaults ?? {};
   check(obj(defaults) && defaults.path === undefined, "defaults: object without path");
   if (obj(defaults)) for (const k of MOVED_KEYS) check(defaults[k] === undefined, `defaults.${k}: moved to .tender/config.yaml in the repo`);
 
   const shape = `array of "owner/name" or { "name": "owner/name", …overrides }`;
-  check(!obj(raw.repos), `repos: now an ${shape}; move each "owner/name": {…} entry to { "name": "owner/name", … } (see README)`);
+  check(!obj(raw.repos), `repos: now an ${shape}; move each "owner/name": {…} entry to { "name": "owner/name", … } (see docs/upgrading.md)`);
   check(obj(raw.repos) || (Array.isArray(raw.repos) && raw.repos.length > 0), `repos: non-empty ${shape}`);
   const repos: Record<string, Repo> = {};
   const keys: string[] = [];

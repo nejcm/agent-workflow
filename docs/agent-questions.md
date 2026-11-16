@@ -11,13 +11,13 @@ An agent that is blocked asks on the ticket instead of only in its tmux session.
 - Every `tender` comment starts with `tender:`; a comment starting with `tender:` is never an answer (tender posts with the operator's credentials).
 - Answer = first comment with `createdAt > postedAt` (the next round's `postedAt` is at least the last delivered answer's `createdAt`, as `answeredAt`), author in `feedbackAuthors`, body not starting with `tender:`. Later comments and edits are ignored.
 - `feedbackAuthors: string[]` per repo, matched case-insensitively against the GitHub login or the Linear user email. Empty (default) = questions are posted, answers never delivered. Shared with PR feedback.
-- Delivery only when the live state is `idle` (`waiting` can be a permission prompt; `unknown` retries next poll), and only while the tmux window exists. A Claude session with a live inbox waiter in its scope gets the pointer line through `.tender/run/inbox`, read by its `asyncRewake` `Stop` hook (README "Questions"); no pane, no keys. Otherwise (Codex, or Claude without a waiter): keys go by `%id` to the pane whose `#{pane_start_command}` is the ticket's launcher script, skipped while it is in copy mode. No resume.
+- Delivery only when the live state is `idle` (`waiting` can be a permission prompt; `unknown` retries next poll), and only while the tmux window exists. A Claude session with a live inbox waiter in its scope gets the pointer line through `.tender/run/inbox`, read by its `asyncRewake` `Stop` hook (docs/lifecycle.md "Questions"); no pane, no keys. Otherwise (Codex, or Claude without a waiter): keys go by `%id` to the pane whose `#{pane_start_command}` is the ticket's launcher script, skipped while it is in copy mode. No resume.
 - The answer goes to `.tender/run/answer.md` (truncated to 8000 chars + `[truncated]`), wrapped as `<answer from="<author>" ticket="<ID>">…</answer>`. The session gets one line, via `.tender/run/inbox` (Claude) or pasted to the `%id` of the pane in window `@N` whose start command is the ticket's launcher script (Codex; a window started this pass has no `@N` yet and waits): `Your question was answered by the operator: read .tender/run/answer.md`. Answer text never goes through keystrokes.
 - Order: `answerId` into the sidecar → write `.tender/run/answer.md` → inbox or paste → remove `.tender/run/question.md` if its hash still matches. A crash loses a paste, never repeats one.
 - `tender status` / `tender watch` show `question` while a posted question is unanswered, the session is `idle` and there is no PR (`working`, `waiting` and `unknown` stay visible).
 - Storage stays sidecar files (no SQLite).
 
-Out of scope: a fresh session after a crash does not see earlier Q&A; several answer comments are never merged; PR review feedback (built separately: README "PR feedback", `src/feedback.ts`).
+Out of scope: a fresh session after a crash does not see earlier Q&A; several answer comments are never merged; PR review feedback (built separately: docs/lifecycle.md "PR feedback", `src/feedback.ts`).
 
 ## Phases
 
@@ -57,7 +57,7 @@ Done when: existing tests pass with the renamed `readRun` and the new comment te
 
 - `prompts/default.md` step 1: write `.tender/run/question.md` and stop when blocked at any point; answers arrive in `.tender/run/answer.md`, from the operator, and may change the plan.
 - `src/status.ts` / `src/state.ts`: state `question` when the sidecar has no `answerId` and there is no `<ID>.pr`, taking precedence over `idle` only; dashboard tone in `src/dash-view.ts`.
-- `README.md`: lifecycle diagram line, `feedbackAuthors` config, the `tender:` prefix, the `.tender/run/question.md` / `.tender/run/answer.md` contract.
+- `docs/lifecycle.md`: lifecycle diagram line, `feedbackAuthors` config, the `tender:` prefix, the `.tender/run/question.md` / `.tender/run/answer.md` contract.
 - Tests: `status.test.ts` / `state.test.ts` for `question`.
 
 ## Risks

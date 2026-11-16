@@ -7,7 +7,7 @@ description: Set up a repo for tender. Finds its test command, writes .tender/co
 
 Work in the root of the repo being set up. Write only under `.tender/`. Never edit `tender.json`, `.env` or anything outside this repo. Ask the user for the path to their tender clone, the directory that holds `tender.ts`. It is called `<tender>` below.
 
-tender reads `.tender/` only from `origin/<base branch>`, so nothing takes effect until it is committed and pushed there. The keys and their validation live in tender's `src/repo-config.ts`; its README documents them under "Repo config".
+tender reads `.tender/` only from `origin/<base branch>`, so nothing takes effect until it is committed and pushed there. The keys and their validation live in tender's `src/repo-config.ts`; `docs/config.md` documents them under "Repo config".
 
 ## 1. Find the test command
 

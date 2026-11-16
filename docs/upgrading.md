@@ -1,0 +1,25 @@
+# Upgrading
+
+## To `.tender/config.yaml`
+
+Move `agent`, `testCmd`, `planStep` and `testPaths` (and any `criticalPaths` that belong to the repo rather than the host) from `tender.json` (`defaults` and each repo) into each repo's `.tender/config.yaml`, along with the `autoMerge` you want there (`tender.json`'s `autoMerge` is now its ceiling; its `criticalPaths` stay as a floor), and a custom `prompt` into `.tender/prompts/default.md`. Commit it to the base branch; `tender` does not read it from anywhere else. `baseBranch` now defaults to the remote's default branch. A session records its agent in `<ID>.agent` next to its clone; sessions started before have none and are treated as Claude sessions, so finish or restart running Codex sessions before upgrading.
+
+## From `aw`
+
+`aw` is now `tender`. With nothing running (`systemctl --user disable --now aw && rm ~/.config/systemd/user/aw.service`), rename the config and the agent config dirs, then reinstall the service:
+
+```bash
+mv aw.json tender.json
+mv ~/.claude-aw ~/.claude-tender && mv ~/.claude-aw.lock ~/.claude-tender.lock && mv ~/.codex-aw ~/.codex-tender
+scripts/setup.sh && scripts/run.sh service   # enables tender.service
+```
+
+Delete the old `# >>> aw state hooks` block from `~/.codex-tender/config.toml` (`scripts/setup.sh` adds the `tender` one). Old `aw:` comments and `aw-findings` markers on open tickets are still recognised, but tender reads the agent scratch dir at `.tender/run/`, not `.aw/`, so finish or restart sessions started by `aw`. A `"tmuxSession": "aw"` in your config keeps working; the default is now `tender`.
+
+## From the `repos` map
+
+`repos` used to be an object keyed by `"owner/name"`; that form is rejected at startup. Turn each `"owner/name": {}` into `"owner/name"` and each `"owner/name": { … }` into `{ "name": "owner/name", … }`. `sources[].repos` is gone (rejected at startup): a GitHub source polls every repo in `repos`. Worktrees moved from `<workspaceRoot>/<owner>__<name>/<ID>` to `<workspaceRoot>/<owner>/<name>/<ID>`; old ones are not seen any more. Finish or close those tickets first, or remove them by hand (`git -C <clone> worktree remove <old>`, then the `<ID>.*` files). To keep one, first stop its session (`tmux kill-window -t 'tender:<owner>__<name>/<ID>'`; `tender` would not recognise the old window name and would start a second session), then `git -C <clone> worktree move <old> <new>`, move `<ID>.phases.json` and `<ID>.source` alongside (create `<ID>.source` with the source name if there is none), and delete `<ID>.sh` and `<ID>.prompt.md`: they hold the old absolute paths and are regenerated when the ticket starts again. Move the ticket back to ready to resume in the moved worktree.
+
+## From `lanes`
+
+`lanes` is rejected at startup. Move each lane's `repo` into `repos` (with its `repoPath` as `path`, plus `baseBranch`, `agent`, `sandbox`, `testCmd`, `maxConcurrent`, `prompt`) and keep the rest (`name`, `tracker`, labels, Linear states and `team`) as a source; Linear tickets or projects must now name their repo. Worktrees in the old `<workspaceRoot>/<lane>/<ID>` layout are not seen any more: finish or close those tickets first, or remove them by hand (`git -C <clone> worktree remove <workspaceRoot>/<lane>/<ID>`, then the `<ID>.*` files).

@@ -3,7 +3,7 @@
 // Copy with pg.ts to .tender/intake/ (this file executable) and add a rule with `labels: [supabase]`; `private: true` is required, as tickets show query shapes. See docs/intake.md.
 import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { open as openPg, type Open, type Query } from "./pg";
+import { open as openPg, withDb, type Open, type Query } from "./pg";
 
 /** Cumulative counters per queryid: `[calls, total exec ms]`. */
 export interface Snapshot {
@@ -107,9 +107,10 @@ export async function main(argv: string[], env = process.env, open: Open = openP
     if (c < pc || t < pt) throw new Error(`queryid ${id} restarted its counters; retried after the next collect`);
     const [dc, dt] = [c - pc, t - pt];
     if (dc > 0 && dc < min.calls && dt / dc >= min.meanMs) throw new Error(`queryid ${id} ran ${dc} times since the last snapshot, still slow but under --min-calls; retried after the next collect`);
-    const hit = slow({ ...prev, q: { [id]: [pc, pt] } }, { ...now.snap, q: { [id]: [c, t] } }, min)[0];
+    const mean = dc ? Math.round((dt / dc) * 10) / 10 : 0;
     const window = `between ${prev.at} and ${now.snap.at}`;
-    return JSON.stringify(hit ? { state: "still", detail: `${hit.calls} calls ${window}, mean ${hit.meanMs} ms.` } : { state: "gone", detail: `${c - pc} calls ${window}${c > pc ? `, mean ${Math.round(((t - pt) / (c - pc)) * 10) / 10} ms` : ""}: under the thresholds.` });
+    if (dc > 0 && dc >= min.calls && dt / dc >= min.meanMs) return JSON.stringify({ state: "still", detail: `${dc} calls ${window}, mean ${mean} ms.` });
+    return JSON.stringify({ state: "gone", detail: `${dc} calls ${window}${dc ? `, mean ${mean} ms` : ""}: under the thresholds.` });
   }
   const now = await withDb(open, a.ca, (q) => stats(q, a.user));
   writeFileSync(file, JSON.stringify(now.snap));
@@ -118,15 +119,6 @@ export async function main(argv: string[], env = process.env, open: Open = openP
     .slice(0, 100)
     .map((s) => line(s, now.text[s.queryid]!, prev, now.snap))
     .join("\n");
-}
-
-async function withDb<T>(open: Open, ca: string | undefined, fn: (q: Query) => Promise<T>) {
-  const db = await open(ca);
-  try {
-    return await fn(db.q);
-  } finally {
-    await db.close();
-  }
 }
 
 if (import.meta.main) console.log(await main(process.argv.slice(2)));

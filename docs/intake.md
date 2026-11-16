@@ -41,6 +41,7 @@ Example scripts live in tender's [`intake/`](../intake) dir; copy one into the r
 
 - `shortcuts.ts`: one ticket per `shortcut:` comment (`// shortcut: <the limit>, <when to upgrade>`), keyed by file and comment text. Needs only the clone: no network, no secrets. `--recheck` reports `still` while the same comment is in that file.
 - `sentry.ts`: one ticket per unresolved Sentry issue in a project and environment, most frequent first, keyed `sentry:<issue id>`. See [Sentry](#sentry).
+- `posthog-errors.ts`: one ticket per active PostHog error tracking issue, most frequent first, keyed `posthog:<issue id>`. See [PostHog](#posthog).
 - `pg-lint.ts` and `pg-slow.ts`: one ticket per Supabase database lint, and one per query that got slow since the last run. See [Postgres and Supabase](#postgres-and-supabase).
 
 ### Sentry
@@ -80,6 +81,44 @@ intake:
 - **Host:** `network` must name the host in `--url`. For a US or EU region org use `--url https://us.sentry.io` or `https://de.sentry.io` and allow that exact host; self-hosted Sentry is `--url https://sentry.example.com` with that host allowed.
 - **Fixes:** each line carries the issue's short ID as `fixes`, which tender renders as `tender-intake-fixes: WEB-1A2` (see [Script protocol](#script-protocol)); tender's default prompt then has the agent add `Fixes WEB-1A2` to the commit message and the PR description if its change fixes that issue. It needs Sentry's GitHub integration on the repo so Sentry sees the commits and PRs, and Sentry resolves the issue when a release containing that commit or the PR's merge commit is created, not on merge ([resolve via commits](https://docs.sentry.io/product/releases/associate-commits/), [GitHub integration](https://docs.sentry.io/organization/integrations/source-code-mgmt/github/)). With squash merges the PR description is the safer place: Sentry warns it may not tie a squashed commit to a release. Tender's recheck is independent: a recurrence on a newer release still reopens the ticket. Without the integration, pass `--no-fixes`.
 - **Recheck:** `still` means the issue has events since the merge (`TENDER_DONE_AT`) on a release created after it; events only on older releases, or none, are `gone`. It lists the project's releases, archived ones included, newest first until a page has none newer than the merge, then searches the issue's events on those releases (`release:[…]`, 20 at a time). Over 10 pages (1000 releases) of newer releases it cannot decide and exits non-zero, which reopens nothing and is retried next run.
+
+### PostHog
+
+Lists the project's active error tracking issues over `--period-days`, most occurrences first ([`error_tracking/query/issues`](https://posthog.com/docs/open-api-spec/error_tracking_query_issues_list_create), `status: active`, `orderBy: occurrences`, up to 10 pages of 100), keeps those with at least `--min-events` occurrences and `--min-users` users in that period, and fetches the latest exception event only for the first `--top` ([`error_tracking/query/issue_events`](https://posthog.com/docs/open-api-spec/error_tracking_query_issue_events_create)) for its stack. Both endpoints are PostHog's typed error tracking queries; tender does not use the HogQL `/query` endpoint, which rejects `OFFSET` for personal API keys and is [not meant for pulls like this](https://posthog.com/docs/api/queries). Counts follow PostHog's defaults, so test accounts are filtered out. Facts: `events`, `users`, `firstSeen`, `severity` (`low`, `medium`, `high`, `critical`) when the issue has one, and, for the top ones when the event has them, `level` (`$exception_level`) and `release`. A count that is not a number fails the run. The body has the issue name and message, up to 10 in-app frames (innermost first), counts, first and last seen, the latest event's release and the PostHog link.
+
+Flags, set in the rule's `args`:
+
+| Flag | Default | |
+|------|---------|--|
+| `--project` | required | project ID (Project settings) |
+| `--url` | `https://us.posthog.com` | app host: `https://eu.posthog.com` for EU Cloud, or the self-hosted host |
+| `--min-events` | 10 | occurrences in the period to file |
+| `--min-users` | 3 | users in the period to file |
+| `--period-days` | 14 | the period |
+| `--top` | 10 | issues whose latest exception is fetched for frames, level and release |
+
+There is no `--environment`: PostHog's issue query has no environment filter.
+
+```yaml
+intake:
+  - name: posthog-web
+    run: .tender/intake/posthog-errors.ts
+    args: [--project, "12345", --url, https://eu.posthog.com, --min-events, "50"]
+    every: 1h
+    maxPerRun: 3
+    secrets: [POSTHOG_TOKEN]
+    network: [eu.posthog.com]
+    labels: [posthog]
+    autoLabel: []   # shadow; see Auto-labeling below
+    recheck: true
+    recheckAfter: 24h
+```
+
+- **Token:** a [personal API key](https://posthog.com/docs/api/personal-api-keys) scoped to that project with only `error_tracking:read`, the scope both endpoints require, as `POSTHOG_TOKEN` in the host's `.env`.
+- **Host:** `network` must name the host in `--url`: `us.posthog.com` or `eu.posthog.com` ([private endpoints](https://posthog.com/docs/api), not the `*.i.posthog.com` ingestion hosts), or the self-hosted host.
+- **No fixes:** PostHog has no resolve-by-commit (`Fixes <ID>`) integration and no short issue IDs; its GitHub integration links stack frames to source and creates issues ([integrations](https://posthog.com/docs/error-tracking/integrations)). So the script emits no `fixes`, and resolving the PostHog issue is left to a human or to PostHog reopening it on recurrence.
+- **Auto-labeling:** `events`, `users` and `level` come from exception events, which anyone can send with the public project token in your web pages, so 100 forged exceptions from 3 IDs would meet `{ minEvents: 100 }`. `severity` lives on the issue, but PostHog's severity rules can set it from event data (`severity_rules.py`, `severity_inference.py` in PostHog's source), so it is no stronger. Keep the rule shadow unless you accept that.
+- **Recheck:** `still` means the issue has an event since the merge (`TENDER_DONE_AT`) on a release created strictly after it; `gone` means no such event. As in Sentry's script, events without a release are ignored (the `gone` detail counts them): they may come from the old build, between the merge and the deploy or from stale tabs. A release is the one `posthog-cli` creates when you upload source maps or symbols, or the one you create at deploy for Python, Ruby and PHP ([releases](https://posthog.com/docs/error-tracking/releases)), and its creation time is what each event carries in `$exception_release`. A project without releases therefore always gets `gone`, which is no check at all: set `recheck: false` there. It reads the issue's events since the merge newest first, 20 at a time, and fails rather than guess (non-zero exit, nothing reopened, retried next run) on a release or event timestamp it cannot read, an event dated before the merge, over 10 pages (200 events) with none on a newer release, or a 404: a deleted issue and a wrong `--project` look the same, and the latter must not close every ticket as `gone`.
 
 ### Postgres and Supabase
 

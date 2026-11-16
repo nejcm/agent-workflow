@@ -4,7 +4,7 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { open as openPg, type Open, type Query } from "./pg";
+import { open as openPg, withDb, type Open, type Query } from "./pg";
 
 const LEVELS = ["INFO", "WARN", "ERROR"];
 // PERFORMANCE in splinter, but fixed by rewriting RLS policies, so the SECURITY fact keeps them from the ready label.
@@ -53,9 +53,8 @@ export async function main(argv: string[], open: Open = openPg) {
   const { values: a } = parseArgs({ args: argv, options: { "min-level": { type: "string", default: "INFO" }, ca: { type: "string" }, recheck: { type: "string" } } });
   const min = LEVELS.indexOf(a["min-level"]);
   if (min < 0) throw new Error(`--min-level: one of ${LEVELS.join(", ")}`);
-  const db = await open(a.ca);
-  try {
-    const all = await lints(db.q);
+  return withDb(open, a.ca, async (q) => {
+    const all = await lints(q);
     if (a.recheck !== undefined) {
       const hit = all.find((l) => lintKey(l) === a.recheck);
       return JSON.stringify(hit ? { state: "still", detail: `The lint still reports: ${md(hit.detail)}` } : { state: "gone", detail: "The lint no longer reports this object." });
@@ -65,9 +64,7 @@ export async function main(argv: string[], open: Open = openPg) {
       .filter((l) => LEVELS.indexOf(l.level) >= min && !keys.has(lintKey(l)) && keys.add(lintKey(l)))
       .sort((x, y) => LEVELS.indexOf(y.level) - LEVELS.indexOf(x.level));
     return shown.slice(0, 100).map(line).join("\n");
-  } finally {
-    await db.close();
-  }
+  });
 }
 
 if (import.meta.main) console.log(await main(process.argv.slice(2)));

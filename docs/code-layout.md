@@ -8,10 +8,12 @@
 - `src/github.ts`: canonical-repo and PR lookup.
 - `src/phases.ts`: `.tender/run/phases.json` validation and sub-ticket sync.
 - `src/findings.ts`: `.tender/run/findings.json` validation, sanitizing and filing.
+- `src/question.ts`: agent questions: `.tender/run/question.md` posted to the ticket, the operator's answer picked and pasted back into the session.
 - `src/feedback.ts`: PR reviews, comments, failed checks and conflicts fed back into an idle In Review session.
 - `src/hatch.ts`: escape-hatch patterns, the added-line diff parser and the time-limited worker that runs them.
 - `src/merge.ts`: `.tender/run/merge.json`, critical paths, trust per path, the merge decision, auto-merge and the Ready to merge check.
 - `src/agents.ts`: the Claude and Codex adapters: launch env and command, config dirs and transcript files, live state (Claude's session records, read as untrusted files; the Codex hook state file).
+- `src/claude-auth.ts`: the host Claude login: finding the host `claude` and `bun`, reading and checking the login, the refresher that keeps it fresh.
 - `src/launcher.ts`: base clone, session clone, prompt and launcher script, tmux window, stop and resume.
 - `src/handoff.ts`: `open`: ticket lookup, transcript copy into your own store, the command per tool.
 - `src/intake.ts`: `intake`: the script protocol, the sandboxed run in a fresh clone, dedupe, filing, open-ticket updates and recheck.
@@ -24,6 +26,10 @@
 - `src/state.ts`: live state types and precedence.
 - `src/tail.ts`: transcript lookup by recorded cwd, line condensing, `tail`.
 - `src/util.ts`: logged/dry-run-aware command and file helpers, the pinned `.tender/run` reader, control-char stripping.
+- `prompts/default.md`: the ticket prompt used when a repo's `.tender/` names none.
+- `nono/`: sandbox profiles for Claude and Codex sessions, intake scripts and checks.
+- `systemd/`: user units for `tender run` and the intake timer, installed by `scripts/run.sh`.
 - `skills/tender-setup/SKILL.md`: the setup skill for a repo's `.tender/`.
+- `scripts/setup.sh`: idempotent host setup and tracker labels; `scripts/run.sh`: preflight, then poll, or install the systemd units.
 - `scripts/codex-hooks.sh`: installs or refreshes tender's Codex state hooks in a `config.toml`.
-- `tests/`: one file per module (launcher tests are in `pass.test.ts`); shared fakes in `tests/helpers.ts`.
+- `tests/`: one file per module (launcher tests are in `pass.test.ts`, the Ready to merge pass in `ready.test.ts`, `intake/sentry.ts` in `sentry.test.ts`); shared fakes in `tests/helpers.ts`.

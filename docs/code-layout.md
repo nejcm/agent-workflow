@@ -14,6 +14,7 @@
 - `src/agents.ts`: the Claude and Codex adapters: launch env and command, config dirs and transcript files, live state (Claude's session records, read as untrusted files; the Codex hook state file).
 - `src/launcher.ts`: base clone, session clone, prompt and launcher script, tmux window, stop and resume.
 - `src/handoff.ts`: `open`: ticket lookup, transcript copy into your own store, the command per tool.
+- `src/db.ts`: `tender.db` (bun:sqlite, WAL): ordered SQL migrations and the best-effort event recorder.
 - `src/pass.ts`: one poll: cleanup, start ready tickets by priority, reconcile.
 - `src/status.ts`: per-worktree status rows, the live-state snapshot and the table.
 - `src/dash.ts`: the `watch` dashboard (OpenTUI): keys, selection, attach/open and the renderer wiring.

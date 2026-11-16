@@ -5,6 +5,7 @@ import { validRepo } from "../src/config";
 import { canonCache } from "../src/github";
 import { github } from "../src/trackers/github";
 import { authStamp, CODEX_AUTH, codexHooksWarning, codexLogin, codexRefresh, launcher, render, scopeUnit, sweepScopes, seedClaude, seedCodex } from "../src/launcher";
+import { events, openDb, recorder } from "../src/db";
 import { endedNotice, pass } from "../src/pass";
 import { liveStates, pickAnswer } from "../src/question";
 import type { State } from "../src/state";
@@ -104,6 +105,32 @@ test("starts ready tickets up to maxConcurrent", async () => {
   expect(readdirSync(`${wt}.tmpdir`)).toEqual(["cache"]);
   expect(readdirSync(`${wt}.tmpdir/cache`)).toEqual([]);
   expect(statSync(`${wt}.tmpdir`).mode & 0o777).toBe(0o700);
+});
+
+test("a start records start and claim events; a failed event write still starts and claims", async () => {
+  const run = async (event: Io["event"]) => {
+    const { tr, calls } = fakeTracker({ ready: [ticket(1)] });
+    const { io } = fakeIo((a) => (a[5] === "--quiet" ? { code: 1 } : noPr(a)));
+    await pass(config(), { ...io, event }, () => tr, "/tender");
+    return calls;
+  };
+  const events: string[] = [];
+  expect(await run((kind, repo, id, data) => void events.push(`${kind} ${repo}/${id} ${JSON.stringify(data ?? {})}`))).toEqual(["claim gh-1"]);
+  expect(events).toEqual(['start acme/web/gh-1 {"agent":"claude","source":"web"}', "claim acme/web/gh-1 {}"]);
+  rmSync(join(root, "acme"), { recursive: true });
+  mkdirSync(join(root, "tender.db"));
+  const logs: string[] = [];
+  expect(await run(recorder(join(root, "tender.db"), "box", (m) => logs.push(m)))).toEqual(["claim gh-1"]);
+  expect(logs.map((m) => m.split(":")[0])).toEqual(["event start acme/web/gh-1 not recorded", "event claim acme/web/gh-1 not recorded"]);
+});
+
+test("a dry run gets no event recorder, so a dry start leaves tender.db missing", async () => {
+  const c = config();
+  const { tr } = fakeTracker({ ready: [ticket(1)] });
+  const { io } = fakeIo((a) => (a[5] === "--quiet" ? { code: 1 } : noPr(a)), true);
+  await pass(c, { ...io, event: events(c, true, io.log) }, () => tr, "/tender");
+  expect(existsSync(join(root, "tender.db"))).toBe(false);
+  expect(events(c, false, io.log)).toBeFunction();
 });
 
 const cloneCmd = (base: string, wt: string) => `git -c protocol.file.allow=always -c advice.detachedHead=false clone -q --shared --revision refs/remotes/origin/main -- ${base} ${wt}`;
@@ -417,13 +444,17 @@ test("done: kills window, removes the session clone, files and config dir; keeps
     mkdirSync(join(root, "acme/web", `${id}.codex/sessions`), { recursive: true });
     mkdirSync(join(root, "acme/web", `${id}.tmpdir/s`), { recursive: true });
     symlinkSync(join(root, "src-web"), join(root, "acme/web", `${id}.claude/link`));
+    writeFileSync(join(root, "acme/web", `${id}.pr`), `https://github.com/acme/web/pull/${id.slice(3)}`);
   }
   mkdirSync(join(root, "src-web"), { recursive: true });
   const { tr } = fakeTracker({ done: ["gh-1", "gh-2"] });
-  const { io, cmds, logs } = fakeIo((a) => {
+  const { io: plain, cmds, logs } = fakeIo((a) => {
     if (a[1] === "list-windows") return windowsOut(["acme/web/gh-1"]);
     if (a[0] === "rm" && a.at(-1)?.endsWith("gh-2")) return { code: 1 };
   });
+  const io = { ...plain, event: recorder(join(root, "tender.db"), "box", (m) => logs.push(m)) };
+  // gh-1's done was already recorded by tender's own merge.
+  io.event("done", "acme/web", "gh-1", { pr: "https://github.com/acme/web/pull/1" }, "https://github.com/acme/web/pull/1");
   await pass(c, io, () => tr, "/tender");
   expect(cmds).toContain("tmux kill-window -t @0");
   expect(cmds.filter((x) => x.includes("kill-window"))).toHaveLength(1);
@@ -447,6 +478,10 @@ test("done: kills window, removes the session clone, files and config dir; keeps
   expect(existsSync(join(root, "acme/web/gh-2.sh"))).toBe(true);
   expect(existsSync(join(root, "acme/web/gh-3.sh"))).toBe(true);
   expect(logs.some((l) => l.includes("[web] cleanup acme/web/gh-2 failed"))).toBe(true);
+  await pass(c, io, () => tr, "/tender");
+  const db = openDb(join(root, "tender.db"));
+  expect(db.query("SELECT ticket, data FROM events WHERE kind = 'done' ORDER BY id").all()).toEqual(["1", "2"].map((n) => ({ ticket: `gh-${n}`, data: `{"pr":"https://github.com/acme/web/pull/${n}"}` })));
+  db.close();
 });
 
 test("canceled: kills the window once, keeps the clone and files, posts nothing; Done later cleans up", async () => {

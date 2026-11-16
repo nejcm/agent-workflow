@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { hostLogin } from "./src/claude-auth";
 import { parseConfig } from "./src/config";
 import { dashboard, watch } from "./src/dash";
+import { events } from "./src/db";
 import { handoff, shellLine, ticketClone, type Tool, TOOLS } from "./src/handoff";
 import { cloneAll, resume } from "./src/launcher";
 import { CRITICAL_PATHS, TEST_PATHS } from "./src/merge";
@@ -128,7 +129,9 @@ async function main(argv: string[]) {
     console.error(`${path}: ${(e as Error).message}`);
     process.exit(1);
   }
-  const io: Io = { run: spawnRun, fetch, dry: argv.includes("--dry-run"), log: (m) => console.log(`${new Date().toISOString()} ${m}`), home: homedir() };
+  const dry = argv.includes("--dry-run");
+  const log = (m: string) => console.log(`${new Date().toISOString()} ${m}`);
+  const io: Io = { run: spawnRun, fetch, dry, log, home: homedir(), event: events(cfg, dry, log) };
   if (cmd === "status") return console.log(argv.includes("--json") ? JSON.stringify(await snapshot(cfg, io), null, 2) : await status(cfg, io));
   if (cmd === "watch")
     return watch({
@@ -150,7 +153,8 @@ async function main(argv: string[]) {
   if (cmd === "open") {
     const env = process.env;
     const stores = { claude: env.CLAUDE_CONFIG_DIR || join(io.home, ".claude"), codex: env.CODEX_HOME || join(io.home, ".codex") };
-    const h = await handoff(cfg, { ...io, log: (m) => console.error(m) }, id!, tool, stores, env.VISUAL || env.EDITOR).catch((e) => {
+    const err = (m: string) => console.error(m);
+    const h = await handoff(cfg, { ...io, log: err, event: events(cfg, dry, err) }, id!, tool, stores, env.VISUAL || env.EDITOR).catch((e) => {
       console.error(e.message);
       process.exit(1);
     });

@@ -150,7 +150,12 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
   const f = join(dir, `${t.id}.merge`);
   const held = existsSync(f) && readFileSync(f, "utf8") === pr.headRefOid;
   if (!held) remove(io, f);
-  if (pr.state === "MERGED" && !pr.isCrossRepository && pr.baseRefName === r.baseBranch && (await ours())) return void (await tr.done(t));
+  if (pr.state === "MERGED" && !pr.isCrossRepository && pr.baseRefName === r.baseBranch && (await ours())) {
+    await tr.done(t);
+    // Keyed by PR: a retry after tender's own merge keeps the first, auto: true, event.
+    io.event?.("merged", r.key, t.id, { pr: pr.url, auto: false }, pr.url);
+    return void io.event?.("done", r.key, t.id, { pr: pr.url }, pr.url);
+  }
   if (parked) return pr;
   let a: Assessment | undefined;
   try {
@@ -196,8 +201,10 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
     await write(io, ["gh", "pr", "merge", n, "--repo", r.key, "--squash", "--delete-branch", "--match-head-commit", pr.headRefOid]);
     const state = io.dry ? "MERGED" : (await view("state")).state;
     if (state !== "MERGED") return io.log(`merge ${t.id}: ${pr.url} is ${state} after gh pr merge, rechecking next poll`);
+    io.event?.("merged", r.key, t.id, { pr: pr.url, auto: true, mode, reason: d.reason }, pr.url);
     await tr.comment(t, `auto-merged ${pr.url}: ${d.reason}`);
-    return void (await tr.done(t));
+    await tr.done(t);
+    return void io.event?.("done", r.key, t.id, { pr: pr.url }, pr.url);
   }
   put(io, f, pr.headRefOid);
   try {
@@ -206,6 +213,7 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
     remove(io, f);
     throw e;
   }
+  io.event?.("gate", r.key, t.id, { pr: pr.url, head: pr.headRefOid, mode, merge: d.merge, reason: d.reason });
   return pr;
 }
 

@@ -89,6 +89,7 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
   if (cur.rounds >= MAX_ROUNDS) {
     // Label first: if adding it fails, this retries next poll instead of leaving a capped cursor that reads as resumed.
     await tr.park(t);
+    io.event?.("park", r.key, t.id, { why: "feedback rounds" });
     put(io, file, JSON.stringify({ ...cur, capped: true } satisfies FeedbackCursor));
     await tr.comment(t, `PR feedback stopped after ${MAX_ROUNDS} rounds on ${url}: a human is needed`);
     return false;
@@ -99,6 +100,7 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
   const runs = [...new Set(failed.map((c) => /\/actions\/runs\/(\d+)/.exec(c.detailsUrl ?? c.targetUrl ?? "")?.[1]).filter((x): x is string => !!x))].slice(0, MAX_RUNS);
   const logs = await Promise.all(runs.map((id) => failedLog(io, r.key, id)));
   put(io, file, JSON.stringify({ seenAt: newest ?? cur.seenAt, ciShas: failed.length ? [...(cur.ciShas ?? []), pr.headRefOid].slice(-10) : cur.ciShas, dirtyShas: dirty ? [...(cur.dirtyShas ?? []), pr.headRefOid].slice(-10) : cur.dirtyShas, rounds: cur.rounds + 1 } satisfies FeedbackCursor));
+  io.event?.("feedback-round", r.key, t.id, { round: cur.rounds + 1, comments: items.length, failedChecks: failed.length, conflict: dirty });
   const text = [
     `<feedback ticket="${t.id}" pr="${attr(url)}">`,
     ...items.map((c) => `<comment from="${attr(c.author!)}"${c.on ? ` on="${attr(c.on)}"` : ""}>\n${esc(c.body)}\n</comment>`),

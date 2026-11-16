@@ -81,11 +81,11 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
     },
     async toReview(t, note) {
       await edit(t, l.inReviewLabel, "--remove-label", t.readyToMerge ? l.readyToMergeLabel : l.inProgressLabel);
-      await comment(t, note);
+      await comment(t, note).catch((e) => io.log(`${t.id}: status comment failed: ${e.message}`));
     },
     async toReadyToMerge(t, note) {
       await edit(t, l.readyToMergeLabel, "--remove-label", l.inReviewLabel);
-      await comment(t, note);
+      await comment(t, note).catch((e) => io.log(`${t.id}: status comment failed: ${e.message}`));
     },
     done: (t) => write(io, ["gh", "issue", "close", t.ref, "--repo", t.repo!]).then(() => {}),
     park: (t) => edit(t, l.needsHumanLabel).then(() => {}),

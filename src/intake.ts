@@ -3,10 +3,10 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DB_FILE, memoryDb, openDb } from "./db";
-import { sanitized, unmention } from "./findings";
-import { nonoRun } from "./launcher";
+import { sanitized, unmention } from "./review/findings";
+import { nonoRun } from "./session/launcher";
 import { makeTracker } from "./pass";
-import { DURATION, loadSession } from "./repo-config";
+import { DURATION, loadSession, securityFact } from "./config/repo-config";
 import type { Config, IntakeRule, Io, Session, Source, Target, Ticket, Tracker } from "./types";
 import { clean, GIT, hasLabel, hasMarker, read, SLOW_SECS } from "./util";
 
@@ -91,8 +91,9 @@ export function parseRecheck(out: string) {
   return { state: o.state as "gone" | "still", detail: clean(o.detail ?? "", 500) };
 }
 
-/** Whether any `autoLabel` rule holds for `facts`: `min<Fact>` is `facts.<fact> >= n`, any other key is equality. */
+/** Whether any `autoLabel` rule holds for `facts`: `min<Fact>` is `facts.<fact> >= n`, any other key is equality; never for a SECURITY finding. */
 export function autoLabels(rules: Facts[], facts: Facts) {
+  if (securityFact(facts.categories)) return false;
   return rules.some((r) =>
     Object.entries(r).every(([k, v]) => {
       const min = /^min([A-Z])(\w*)$/.exec(k);
@@ -149,6 +150,7 @@ async function sandbox(cfg: Config, io: Io, work: string, r: Session, id: string
   const profile = JSON.parse(readFileSync(join(tenderDir, "nono", "tender-intake.json"), "utf8"));
   profile.environment.allow_vars.push(...Object.keys(secrets));
   profile.network = rule.network.length ? { allow_domain: rule.network } : { block: true };
+  if (rule.loopback) profile.linux.isolate = { network: true, loopback: true };
   mkdirSync(join(dir, "nono"));
   writeFileSync(join(dir, "nono", "tender-intake.json"), JSON.stringify(profile));
   const box = nonoRun("tender-intake", dir, [["--allow", clone], ["--allow", tmp], ["--allow-file", state], ["--read", join(r.path, ".git", "objects")]]);
@@ -174,14 +176,15 @@ export async function intake(cfg: Config, io: Io, tenderDir: string, { only, now
   try {
     // A dry run gets its own clones, so it cannot disturb a live run.
     work = io.dry ? mkdtempSync(join(tmpdir(), "tender-intake-dry-")) : join(cfg.workspaceRoot, ".intake");
-    for (const id of ids) await runRule(cfg, io, db, work, id, tenderDir, only !== undefined, now, tracker).catch((e) => io.log(`intake ${id}: failed: ${e.message}`));
+    const vis = new Map<string, string>();
+    for (const id of ids) await runRule(cfg, io, db, work, id, tenderDir, only !== undefined, now, tracker, vis).catch((e) => io.log(`intake ${id}: failed: ${e.message}`));
   } finally {
     if (io.dry && work) rmSync(work, { recursive: true, force: true });
     db.close();
   }
 }
 
-async function runRule(cfg: Config, io: Io, db: Database, work: string, id: string, tenderDir: string, force: boolean, now: number, tracker: (s: Source) => Tracker) {
+async function runRule(cfg: Config, io: Io, db: Database, work: string, id: string, tenderDir: string, force: boolean, now: number, tracker: (s: Source) => Tracker, vis: Map<string, string>) {
   const host = cfg.repos[id.slice(0, id.lastIndexOf(":"))]!;
   const name = id.slice(id.lastIndexOf(":") + 1);
   const r = await loadSession(io, host, SLOW_SECS);
@@ -199,6 +202,12 @@ async function runRule(cfg: Config, io: Io, db: Database, work: string, id: stri
   const own = [s.readyLabel, s.needsHumanLabel, ...(s.tracker === "github" ? [s.inProgressLabel, s.inReviewLabel, s.readyToMergeLabel] : [])];
   const taken = rule.labels.filter((x) => hasLabel(own, x));
   if (taken.length) throw new Error(`labels: ${taken.join(", ")} ${taken.length > 1 ? "are" : "is"} tender's own; use autoLabel for the ready label`);
+  // The fix PR lands on the GitHub repo whatever the tracker, so `private` checks it for Linear too.
+  if (rule.private) {
+    if (!vis.has(r.key)) vis.set(r.key, (await read(io, ["gh", "repo", "view", r.key, "--json", "visibility", "--jq", ".visibility"])).trim());
+    const v = vis.get(r.key)!;
+    if (!["PRIVATE", "INTERNAL"].includes(v)) throw new Error(`private: ${r.key} is ${/^[A-Z]{1,20}$/.test(v) ? v : "of unknown visibility"}, so this rule files nothing there`);
+  }
   const tr = tracker(s);
   const box = await sandbox(cfg, io, work, r, id, rule, tenderDir, Object.fromEntries(rule.secrets.map((k) => [k, process.env[k]!])));
   try {

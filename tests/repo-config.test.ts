@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { cloneAll } from "../src/launcher";
-import { mergeDecision, type PrFacts } from "../src/merge";
+import { cloneAll } from "../src/session/launcher";
+import { mergeDecision, type PrFacts } from "../src/review/merge";
 import { pass } from "../src/pass";
-import { combine, configCache, dirEntries, type Entry, gitEntries, loadSession, parseRepoConfig, promptFor } from "../src/repo-config";
+import { combine, configCache, dirEntries, type Entry, gitEntries, loadSession, parseRepoConfig, promptFor } from "../src/config/repo-config";
 import { GIT, TENDER_DIR } from "../src/util";
 import { check, parseArgs } from "../tender";
 import { config, fakeIo, fakeTracker, noPr, repoFiles, root, setBaseSha, ticket, useTempRoot, web, windowsOut } from "./helpers";

@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { State } from "../src/state";
-import { dur, label, rows, table } from "../src/status";
+import type { State } from "../src/session/state";
+import { dur, label, rows, table } from "../src/ui/status";
 import { claudeFile, config, phase, root, useTempRoot, worktree, writePhases } from "./helpers";
 
 useTempRoot();

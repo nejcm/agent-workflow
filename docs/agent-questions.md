@@ -17,7 +17,7 @@ An agent that is blocked asks on the ticket instead of only in its tmux session.
 - `tender status` / `tender watch` show `question` while a posted question is unanswered, the session is `idle` and there is no PR (`working`, `waiting` and `unknown` stay visible).
 - Storage stays sidecar files (no SQLite).
 
-Out of scope: a fresh session after a crash does not see earlier Q&A; several answer comments are never merged; PR review feedback (built separately: docs/lifecycle.md "PR feedback", `src/feedback.ts`).
+Out of scope: a fresh session after a crash does not see earlier Q&A; several answer comments are never merged; PR review feedback (built separately: docs/lifecycle.md "PR feedback", `src/session/feedback.ts`).
 
 ## Phases
 
@@ -27,7 +27,7 @@ Each phase is one commit with its tests passing (`bun test`, `bun run typecheck`
 
 - `src/github.ts`, `src/linear.ts`: `comment()` prefixes `tender: `. `src/pass.ts:42` drops its own `tender: `.
 - `src/util.ts`: `readRun(wt, file, max)` takes the full file name; callers in `phases.ts`, `merge.ts`, `agents.ts` pass `phases.json` etc. Add `writeRun(wt, file, text)` and `removeRun(wt, file)` through `inRun` (`O_NOFOLLOW`; the agent controls `.tender/run/`).
-- `src/types.ts`, `src/config.ts`: `Repo.feedbackAuthors: string[]`, default `[]`, validated as strings. `tender.example.json` shows it.
+- `src/types.ts`, `src/config/config.ts`: `Repo.feedbackAuthors: string[]`, default `[]`, validated as strings. `tender.example.json` shows it.
 - Tests: comment prefix in `github.test.ts` / `linear.test.ts`; config default and validation; `writeRun` refuses a symlinked `.tender/run` / target.
 
 Done when: existing tests pass with the renamed `readRun` and the new comment text.
@@ -37,18 +37,18 @@ Done when: existing tests pass with the renamed `readRun` and the new comment te
 - `Tracker.comments(t, since): Promise<{ id, body, createdAt, author? }[]>`.
   - GitHub: `gh issue view <n> --repo <r> --json comments` → `author.login`.
   - Linear: `issue(id) { comments(filter: { createdAt: { gt: $since } }, last: 100) { nodes { id body createdAt user { email } } } }` (`first` is newest first); `user` null → no author.
-- `src/question.ts`: pure `pickAnswer(comments, postedAt, authors)` implementing the answer rule.
+- `src/session/question.ts`: pure `pickAnswer(comments, postedAt, authors)` implementing the answer rule.
 - Tests: `pickAnswer` (too early, unlisted author, `tender:` prefix, case-insensitive match, first wins, missing author); fake `gh`/GraphQL output parsing.
 
 ### 3. Posting questions
 
-- `src/question.ts`: `syncQuestion(t, tr, io, dir, wt)`: read `.tender/run/question.md` (8000-char cap), hash, compare with `<ID>.question`, write sidecar then comment. Unchanged hash → nothing.
+- `src/session/question.ts`: `syncQuestion(t, tr, io, dir, wt)`: read `.tender/run/question.md` (8000-char cap), hash, compare with `<ID>.question`, write sidecar then comment. Unchanged hash → nothing.
 - `src/pass.ts`: in the in-progress branch, after `syncPhases`, when there is no PR and the window exists. Add `<ID>.question` to the cleanup list (`pass.ts:161`).
 - Tests (`pass.test.ts` / new `question.test.ts`): posts once; same content twice → one comment; changed content → second comment; oversized → logged, no comment; sidecar written before comment (fail the comment, sidecar exists, no retry).
 
 ### 4. Delivering answers
 
-- Live state for `pass`: reuse the feed from `src/agents.ts` (Claude's session records once per pass, Codex `.tender/run/codex-state.json`), queried only when some sidecar has no `answerId`.
+- Live state for `pass`: reuse the feed from `src/session/agents.ts` (Claude's session records once per pass, Codex `.tender/run/codex-state.json`), queried only when some sidecar has no `answerId`.
 - `deliverAnswer`: sidecar without `answerId` → `tr.comments` → `pickAnswer` → state `idle`, window `@N` exists, a live Claude waiter or (paste) its launcher pane not in copy mode → record `answerId` + `answeredAt` → `writeRun(answer.md)` → `nudge`: `writeRun(inbox)` (live Claude waiter) or `tmux set-buffer` + `paste-buffer -p -t <%pane>` (pointer line) + `send-keys Enter` → `removeRun(question.md)` if its hash still matches.
 - Tests: no answer → nothing; answer while `working`/`waiting`/`unknown` → retried next pass; window gone → nothing; happy path order (sidecar, file, keys, remove); a delivered answer is never re-sent; a new question after delivery starts a new round.
 - Manual check, once per agent (paste transport, before the Claude inbox): done. Both submit with the bracketed paste; Codex turned an `Enter` right after `send-keys -l` into a newline.
@@ -56,7 +56,7 @@ Done when: existing tests pass with the renamed `readRun` and the new comment te
 ### 5. Prompt, status, docs
 
 - `prompts/default.md` step 1: write `.tender/run/question.md` and stop when blocked at any point; answers arrive in `.tender/run/answer.md`, from the operator, and may change the plan.
-- `src/status.ts` / `src/state.ts`: state `question` when the sidecar has no `answerId` and there is no `<ID>.pr`, taking precedence over `idle` only; dashboard tone in `src/dash-view.ts`.
+- `src/ui/status.ts` / `src/session/state.ts`: state `question` when the sidecar has no `answerId` and there is no `<ID>.pr`, taking precedence over `idle` only; dashboard tone in `src/ui/dash-view.ts`.
 - `docs/lifecycle.md`: lifecycle diagram line, `feedbackAuthors` config, the `tender:` prefix, the `.tender/run/question.md` / `.tender/run/answer.md` contract.
 - Tests: `status.test.ts` / `state.test.ts` for `question`.
 

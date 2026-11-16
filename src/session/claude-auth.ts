@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { basename, join } from "node:path";
-import type { Io, Run } from "./types";
-import { TENDER_DIR, nonEmpty } from "./util";
+import type { Io, Run } from "../types";
+import { TENDER_DIR, nonEmpty } from "../util";
 
 /** The host login tender keeps fresh, relative to home. */
 export const CREDENTIALS = ".claude/.credentials.json";

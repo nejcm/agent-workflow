@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { AGENTS, claudeDir, claudeSessions, codexHome, codexState, INBOX_HOOK, INBOX_WAITER, parseAgents } from "../src/agents";
+import { AGENTS, claudeDir, claudeSessions, codexHome, codexState, INBOX_HOOK, INBOX_WAITER, parseAgents } from "../src/session/agents";
 import { root, session, useTempRoot } from "./helpers";
 
 useTempRoot();

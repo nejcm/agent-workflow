@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Io, Ticket, Tracker } from "./types";
-import { put, readRun } from "./util";
+import type { Io, Ticket, Tracker } from "../types";
+import { put, readRun } from "../util";
 
 export type PhaseStatus = "todo" | "in-progress" | "done";
 export interface Phase {

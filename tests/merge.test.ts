@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { addedLines, ESCAPE_HATCHES, escapeHatch, hatchInWorker } from "../src/hatch";
-import { type PrFacts, isCritical, isTest, mergeDecision, parseAssessment, prMode } from "../src/merge";
+import { addedLines, ESCAPE_HATCHES, escapeHatch, hatchInWorker } from "../src/review/hatch";
+import { type PrFacts, isCritical, isTest, mergeDecision, parseAssessment, prMode } from "../src/review/merge";
 import { openDb, recorder } from "../src/db";
 import { pass } from "../src/pass";
-import { configCache } from "../src/repo-config";
+import { configCache } from "../src/config/repo-config";
 import { config, fakeIo, fakeTracker, repoFiles, root, ticket, useTempRoot, web, windowsOut, worktree } from "./helpers";
 
 useTempRoot();

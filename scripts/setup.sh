@@ -57,7 +57,7 @@ done
 todo=0
 sandboxes=" $(bun -e 'const c = await Bun.file("tender.json").json(); console.log([c.defaults?.sandbox, ...(c.repos ?? []).map((r) => r?.sandbox)].join(" "))' 2>/dev/null || echo nono none) "
 # nono sessions use your own login in ~/.claude through nono's proxy; this is tender's own startup check of it.
-case $sandboxes in *" nono "*) bun -e 'import { checkLogin, readLogin } from "./src/claude-auth"; try { const w = checkLogin(readLogin(process.env.HOME), Date.now()); if (w) console.log(`WARN: ${w}`) } catch (e) { console.log(`TODO: ${e.message}`); process.exit(1) }' || todo=1 ;; esac
+case $sandboxes in *" nono "*) bun -e 'import { checkLogin, readLogin } from "./src/session/claude-auth"; try { const w = checkLogin(readLogin(process.env.HOME), Date.now()); if (w) console.log(`WARN: ${w}`) } catch (e) { console.log(`TODO: ${e.message}`); process.exit(1) }' || todo=1 ;; esac
 case $sandboxes in *" none "*) [ -s ~/.claude-tender/oauth-token ] || { todo=1; echo "TODO: claude setup-token, then save the token to ~/.claude-tender/oauth-token (chmod 600); needed by sandbox: \"none\" repos"; } ;; esac
 CODEX_HOME=~/.codex-tender codex login status >/dev/null 2>&1 || { todo=1; echo "TODO: CODEX_HOME=~/.codex-tender codex login"; }
 echo "Linear sources: create labels agent, needs-human and host:$host in the team."

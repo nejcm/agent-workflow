@@ -172,12 +172,14 @@ Each entry of `intake` is one rule. A rule runs only when `tender.json` lists it
 | `maxPerRun` | integer 1–20 | `3` | new tickets filed per collect |
 | `secrets` | list of env var names `[A-Z][A-Z0-9_]*` | `[]` | read from the host's environment (`.env`) and passed to the script; tender's own (`GH_*`, `GITHUB_*`, `LINEAR_*`, `TENDER_*`, `NONO_*`, `CLAUDE_*`, `ANTHROPIC_*`, `OPENAI_*`, `CODEX_*`, `PATH`, `HOME`, `LANG`, `TZ`, `TMPDIR`, `TMP`, `TEMP`) are refused |
 | `network` | list of lowercase host names | `[]` | the only hosts the script may reach; empty means no network |
+| `loopback` | boolean | `false` | run the script in its own network namespace whose loopback it may use, for tunneling non-HTTP clients like Postgres through the `network` proxy, see [Sandbox](intake.md#sandbox) |
+| `private` | boolean | `false` | file only for a private GitHub repo, whatever the tracker (the fix PR lands there): a public repo fails the run, see [Filing](intake.md#filing) |
 | `labels` | list of label names, ≤ 5, each ≤ 50 chars, no commas or colons | `[]` | added to every ticket the rule files, shadow or not; the source's own labels (ready, needs-human, status) are refused at run time, see [Labels](intake.md#labels) |
-| `autoLabel` | list of `{ fact: value, min<Fact>: number }` | `[]` | a ticket gets the ready label when every condition of any rule holds (`min<Fact>` is `facts.<fact> >= n`, other keys are equality); no match files a shadow ticket |
+| `autoLabel` | list of `{ fact: value, min<Fact>: number }` | `[]` | a ticket gets the ready label when every condition of any rule holds (`min<Fact>` is `facts.<fact> >= n`, other keys are equality); no match files a shadow ticket; a finding whose `categories` fact lists `SECURITY` never matches, and a rule naming `SECURITY` there is rejected |
 | `recheck` | boolean | `true` | after the ticket is Done, ask the script whether the problem is gone; reopen once if not |
 | `recheckAfter` | duration | `24h` | how long after Done the recheck runs |
 
-The script's flags (e.g. the Sentry script's `--org`, `--min-events`, `--no-fixes`) are listed with each [example script](intake.md#example-scripts). The output protocol is in [Script protocol](intake.md#script-protocol).
+The script's flags (e.g. the Sentry script's `--org`, `--min-events`, `--no-fixes`, the Postgres scripts' `--min-mean-ms`) are listed with each [example script](intake.md#example-scripts). The output protocol is in [Script protocol](intake.md#script-protocol).
 
 ### How the repo config is read
 
@@ -192,7 +194,7 @@ The script's flags (e.g. the Sentry script's `--org`, `--min-events`, `--no-fixe
 | variable | where | |
 |---|---|---|
 | `LINEAR_API_KEY` | `.env` in tender's working directory | required with a Linear source, see [Auth](auth.md) |
-| intake `secrets` (e.g. `SENTRY_TOKEN`) | `.env` | passed only to the rules that declare them |
+| intake `secrets` (e.g. `SENTRY_TOKEN`, `PG_INTAKE_URL`) | `.env` | passed only to the rules that declare them |
 
 GitHub uses `gh`'s own login; see [Auth](auth.md).
 

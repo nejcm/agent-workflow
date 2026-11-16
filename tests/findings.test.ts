@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileFindings, parseFindings } from "../src/findings";
+import { fileFindings, parseFindings } from "../src/review/findings";
 import { github } from "../src/trackers/github";
 import { linear } from "../src/trackers/linear";
 import { pass } from "../src/pass";

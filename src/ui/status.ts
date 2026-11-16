@@ -1,17 +1,17 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { AGENTS, agentOf, type Lookup } from "./agents";
-import { repoDir } from "./config";
-import { PR_URL } from "./github";
-import { handedOff, windows, winName } from "./launcher";
-import { IN_REVIEW_FILE, readReady, worktreeIds } from "./pass";
-import { phaseProgress, type PhaseStatus } from "./phases";
-import { openQuestion } from "./question";
-import { resolve, type State } from "./state";
+import { AGENTS, agentOf, type Lookup } from "../session/agents";
+import { repoDir } from "../config/config";
+import { PR_URL } from "../github";
+import { handedOff, windows, winName } from "../session/launcher";
+import { IN_REVIEW_FILE, readReady, worktreeIds } from "../pass";
+import { phaseProgress, type PhaseStatus } from "../review/phases";
+import { openQuestion } from "../session/question";
+import { resolve, type State } from "../session/state";
 import { transcript, withFile } from "./tail";
-import type { AgentName, Config, Io } from "./types";
-import { clean, mtime } from "./util";
+import type { AgentName, Config, Io } from "../types";
+import { clean, mtime } from "../util";
 
 export interface Row {
   id: string;

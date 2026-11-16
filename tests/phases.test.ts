@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { makeTracker, pass } from "../src/pass";
-import { parsePhases, phaseProgress } from "../src/phases";
+import { parsePhases, phaseProgress } from "../src/review/phases";
 import { config, fakeIo, fakeTracker, noPr, phase, root, ticket, useTempRoot, windowsOut, worktree, writePhases } from "./helpers";
 
 useTempRoot();

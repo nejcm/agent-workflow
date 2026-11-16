@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { CAPTURE_COMMAND, cached, checkLogin, CREDENTIALS, findClaude, hostExe, hostLogin, needsRefresh, readLogin, refresher } from "../src/claude-auth";
+import { CAPTURE_COMMAND, cached, checkLogin, CREDENTIALS, findClaude, hostExe, hostLogin, needsRefresh, readLogin, refresher } from "../src/session/claude-auth";
 import { TENDER_DIR } from "../src/util";
 
 let t: string;

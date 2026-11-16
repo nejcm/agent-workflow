@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseConfig } from "../src/config";
+import { parseConfig } from "../src/config/config";
 import { TENDER_DIR } from "../src/util";
 import { config, raw, root, src, useTempRoot, web } from "./helpers";
 

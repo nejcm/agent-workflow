@@ -3,11 +3,11 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rename
 import { basename, join } from "node:path";
 import { AGENTS, CLAUDE_TOKEN, claudeHome, codexHome, tmpHome } from "./agents";
 import { checkLogin, findBun, readLogin } from "./claude-auth";
-import { repoDir } from "./config";
-import { canonical, sameRepo } from "./github";
-import { configCache, loadSession, promptFor } from "./repo-config";
-import type { Config, Io, Repo, Session, Source, Ticket, Tracker } from "./types";
-import { GIT, inDir, inRun, passLocked, put, read, remove, SLOW_SECS, write } from "./util";
+import { repoDir } from "../config/config";
+import { canonical, sameRepo } from "../github";
+import { configCache, loadSession, promptFor } from "../config/repo-config";
+import type { Config, Io, Repo, Session, Source, Ticket, Tracker } from "../types";
+import { GIT, inDir, inRun, passLocked, put, read, remove, SLOW_SECS, write } from "../util";
 
 export const render = (tpl: string, vars: Record<string, string>) => tpl.replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? m);
 

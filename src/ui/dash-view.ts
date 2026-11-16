@@ -1,8 +1,8 @@
-import type { State } from "./state";
-import type { PhaseStatus } from "./phases";
+import type { State } from "../session/state";
+import type { PhaseStatus } from "../review/phases";
 import { dur, label, type Row } from "./status";
 import { fit, KIND } from "./tail";
-import { clean } from "./util";
+import { clean } from "../util";
 
 export interface Span {
   t: string;

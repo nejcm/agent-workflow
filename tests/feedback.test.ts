@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { FEEDBACK_POINTER } from "../src/feedback";
+import { FEEDBACK_POINTER } from "../src/session/feedback";
 import { pass } from "../src/pass";
-import type { State } from "../src/state";
+import type { State } from "../src/session/state";
 import { config, fakeIo, fakeTracker, root, ticket, useTempRoot, windowsOut, worktree } from "./helpers";
 
 useTempRoot();

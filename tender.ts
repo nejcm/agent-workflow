@@ -2,18 +2,18 @@
 import { mkdirSync, openSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { hostLogin } from "./src/claude-auth";
-import { parseConfig } from "./src/config";
-import { dashboard, watch } from "./src/dash";
+import { hostLogin } from "./src/session/claude-auth";
+import { parseConfig } from "./src/config/config";
+import { dashboard, watch } from "./src/ui/dash";
 import { events } from "./src/db";
-import { handoff, shellLine, ticketClone, type Tool, TOOLS } from "./src/handoff";
+import { handoff, shellLine, ticketClone, type Tool, TOOLS } from "./src/session/handoff";
 import { intake } from "./src/intake";
-import { cloned, cloneAll, resume } from "./src/launcher";
-import { CRITICAL_PATHS, TEST_PATHS } from "./src/merge";
+import { cloned, cloneAll, resume } from "./src/session/launcher";
+import { CRITICAL_PATHS, TEST_PATHS } from "./src/review/merge";
 import { makeTracker, pass } from "./src/pass";
-import { dirEntries, parseRepoConfig } from "./src/repo-config";
-import { reviewLimit, snapshot, table } from "./src/status";
-import { tail } from "./src/tail";
+import { dirEntries, parseRepoConfig } from "./src/config/repo-config";
+import { reviewLimit, snapshot, table } from "./src/ui/status";
+import { tail } from "./src/ui/tail";
 import type { Config, Io, RepoConfig, Run } from "./src/types";
 import { passLocked, TENDER_DIR } from "./src/util";
 

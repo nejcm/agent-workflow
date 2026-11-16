@@ -1,8 +1,8 @@
 import { lstatSync, opendirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Live, State } from "./state";
-import type { AgentName } from "./types";
-import { clean, inDir, readRun, readIn } from "./util";
+import type { AgentName } from "../types";
+import { clean, inDir, readRun, readIn } from "../util";
 
 export type Lookup = (wt: string, since: number, now: number) => Live | undefined;
 

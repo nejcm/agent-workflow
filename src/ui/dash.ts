@@ -2,13 +2,13 @@ import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { KeyEvent } from "@opentui/core";
-import { repoDir } from "./config";
+import { repoDir } from "../config/config";
 import { type Line, type Pane, palette, screen, sortRows } from "./dash-view";
-import { PR_URL } from "./github";
+import { PR_URL } from "../github";
 import { type Row, reviewLimit, snapshot } from "./status";
 import { follower } from "./tail";
-import { clean } from "./util";
-import type { Config, Io } from "./types";
+import { clean } from "../util";
+import type { Config, Io } from "../types";
 
 export type Action = "down" | "up" | "first" | "last" | "focus" | "tab" | "back" | "attach" | "open" | "refresh" | "help" | "quit";
 export interface View {

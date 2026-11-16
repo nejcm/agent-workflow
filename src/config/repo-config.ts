@@ -1,9 +1,9 @@
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AUTO_MERGE, INTAKE_NAME } from "./config";
-import { baseBranch } from "./github";
-import type { AutoMerge, Check, IntakeRule, Io, Repo, RepoConfig, Session } from "./types";
-import { GIT, hasLabel, read, TENDER_DIR, write } from "./util";
+import { baseBranch } from "../github";
+import type { AutoMerge, Check, IntakeRule, Io, Repo, RepoConfig, Session } from "../types";
+import { GIT, hasLabel, read, TENDER_DIR, write } from "../util";
 
 const MAX_FILE = 64 * 1024;
 const PROMPT = /^[a-z0-9-]+\.md$/;
@@ -92,8 +92,10 @@ export function parseRepoConfig(entries: Entry[]): RepoConfig {
   return c;
 }
 
-const INTAKE_KEYS = ["name", "run", "args", "every", "maxPerRun", "secrets", "network", "autoLabel", "labels", "recheck", "recheckAfter"];
+const INTAKE_KEYS = ["name", "run", "args", "every", "maxPerRun", "secrets", "network", "autoLabel", "labels", "recheck", "recheckAfter", "private", "loopback"];
 export const DURATION = /^([1-9]\d{0,3})([mhd])$/;
+/** A `categories` fact listing SECURITY, as splinter's lints do: such a finding never gets the ready label. */
+export const securityFact = (v: unknown) => typeof v === "string" && v.toUpperCase().split(",").some((c) => c.trim() === "SECURITY");
 const SECRET = /^[A-Z][A-Z0-9_]{0,63}$/;
 // No gh token and no tracker key ever reach a script; the rest is the environment tender sets itself.
 const RESERVED = /^(GH|GITHUB|LINEAR|TENDER|NONO|CLAUDE|ANTHROPIC|OPENAI|CODEX)_|^(PATH|HOME|LANG|TZ|TMPDIR|TMP|TEMP)$/;
@@ -114,7 +116,7 @@ function parseIntake(raw: unknown, check: Check): IntakeRule[] {
     check(obj(r), `${at}: mapping`);
     const o: Record<string, any> = obj(r) ? r : {};
     for (const k of Object.keys(o)) check(INTAKE_KEYS.includes(k), `${at}.${k}: unknown key`);
-    const rule: IntakeRule = { name: o.name, run: o.run, args: o.args ?? [], every: o.every ?? "1h", maxPerRun: o.maxPerRun ?? 3, secrets: o.secrets ?? [], network: o.network ?? [], autoLabel: o.autoLabel ?? [], labels: o.labels ?? [], recheck: o.recheck ?? true, recheckAfter: o.recheckAfter ?? "24h" };
+    const rule: IntakeRule = { name: o.name, run: o.run, args: o.args ?? [], every: o.every ?? "1h", maxPerRun: o.maxPerRun ?? 3, secrets: o.secrets ?? [], network: o.network ?? [], autoLabel: o.autoLabel ?? [], labels: o.labels ?? [], recheck: o.recheck ?? true, recheckAfter: o.recheckAfter ?? "24h", private: o.private ?? false, loopback: o.loopback ?? false };
     check(typeof rule.name === "string" && INTAKE_NAME.test(rule.name), `${at}.name: required, [a-z0-9-]`);
     check(repoPath(rule.run), `${at}.run: required, a path inside the repo`);
     check(list(rule.args, (x) => typeof x === "string" && x.length <= 200 && !/\p{Cc}/u.test(x)), `${at}.args: at most 20 strings of at most 200 chars, no control characters`);
@@ -124,7 +126,8 @@ function parseIntake(raw: unknown, check: Check): IntakeRule[] {
     check(list(rule.network, (x) => typeof x === "string" && DOMAIN.test(x)), `${at}.network: list of lowercase host names the script may reach`);
     check(list(rule.autoLabel, (x) => obj(x) && Object.keys(x).length > 0 && Object.entries(x).every(([k, v]) => FACT.test(k) && (typeof v === "string" || Number.isFinite(v)))), `${at}.autoLabel: list of { fact: value, minFact: number } rules`);
     check(list(rule.labels, (x) => typeof x === "string" && LABEL.test(x), 5), `${at}.labels: at most 5 label names, no commas or colons`);
-    check(typeof rule.recheck === "boolean", `${at}.recheck: boolean`);
+    for (const k of ["recheck", "private", "loopback"] as const) check(typeof rule[k] === "boolean", `${at}.${k}: boolean`);
+    check(!Array.isArray(rule.autoLabel) || !rule.autoLabel.some((x) => obj(x) && securityFact(x.categories)), `${at}.autoLabel: a SECURITY finding never gets the ready label; a human decides access policies`);
     return rule;
   });
   check(new Set(rules.map((r) => r.name)).size === rules.length, "intake: rule names must be unique");

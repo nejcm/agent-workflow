@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import type { Io, Ticket, Tracker } from "./types";
-import { clean, put, readRun, readIn, strip } from "./util";
+import type { Io, Ticket, Tracker } from "../types";
+import { clean, put, readRun, readIn, strip } from "../util";
 
 export interface Finding {
   title: string;

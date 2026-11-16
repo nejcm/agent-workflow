@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { bar, card, chips, clip, counts, cut, detail, event, layout, type Line, type Model, palette, screen, scroll, segments, sortRows, tailView, wrap } from "../src/dash-view";
+import { bar, card, chips, clip, counts, cut, detail, event, layout, type Line, type Model, palette, screen, scroll, segments, sortRows, tailView, wrap } from "../src/ui/dash-view";
 import { statusRow as row } from "./helpers";
-import { label, type PhaseItem } from "../src/status";
+import { label, type PhaseItem } from "../src/ui/status";
 
 const C = palette({});
 const M = palette({ NO_COLOR: "1" });

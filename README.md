@@ -163,6 +163,8 @@ scripts/setup.sh owner/repo   # config dirs, nono, labels, .env and tender.json 
 scripts/run.sh                # preflight (dry run), then poll in the foreground
 ```
 
+To set up each repo, run the `tender-setup` skill in it. The skill writes `.tender/config.yaml`, runs `bun tender.ts check`, and prints the `tender.json` `repos` entry for you to add. To install it, run this from the tender clone. For Claude Code: `mkdir -p ~/.claude/skills && ln -s "$PWD/skills/tender-setup" ~/.claude/skills/tender-setup`. For Codex: `mkdir -p ~/.agents/skills && ln -s "$PWD/skills/tender-setup" ~/.agents/skills/tender-setup`.
+
 The same are available as `bun run setup owner/repo`, `bun run start`, `bun run once`, `bun run service`, `bun run status`, `bun run watch`, `bun run dry`, `bun run test` and `bun run typecheck` (`tsc --noEmit`; run `bun install` once for `@opentui/core`, the `watch` dashboard's only runtime dependency, and the dev-only `typescript` and `bun-types`; if it cannot be loaded `watch` falls back to plain output, and nothing else needs it). Edit `repos` and `sources` in `tender.json` before running, and add a [`.tender/config.yaml`](#repo-config) to each repo (optional; `bun tender.ts check <repo>` validates it). `scripts/run.sh once` does a single pass; `scripts/run.sh service` installs and starts the systemd user unit. `run` and `once` hold a kernel lock on `<workspaceRoot>/.lock` while they live, so a second one on the same workspace exits with an error (`--dry-run`, `status`, `watch` and `tail` take no lock). The agent logins below are interactive; `scripts/setup.sh` prints what is still missing.
 
 ## Setup
@@ -474,6 +476,7 @@ CLI: `bun tender.ts <run|once|status|watch|tail|check|open|resume> [path|ID] [--
 - `src/state.ts`: live state types and precedence.
 - `src/tail.ts`: transcript lookup by recorded cwd, line condensing, `tail`.
 - `src/util.ts`: logged/dry-run-aware command and file helpers, the pinned `.tender/run` reader, control-char stripping.
+- `skills/tender-setup/SKILL.md`: the setup skill for a repo's `.tender/`.
 - `scripts/codex-hooks.sh`: installs or refreshes tender's Codex state hooks in a `config.toml`.
 - `tests/`: one file per module (launcher tests are in `pass.test.ts`); shared fakes in `tests/helpers.ts`.
 

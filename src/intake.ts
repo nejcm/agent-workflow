@@ -6,6 +6,7 @@ import { DB_FILE, memoryDb, openDb } from "./db";
 import { sanitized, unmention } from "./review/findings";
 import { nonoRun } from "./session/launcher";
 import { judgeRule } from "./judge";
+import { guardrails } from "./guardrail";
 import { makeTracker } from "./pass";
 import { DURATION, loadSession, securityFact } from "./config/repo-config";
 import type { Config, IntakeRule, Io, Session, Source, Target, Ticket, Tracker } from "./types";
@@ -47,6 +48,9 @@ export const ms = (d: string) => {
 
 /** The ready label, plus `host:<host>` unless this is the default host. */
 export const readyLabels = (cfg: Config, s: Source) => [s.readyLabel, ...(cfg.defaultHost ? [] : [`host:${cfg.host}`])];
+
+/** The source's workflow labels, which no intake or guardrail ticket may carry. */
+export const ownLabels = (s: Source) => [s.readyLabel, s.needsHumanLabel, ...(s.tracker === "github" ? [s.inProgressLabel, s.inReviewLabel, s.readyToMergeLabel] : [])];
 
 export const marker = (rule: string, key: string) => `tender-intake: ${rule}:${key}`;
 
@@ -183,6 +187,7 @@ export async function intake(cfg: Config, io: Io, tenderDir: string, { only, now
     const vis = new Map<string, string>();
     const budget = { left: cfg.judge?.maxPerRun ?? 0 };
     for (const id of ids) await runRule(cfg, io, db, work, id, tenderDir, only !== undefined, now, tracker, vis, budget).catch((e) => io.log(`intake ${id}: failed: ${e.message}`));
+    if (cfg.judge?.guardrails && only === undefined) await guardrails(cfg, io, db, work, tenderDir, budget, tracker, now).catch((e) => io.log(`guardrail: failed: ${e.message}`));
   } finally {
     if (io.dry && work) rmSync(work, { recursive: true, force: true });
     db.close();
@@ -211,8 +216,7 @@ async function fileRule(cfg: Config, io: Io, db: Database, work: string, id: str
   const missing = rule.secrets.filter((k) => !process.env[k]);
   if (missing.length) throw new Error(`secrets not set in the host's environment (.env): ${missing.join(", ")}`);
   const s = intakeSource(cfg, r);
-  const own = [s.readyLabel, s.needsHumanLabel, ...(s.tracker === "github" ? [s.inProgressLabel, s.inReviewLabel, s.readyToMergeLabel] : [])];
-  const taken = rule.labels.filter((x) => hasLabel(own, x));
+  const taken = rule.labels.filter((x) => hasLabel(ownLabels(s), x));
   if (taken.length) throw new Error(`labels: ${taken.join(", ")} ${taken.length > 1 ? "are" : "is"} tender's own; use autoLabel for the ready label`);
   // The fix PR lands on the GitHub repo whatever the tracker, so `private` checks it for Linear too.
   if (rule.private) {
@@ -291,7 +295,8 @@ async function sweep(io: Io, db: Database, save: Save, tr: Tracker, repo: string
 export const fixesMarker = (shortId: string) => `tender-intake-fixes: ${shortId}`;
 export const recheckMarker = (rule: string, key: string) => `tender-intake-recheck: ${rule}:${key}`;
 const rechecked = async (tr: Tracker, t: Ticket, m: string) => (await tr.comments(t, 0)).some((c) => hasMarker(c.body, m));
-const defang = (s: string) => s.replace(/tender-intake/gi, "tender_intake");
+/** Untrusted text with `tender-intake` and `tender-guardrail` broken, so it cannot plant one of tender's markers. */
+export const defang = (s: string) => s.replace(/tender-(intake|guardrail)/gi, "tender_$1");
 
 // The marked comment is the tracker's once-ever record, so it must land before the reopen; with the db lost, its presence stops any retry.
 // shortcut: a reopen that lands but reports failure, then a human close before the next run, gets reopened again; read the issue timeline if that bites.

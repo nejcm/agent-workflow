@@ -44,7 +44,7 @@ Unknown keys are errors in both files. Upgrading from older layouts is in [upgra
 | `repos` | non-empty array | required | the allowlist; tickets for any other repo are skipped |
 | `sources` | non-empty array | required | the trackers to poll |
 | `intake` | object | none | which [intake](intake.md) rules run, and where |
-| `judge` | object | none | turns on the [judge](intake.md#judge) for intake tickets; needs `intake` |
+| `judge` | object | none | turns on the [judge](intake.md#judge) for intake tickets and, opt-in, [guardrails](intake.md#guardrails); needs `intake` |
 | `prs` | object | `{ "staleDays": 14 }` | the [PR sweep](prs.md) |
 
 ### `repos` and `defaults`
@@ -109,7 +109,8 @@ A key the source's tracker doesn't use (e.g. `team` on a GitHub source) is rejec
 |---|---|---|---|
 | `judge.agent` | `"claude"` \| `"codex"` | required with `judge` | the CLI that scores shadow intake tickets, see [Judge](intake.md#judge) |
 | `judge.model` | string | required with `judge` | the model name passed to `--model` / `-m`; no default |
-| `judge.maxPerRun` | integer 1–100 | `10` | agent calls per `tender intake` run, across all rules |
+| `judge.maxPerRun` | integer 1–100 | `10` | agent calls per `tender intake` run, across all rules and guardrails |
+| `judge.guardrails` | boolean | `false` | also proposes one [guardrail](intake.md#guardrails) ticket per merged agent PR that had feedback |
 
 ### `prs`
 

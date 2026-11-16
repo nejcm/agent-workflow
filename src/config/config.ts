@@ -106,13 +106,14 @@ export function parseConfig(raw: any, base: string): Config {
     check(str(intake.host) && /^[A-Za-z0-9._-]+$/.test(intake.host), "intake.host: required, the one host that runs intake");
     check(Array.isArray(intake.enabled) && intake.enabled.every((e: unknown) => typeof e === "string" && keys.includes(e.slice(0, e.lastIndexOf(":"))) && INTAKE_NAME.test(e.slice(e.lastIndexOf(":") + 1))), `intake.enabled: array of "owner/name:rule" for repos in repos`);
   }
-  const judge = raw.judge === undefined ? undefined : { agent: raw.judge?.agent, model: raw.judge?.model, maxPerRun: raw.judge?.maxPerRun ?? 10 };
-  check(raw.judge === undefined || (obj(raw.judge) && Object.keys(raw.judge).every((k) => ["agent", "model", "maxPerRun"].includes(k))), "judge: object with agent, model and maxPerRun");
+  const judge = raw.judge === undefined ? undefined : { agent: raw.judge?.agent, model: raw.judge?.model, maxPerRun: raw.judge?.maxPerRun ?? 10, ...(raw.judge?.guardrails === true && { guardrails: true as const }) };
+  check(raw.judge === undefined || (obj(raw.judge) && Object.keys(raw.judge).every((k) => ["agent", "model", "maxPerRun", "guardrails"].includes(k))), "judge: object with agent, model, maxPerRun and guardrails");
   if (judge) {
     check(obj(intake), "judge: needs intake, as it runs during `tender intake` on the intake host");
     check(["claude", "codex"].includes(judge.agent), `judge.agent: "claude" | "codex"`);
     check(typeof judge.model === "string" && MODEL.test(judge.model), "judge.model: required, the model name, e.g. sonnet");
     check(Number.isInteger(judge.maxPerRun) && judge.maxPerRun > 0 && judge.maxPerRun <= 100, "judge.maxPerRun: integer 1-100");
+    check(raw.judge.guardrails === undefined || typeof raw.judge.guardrails === "boolean", "judge.guardrails: true or false");
   }
   const prs = { staleDays: raw.prs?.staleDays ?? 14, digestIssue: raw.prs?.digestIssue };
   check(raw.prs === undefined || (obj(raw.prs) && Object.keys(raw.prs).every((k) => ["staleDays", "digestIssue"].includes(k))), "prs: object with staleDays and digestIssue");

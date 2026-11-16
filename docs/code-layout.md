@@ -10,6 +10,7 @@ The poll, intake and the helpers every folder shares.
 - `src/github.ts`: canonical-repo and PR lookup.
 - `src/intake.ts`: `intake`: the script protocol, the sandboxed run in a fresh clone, dedupe, filing, open-ticket updates and recheck.
 - `src/judge.ts`: the intake judge: ticket selection, the prompt, the sandboxed headless Claude or Codex call, verdict validation, the comment and the labelling decision.
+- `src/guardrail.ts`: guardrail proposals: merged agent PRs with feedback from events, the operator's comments from GitHub, the judge call with its own schema, the kind and prose-file guards and the filing.
 - `src/prs.ts`: `prs`: open-PR listing, classes, the orphan check and close, the report and digest issue.
 - `src/stats.ts`: `stats`: merged and reverted agent PRs per trust path from GitHub, shadow, judge and recheck agreement from events, the recommendation thresholds and the table.
 - `src/db.ts`: `tender.db` (bun:sqlite, WAL): ordered SQL migrations and the best-effort event recorder.
@@ -68,4 +69,4 @@ What a session leaves in `.tender/run/` and the merge decision.
 - `skills/tender-setup/SKILL.md`: the setup skill for a repo's `.tender/`.
 - `scripts/setup.sh`: idempotent host setup and tracker labels; `scripts/run.sh`: preflight, then poll, or install the systemd units.
 - `scripts/codex-hooks.sh`: installs or refreshes tender's Codex state hooks in a `config.toml`.
-- `tests/`: one file per module (launcher tests are in `pass.test.ts`, the Ready to merge pass in `ready.test.ts`, `intake/sentry.ts` in `sentry.test.ts`, `intake/posthog-errors.ts` in `posthog-errors.test.ts`, the `intake/pg*.ts` scripts in `pg.test.ts`); shared fakes in `tests/helpers.ts`.
+- `tests/`: one file per module (launcher tests are in `pass.test.ts`, the Ready to merge pass in `ready.test.ts`, `intake/sentry.ts` in `sentry.test.ts`, `intake/posthog-errors.ts` in `posthog-errors.test.ts`, the `intake/pg*.ts` scripts in `pg.test.ts`, `intake/lint-debt.ts` in `lint-debt.test.ts`); shared fakes in `tests/helpers.ts`.

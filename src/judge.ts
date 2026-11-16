@@ -7,7 +7,7 @@ import { findBun, findExe } from "./session/claude-auth";
 import { securityFact } from "./config/repo-config";
 import type { Config, IntakeRule, Io, Session, Source, Ticket, Tracker } from "./types";
 import { clean, hasLabel } from "./util";
-import { readyLabels, ticketAt } from "./intake";
+import { defang, readyLabels, ticketAt } from "./intake";
 
 const SECS = 180;
 const MAX_CANDIDATES = 20;
@@ -34,6 +34,9 @@ export const SCHEMA = {
     reason: { type: "string" },
   },
 };
+
+export type Spec = { schema: object; system: string };
+const VERDICT: Spec = { schema: SCHEMA, system: "You score tickets. Reply only with the JSON object asked for." };
 
 const INSTRUCTIONS = `You triage one ticket that an automated check filed, for a coding agent that may later fix it. Reply with only the JSON object the schema asks for:
 - worth, 0 to 1: how much fixing it is worth to the project;
@@ -74,16 +77,16 @@ export function judgePrompt(t: { title: string; body: string }, facts: object, c
 }
 
 // No MCP, settings, hooks, skills or session files, and tools off; the reply is schema-checked by the CLI and again by tender.
-export function judgeArgv(agent: "claude" | "codex", exe: string, model: string, prompt: string, dir: string) {
+export function judgeArgv(agent: "claude" | "codex", exe: string, model: string, prompt: string, dir: string, spec = VERDICT) {
   if (agent === "claude")
-    return [exe, "-p", prompt, "--model", model, "--system-prompt", "You score tickets. Reply only with the JSON object asked for.", "--tools", "", "--strict-mcp-config", "--safe-mode", "--setting-sources", "", "--disable-slash-commands", "--no-session-persistence", "--output-format", "json", "--json-schema", JSON.stringify(SCHEMA)];
+    return [exe, "-p", prompt, "--model", model, "--system-prompt", spec.system, "--tools", "", "--strict-mcp-config", "--safe-mode", "--setting-sources", "", "--disable-slash-commands", "--no-session-persistence", "--output-format", "json", "--json-schema", JSON.stringify(spec.schema)];
   // shortcut: Codex has no all-tools switch; this denylist matches codex 0.169, extend it when `codex features list` grows.
   const off = ["shell_tool", "unified_exec", "unified_exec_tty", "shell_snapshot", "apps", "plugins", "multi_agent", "image_generation", "browser_use", "browser_use_external", "browser_use_full_cdp_access", "computer_use", "in_app_browser", "view_image", "hooks", "goals", "sleep_tool", "tool_suggest", "skill_search"];
   return [exe, "--no-daemon", "exec", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "--sandbox", "read-only", "--color", "never", "-C", join(dir, "cwd"), "-m", model, "--output-schema", join(dir, "home", "schema.json"), "-c", 'web_search="disabled"', ...off.flatMap((f) => ["--disable", f]), "--", prompt];
 }
 
 /** Runs the judge agent under nono in a fresh dir with no repo, only its provider's network, and returns its raw stdout. */
-export async function callJudge(cfg: Config, io: Io, work: string, tenderDir: string, prompt: string) {
+export async function callJudge(cfg: Config, io: Io, work: string, tenderDir: string, prompt: string, spec = VERDICT) {
   const { agent, model } = cfg.judge!;
   const dir = join(work, ".judge");
   rmSync(dir, { recursive: true, force: true });
@@ -98,12 +101,12 @@ export async function callJudge(cfg: Config, io: Io, work: string, tenderDir: st
       profile.network = { allow_domain: ["chatgpt.com"] };
       delete profile.credential_capture;
       writeFileSync(join(home, "auth.json"), await codexLogin(io), { mode: 0o600 });
-      writeFileSync(join(home, "schema.json"), JSON.stringify(SCHEMA));
+      writeFileSync(join(home, "schema.json"), JSON.stringify(spec.schema));
       env = { ...env, CODEX_HOME: home };
     }
     writeFileSync(join(dir, "nono", "tender-judge.json"), JSON.stringify(profile));
     const box = nonoRun("tender-judge", dir, [["--allow", home], ["--allow", join(dir, "tmp")], ["--allow", join(dir, "cwd")], ["--read", dirname(exe)]]);
-    const res = await io.run([...box, ...judgeArgv(agent, exe, model, prompt, dir)], join(dir, "cwd"), SECS, { env, max: 1024 * 1024 });
+    const res = await io.run([...box, ...judgeArgv(agent, exe, model, prompt, dir, spec)], join(dir, "cwd"), SECS, { env, max: 1024 * 1024 });
     if (res.code !== 0) throw new Error(`${agent} exited ${res.code}: ${clean(res.err || res.out, 300)}`);
     return res.out;
   } finally {
@@ -114,7 +117,7 @@ export async function callJudge(cfg: Config, io: Io, work: string, tenderDir: st
 const refOf = (t: Ticket) => (/^gh-/.test(t.id) ? `#${t.ref}` : t.ref);
 
 /** The judge comment's reason: one line, no mentions, nothing that reads as one of tender's own lines or markers. */
-export const safeReason = (s: string) => unmention(clean(s, 300)).replace(/tender-intake/gi, "tender_intake").replace(/tender\s*:/gi, "tender;");
+export const safeReason = (s: string) => defang(unmention(clean(s, 300))).replace(/tender\s*:/gi, "tender;");
 
 /** What tender does with a verdict: the labels to add (none in shadow) and the line saying why. */
 export function decide(rule: IntakeRule, v: Verdict, facts: Record<string, unknown>, ready: string[]): { labels: string[]; why: string } {

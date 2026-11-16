@@ -8,6 +8,7 @@ import { dashboard, watch } from "./src/ui/dash";
 import { events } from "./src/db";
 import { handoff, shellLine, ticketClone, type Tool, TOOLS } from "./src/session/handoff";
 import { intake } from "./src/intake";
+import { prs } from "./src/prs";
 import { cloned, cloneAll, resume } from "./src/session/launcher";
 import { CRITICAL_PATHS, TEST_PATHS } from "./src/review/merge";
 import { makeTracker, pass } from "./src/pass";
@@ -82,6 +83,7 @@ const USAGE = `usage: bun tender.ts <command> [--config tender.json]
   open <ID | owner/repo/ID> [--tool claude|codex|t3|editor] [--exec]
   resume <ID | owner/repo/ID>
   intake [owner/repo:rule | rule] [--dry-run]
+  prs [--dry-run]
   check [path]`;
 const VALUED = ["--config", "--interval", "-n", "--tool"];
 const FLAGS = [...VALUED, "--dry-run", "--json", "--no-follow", "--plain", "--exec"];
@@ -114,7 +116,7 @@ export function parseArgs(argv: string[]) {
   const tool = opt("--tool");
   const ok =
     argv.every((a, i) => !a.startsWith("-") || isValue(i) || FLAGS.includes(a)) &&
-    ["run", "once", "status", "watch", "check", "intake", ...TARGETED].includes(cmd ?? "") &&
+    ["run", "once", "status", "watch", "check", "intake", "prs", ...TARGETED].includes(cmd ?? "") &&
     !extra.length &&
     (cmd === "check" || cmd === "intake" || TARGETED.includes(cmd!) === (id !== undefined)) &&
     (tool === undefined || (cmd === "open" && TOOLS.includes(tool as Tool))) &&
@@ -192,6 +194,14 @@ async function main(argv: string[]) {
     for (const key of new Set(cfg.intake?.host === cfg.host ? cfg.intake.enabled.map((e) => e.slice(0, e.lastIndexOf(":"))) : []))
       await cloned(cfg, io, cfg.repos[key]!).catch((e) => io.log(`clone ${key} failed: ${e.message}`));
     return intake(cfg, io, TENDER_DIR, { only: id });
+  }
+  if (cmd === "prs") {
+    const held = join(cfg.workspaceRoot, ".prs.lock");
+    if (!io.dry && !holdLock(held)) {
+      console.error(`another tender prs holds ${held}`);
+      process.exit(1);
+    }
+    return console.log(await prs(cfg, io));
   }
   // Dry runs change nothing, so the preflight in scripts/run.sh still works while the service runs.
   const lock = join(cfg.workspaceRoot, ".lock");

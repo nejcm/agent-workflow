@@ -73,8 +73,8 @@ export async function stopSession(cfg: Config, io: Io, key: string, id: string, 
 }
 
 /** Window ids by name; `activity` is each window's last pane output in epoch seconds, as the tmux server saw it; `listed` only if every row parsed. */
-export async function windows(cfg: Config, io: Io) {
-  const r = await io.run(["tmux", "list-windows", "-t", `=${cfg.tmuxSession}`, "-F", "#{window_id} #{window_activity} #{window_name}"]);
+export async function windows(cfg: Config, io: Io, secs?: number) {
+  const r = await io.run(["tmux", "list-windows", "-t", `=${cfg.tmuxSession}`, "-F", "#{window_id} #{window_activity} #{window_name}"], undefined, secs);
   const m = new Map<string, string>();
   const activity = new Map<string, number>();
   let listed = r.code === 0;

@@ -107,6 +107,8 @@ export interface Config {
   intake?: { enabled: string[]; host: string };
   /** Scores shadow intake tickets during `tender intake`; off when unset. */
   judge?: { agent: AgentName; model: string; maxPerRun: number };
+  /** `tender prs`; `digestIssue` is `owner/name#<n>` in a repo in `repos`. */
+  prs: { staleDays: number; digestIssue?: string };
 }
 
 export interface Ticket {
@@ -181,7 +183,7 @@ export type Target = { repo: string; project?: string };
 /** `env` replaces the inherited environment; output past `max` bytes on either stream kills the command. */
 export type Run = (argv: string[], cwd?: string, secs?: number, opts?: { env?: Record<string, string>; max?: number }) => Promise<{ code: number; out: string; err: string }>;
 
-export type EventKind = "start" | "claim" | "review" | "ready-to-merge" | "merged" | "done" | "park" | "stall" | "feedback-round" | "gate" | "handoff" | "intake-filed" | "judge";
+export type EventKind = "start" | "claim" | "review" | "ready-to-merge" | "merged" | "done" | "park" | "stall" | "feedback-round" | "gate" | "handoff" | "intake-filed" | "judge" | "pr-closed";
 
 export interface Io {
   run: Run;

@@ -16,7 +16,7 @@ import type { ProjectClaim } from "./trackers/linear";
 import type { Config, Io, Repo, Session, Source, Ticket, Tracker } from "./types";
 import { TENDER_DIR, byPriority, diskRepos, GIT, hasLabel, mtime, put, read, remove, SAFE_ID, SLOW_SECS, strip, subdirs, write } from "./util";
 
-const sourceOf = (dir: string, id: string) => {
+export const sourceOf = (dir: string, id: string) => {
   const f = join(dir, `${id}.source`);
   return existsSync(f) ? readFileSync(f, "utf8").trim() : undefined;
 };

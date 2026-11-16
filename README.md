@@ -51,6 +51,9 @@ Move a GitHub issue or Linear ticket to **ready**, and `tender` starts a Claude 
 - `open <ID>`: take a session over in Claude Code, Codex, T3 Code or your editor, outside the sandbox ([Hand-off](docs/hand-off.md#hand-off)); `resume <ID>` gives it back.
 - `tmux attach -t tender`: the live terminals, where you can steer an agent directly.
 
+**[PR sweep](docs/prs.md)**
+- `prs`: weekly, closes open `agent/<ID>` PRs whose ticket is done or canceled, and reports conflicting, failing, stale and ready-but-unmerged PRs to the journal and an optional digest issue. Never touches other PRs.
+
 **[Intake](docs/intake.md)**
 - `intake`: repo scripts that print JSON lines become deduped, sanitized tickets, carrying the rule's `labels`, without the ready label until its `autoLabel` trusts them, and rechecked after they are Done. Runs on one host, on a 15-minute timer, in nono.
 
@@ -65,7 +68,7 @@ Every poll (default 60 s), `tender` looks for ready tickets (the `agent` label p
 
 ## History: `tender.db`
 
-`run`, `once` and `open` append an event (start, claim, review, ready-to-merge, merged, done, park, stall, feedback-round, gate, handoff) to `<workspaceRoot>/tender.db`, a SQLite file in WAL mode. It is history for later stats, never state: the tracker stays the truth. It sits outside every session clone and is never granted to the sandbox. A failed write is logged and skipped; `--dry-run` writes nothing. Safe to delete at any time (with its `-wal` and `-shm` files); the next event creates a fresh one. [Intake](docs/intake.md) also keeps its seen keys and last runs there; without them the next intake run searches the tracker for each key again before filing.
+`run`, `once` and `open` append an event (start, claim, review, ready-to-merge, merged, done, park, stall, feedback-round, gate, handoff; `prs` adds pr-closed) to `<workspaceRoot>/tender.db`, a SQLite file in WAL mode. It is history for later stats, never state: the tracker stays the truth. It sits outside every session clone and is never granted to the sandbox. A failed write is logged and skipped; `--dry-run` writes nothing. Safe to delete at any time (with its `-wal` and `-shm` files); the next event creates a fresh one. [Intake](docs/intake.md) also keeps its seen keys and last runs there; without them the next intake run searches the tracker for each key again before filing.
 
 ## Docs
 
@@ -78,6 +81,7 @@ Every poll (default 60 s), `tender` looks for ready tickets (the `agent` label p
 - [Config reference](docs/config.md): `tender.json` and `.tender/config.yaml`
 - [Clones, sandbox and cleanup](docs/sandbox.md): isolation details
 - [Intake](docs/intake.md): scripts that file tickets from signals
+- [PR sweep](docs/prs.md): `tender prs`, orphan agent PRs and the weekly report
 - [Upgrading](docs/upgrading.md), [Code layout](docs/code-layout.md)
 - Design notes: [agent questions](docs/agent-questions.md), [known issues](docs/issues.md), [improvements](docs/improvements.md)
 

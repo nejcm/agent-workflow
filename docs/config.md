@@ -45,6 +45,7 @@ Unknown keys are errors in both files. Upgrading from older layouts is in [upgra
 | `sources` | non-empty array | required | the trackers to poll |
 | `intake` | object | none | which [intake](intake.md) rules run, and where |
 | `judge` | object | none | turns on the [judge](intake.md#judge) for intake tickets; needs `intake` |
+| `prs` | object | `{ "staleDays": 14 }` | the [PR sweep](prs.md) |
 
 ### `repos` and `defaults`
 
@@ -109,6 +110,13 @@ A key the source's tracker doesn't use (e.g. `team` on a GitHub source) is rejec
 | `judge.agent` | `"claude"` \| `"codex"` | required with `judge` | the CLI that scores shadow intake tickets, see [Judge](intake.md#judge) |
 | `judge.model` | string | required with `judge` | the model name passed to `--model` / `-m`; no default |
 | `judge.maxPerRun` | integer 1–100 | `10` | agent calls per `tender intake` run, across all rules |
+
+### `prs`
+
+| key | type | default | |
+|---|---|---|---|
+| `prs.staleDays` | integer 1–365 | `14` | a PR with no update for this many days is `stale` (`draft-stale` for a draft); a clean PR older than this is `ready` |
+| `prs.digestIssue` | `"owner/name#<n>"` | none | a GitHub issue, in a repo in `repos`, whose body `tender prs` replaces with its report on each run |
 
 ## Repo config
 

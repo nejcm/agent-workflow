@@ -114,8 +114,13 @@ export function parseConfig(raw: any, base: string): Config {
     check(typeof judge.model === "string" && MODEL.test(judge.model), "judge.model: required, the model name, e.g. sonnet");
     check(Number.isInteger(judge.maxPerRun) && judge.maxPerRun > 0 && judge.maxPerRun <= 100, "judge.maxPerRun: integer 1-100");
   }
+  const prs = { staleDays: raw.prs?.staleDays ?? 14, digestIssue: raw.prs?.digestIssue };
+  check(raw.prs === undefined || (obj(raw.prs) && Object.keys(raw.prs).every((k) => ["staleDays", "digestIssue"].includes(k))), "prs: object with staleDays and digestIssue");
+  check(Number.isInteger(prs.staleDays) && prs.staleDays > 0 && prs.staleDays <= 365, "prs.staleDays: integer 1-365");
+  const digest = /^([^#]+)#([1-9]\d{0,9})$/.exec(typeof prs.digestIssue === "string" ? prs.digestIssue : "");
+  check(prs.digestIssue === undefined || (digest && keys.includes(digest[1]!)), `prs.digestIssue: "owner/name#<issue number>" for a repo in repos`);
   if (errs.length) throw new Error(`invalid config:\n  ${errs.join("\n  ")}`);
-  return { host: raw.host, defaultHost, pollIntervalMs, workspaceRoot: expand(raw.workspaceRoot ?? "~/agent-ws", base), reposRoot, tmuxSession, maxConcurrent, maxInReview: raw.maxInReview, stallMinutes, repos, sources, ...(obj(intake) && { intake: { enabled: intake.enabled, host: intake.host } }), ...(judge && { judge }) };
+  return { host: raw.host, defaultHost, pollIntervalMs, workspaceRoot: expand(raw.workspaceRoot ?? "~/agent-ws", base), reposRoot, tmuxSession, maxConcurrent, maxInReview: raw.maxInReview, stallMinutes, repos, sources, ...(obj(intake) && { intake: { enabled: intake.enabled, host: intake.host } }), ...(judge && { judge }), prs: { staleDays: prs.staleDays, ...(prs.digestIssue && { digestIssue: prs.digestIssue }) } };
 }
 
 export const repoDir = (cfg: Config, key: string) => join(cfg.workspaceRoot, key);

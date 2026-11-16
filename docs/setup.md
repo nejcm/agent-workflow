@@ -87,6 +87,8 @@ Or as a systemd user service (edit `WorkingDirectory` (it points at `~/Work/agen
 cp systemd/tender.service ~/.config/systemd/user/ && systemctl --user enable --now tender
 ```
 
+For the weekly [PR sweep](prs.md), `scripts/run.sh prs-service` installs and starts `tender-prs.timer` (on one host only).
+
 `KillMode=process` keeps agent sessions alive when the service restarts. `bun tender.ts status` lists sources, repos (with their `autoMerge` and `maxInReview`), a line when a `maxInReview` is reached, and one row per worktree; see [Watching sessions](watching.md#watching-sessions).
 
 ## On a VM

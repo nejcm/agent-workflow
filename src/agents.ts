@@ -126,11 +126,11 @@ export function codexState(wt: string, since: number, now: number): Live | undef
 export const INBOX_HOOK = 'head -c 1048576 >/dev/null; cd "$CLAUDE_PROJECT_DIR" && echo $$ > .tender/run/inbox.pid || exit 0; while [ "$(cat .tender/run/inbox.pid 2>/dev/null)" = $$ ]; do mv .tender/run/inbox .tender/run/inbox.$$ 2>/dev/null && { head -c 4096 .tender/run/inbox.$$ >&2; rm -f .tender/run/inbox.$$; exit 2; }; sleep 2; done';
 /** pgrep -f pattern for a running waiter; anchored, as Claude's own argv carries the hook text too. */
 export const INBOX_WAITER = "^[^ ]*sh -c head -c 1048576 .*inbox\\.pid";
-const INBOX_SETTINGS = JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: INBOX_HOOK, asyncRewake: true, timeout: 2147483 }] }] } });
+const SESSION_SETTINGS = JSON.stringify({ skipDangerousModePermissionPrompt: true, hooks: { Stop: [{ hooks: [{ type: "command", command: INBOX_HOOK, asyncRewake: true, timeout: 2147483 }] }] } });
 
 export const AGENTS: Record<AgentName, Agent> = {
   claude: {
-    launch: (wt, prompt, nono) => [`${nono ? "export" : `CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/${CLAUDE_TOKEN}")" || exit 1\nexport CLAUDE_CODE_OAUTH_TOKEN`} CLAUDE_CONFIG_DIR=${claudeHome(wt)} CODEX_HOME=${codexHome(wt)} CLAUDE_CODE_TMPDIR=${tmpHome(wt)}`, ["claude", "--permission-mode", "bypassPermissions", "--settings", `'${INBOX_SETTINGS}'`, prompt]],
+    launch: (wt, prompt, nono) => [`${nono ? "export" : `CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/${CLAUDE_TOKEN}")" || exit 1\nexport CLAUDE_CODE_OAUTH_TOKEN`} CLAUDE_CONFIG_DIR=${claudeHome(wt)} CODEX_HOME=${codexHome(wt)} CLAUDE_CODE_TMPDIR=${tmpHome(wt)}`, ["claude", "--permission-mode", "bypassPermissions", "--settings", `'${SESSION_SETTINGS}'`, prompt]],
     store: (wt) => [claudeHome(wt), "projects"],
     transcripts: (wt) => jsonl(claudeDir(wt)),
     cwd: (o) => o?.cwd,

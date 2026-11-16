@@ -29,7 +29,7 @@ test("launcher: claude under nono drops any inherited token and gets only TENDER
   expect(s).toContain(`unset LINEAR_API_KEY\nexport TMPDIR='/ws/web/gh-1.tmpdir' TMP='/ws/web/gh-1.tmpdir' TEMP='/ws/web/gh-1.tmpdir'\n`);
   expect(s).toContain("--no-rollback-prompt");
   expect(s).toContain(`exec systemd-run --user --scope --quiet --collect --unit '${unit("gh-1")}' -- nono run --no-rollback-prompt --profile '/tender/nono/tender-claude.json' --allow '/ws/web/gh-1' --allow-unix-socket-subtree-bind '/ws/web/gh-1' --allow '/ws/web/gh-1.tmpdir' --allow-unix-socket-subtree-bind '/ws/web/gh-1.tmpdir' --allow '/ws/web/gh-1.claude' --allow '/ws/web/gh-1.codex' --read '${root}/src-web/.git/objects' -- claude --permission-mode`);
-  expect(s).toContain(`--permission-mode bypassPermissions --settings '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":`);
+  expect(s).toContain(`--permission-mode bypassPermissions --settings '{"skipDangerousModePermissionPrompt":true,"hooks":{"Stop":[{"hooks":[{"type":"command","command":`);
   expect(s).toContain(`"asyncRewake":true,"timeout":2147483}]}]}}' "$(cat '/ws/web/gh-1.prompt.md')"`);
 });
 
@@ -53,7 +53,7 @@ export CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CODEX_HOME
   const claudeNonoEnv = String.raw`export CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CODEX_HOME='/ws/it'\''s'.codex CLAUDE_CODE_TMPDIR='/ws/it'\''s'.tmpdir
 `;
   const nono = (a: string, own = "") => String.raw`nono run --no-rollback-prompt --profile '/tender/nono/tender-${a}.json' --allow '/ws/it'\''s' --allow-unix-socket-subtree-bind '/ws/it'\''s' --allow '/ws/it'\''s.tmpdir' --allow-unix-socket-subtree-bind '/ws/it'\''s.tmpdir' ${own}--read '/src/web/.git/objects' -- `;
-  const claude = String.raw`claude --permission-mode bypassPermissions --settings '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"head -c 1048576 >/dev/null; cd \"$CLAUDE_PROJECT_DIR\" && echo $$ > .tender/run/inbox.pid || exit 0; while [ \"$(cat .tender/run/inbox.pid 2>/dev/null)\" = $$ ]; do mv .tender/run/inbox .tender/run/inbox.$$ 2>/dev/null && { head -c 4096 .tender/run/inbox.$$ >&2; rm -f .tender/run/inbox.$$; exit 2; }; sleep 2; done","asyncRewake":true,"timeout":2147483}]}]}}' "$(cat '/ws/p.md')"
+  const claude = String.raw`claude --permission-mode bypassPermissions --settings '{"skipDangerousModePermissionPrompt":true,"hooks":{"Stop":[{"hooks":[{"type":"command","command":"head -c 1048576 >/dev/null; cd \"$CLAUDE_PROJECT_DIR\" && echo $$ > .tender/run/inbox.pid || exit 0; while [ \"$(cat .tender/run/inbox.pid 2>/dev/null)\" = $$ ]; do mv .tender/run/inbox .tender/run/inbox.$$ 2>/dev/null && { head -c 4096 .tender/run/inbox.$$ >&2; rm -f .tender/run/inbox.$$; exit 2; }; sleep 2; done","asyncRewake":true,"timeout":2147483}]}]}}' "$(cat '/ws/p.md')"
 `;
   const codex = (d: string) => String.raw`codex ${d}--dangerously-bypass-hook-trust --sandbox danger-full-access --ask-for-approval never -C '/ws/it'\''s' "$(cat '/ws/p.md')"
 `;
@@ -98,7 +98,7 @@ test("starts ready tickets up to maxConcurrent", async () => {
   expect(prompt).toContain("git push -u origin agent/gh-1");
   expect(prompt).toContain("the options you see,\nand which one you recommend and why");
   const seeded = JSON.parse(readFileSync(join(root, "acme/web/gh-1.claude/.claude.json"), "utf8"));
-  expect(seeded.projects).toEqual({ [realpathSync(wt)]: { hasTrustDialogAccepted: true } });
+  expect(seeded.projects).toEqual({ [realpathSync(wt)]: { hasTrustDialogAccepted: true, hasClaudeMdExternalIncludesApproved: false, hasClaudeMdExternalIncludesWarningShown: true } });
   expect(readFileSync(join(root, "acme/web/gh-1.sh"), "utf8")).toContain(`--read '${root}/src-web/.git/objects' --`);
   expect(existsSync(join(root, "acme/web/gh-1.codex"))).toBe(true);
   expect(readdirSync(`${wt}.tmpdir`)).toEqual(["cache"]);
@@ -344,7 +344,7 @@ test("seedClaude: a fresh dir with template links, account keys and trust only; 
   expect(readdirSync(dir).sort()).toEqual([".claude.json", "plugins", "settings.json", "skills"]);
   expect(realpathSync(join(dir, "skills"))).toBe(realpathSync(join(root, ".claude/skills")));
   expect(realpathSync(join(dir, "settings.json"))).toBe(realpathSync(join(tpl, "settings.json")));
-  expect(JSON.parse(readFileSync(join(dir, ".claude.json"), "utf8"))).toEqual({ hasCompletedOnboarding: true, oauthAccount: { a: 1 }, userID: "u", projects: { "/r": { hasTrustDialogAccepted: true } } });
+  expect(JSON.parse(readFileSync(join(dir, ".claude.json"), "utf8"))).toEqual({ hasCompletedOnboarding: true, oauthAccount: { a: 1 }, userID: "u", projects: { "/r": { hasTrustDialogAccepted: true, hasClaudeMdExternalIncludesApproved: false, hasClaudeMdExternalIncludesWarningShown: true } } });
   expect(statSync(join(dir, ".claude.json")).mode & 0o777).toBe(0o600);
   expect(statSync(dir).mode & 0o777).toBe(0o700);
   expect(logs).toEqual([`dry: seed ${dir} from ${tpl}`, `seed ${dir} from ${tpl}`]);

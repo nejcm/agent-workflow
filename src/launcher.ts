@@ -127,6 +127,9 @@ const TEMPLATE = ["settings.json", "CLAUDE.md", "AGENTS.md", "skills", "plugins"
 const ACCOUNT = ["hasCompletedOnboarding", "lastOnboardingVersion", "oauthAccount", "userID"];
 const pick = (o: any, keys: string[]) => Object.fromEntries(keys.filter((k) => o?.[k] !== undefined).map((k) => [k, o[k]]));
 
+// An ancestor ~/.claude/CLAUDE.md counts as project memory once CLAUDE_CONFIG_DIR moves; its imports would block on a dialog.
+const SESSION_PROJECT = { hasTrustDialogAccepted: true, hasClaudeMdExternalIncludesApproved: false, hasClaudeMdExternalIncludesWarningShown: true };
+
 // Fresh per start, so nothing a session left there carries over. Account keys come from the host login's ~/.claude.json; trust goes on the session clone.
 export function seedClaude(io: Io, dir: string, root: string) {
   const tpl = join(io.home, ".claude-tender");
@@ -141,7 +144,7 @@ export function seedClaude(io: Io, dir: string, root: string) {
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
   }
-  writeFileSync(join(dir, ".claude.json"), JSON.stringify({ ...pick(o, ACCOUNT), projects: { [root]: { hasTrustDialogAccepted: true } } }, null, 2), { mode: 0o600, flag: "wx" });
+  writeFileSync(join(dir, ".claude.json"), JSON.stringify({ ...pick(o, ACCOUNT), projects: { [root]: SESSION_PROJECT } }, null, 2), { mode: 0o600, flag: "wx" });
 }
 
 /** The ChatGPT login sessions copy, relative to home; only the host holds and uses its refresh token. */

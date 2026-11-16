@@ -98,6 +98,6 @@ for (const [n, i] of issues.slice(0, 100).entries()) {
     `PostHog: ${host}/project/${encodeURIComponent(a.project)}/error-tracking/${i.id}`,
   ].filter(Boolean);
   const facts = { events: count(i, "occurrences"), users: count(i, "users"), firstSeen: String(i.first_seen), ...(typeof i.severity === "string" ? { severity: i.severity } : {}), ...(level ? { level } : {}), ...(release ? { release } : {}) };
-  const title = `PostHog: ${[i.name, i.description].filter(Boolean).join(": ") || i.id}`.slice(0, 200);
+  const title = `PostHog: ${[i.name, i.description].filter(Boolean).join(": ") || i.id}`;
   console.log(JSON.stringify({ key: `posthog:${i.id}`, title, body: body.join("\n\n"), facts }));
 }

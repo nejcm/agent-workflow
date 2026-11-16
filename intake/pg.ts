@@ -44,3 +44,13 @@ export const open: Open = async (ca) => {
   const sql = new SQL(sqlOptions(url, ca, proxy ? await tunnel(new URL(proxy), `${u.hostname}:${u.port || 5432}`) : undefined));
   return { q: (text, params) => (params ? sql.unsafe(text, params) : sql.unsafe(text).simple()), close: () => sql.close() };
 };
+
+/** Runs `fn` on a fresh connection and always closes it. */
+export async function withDb<T>(open: Open, ca: string | undefined, fn: (q: Query) => Promise<T>) {
+  const db = await open(ca);
+  try {
+    return await fn(db.q);
+  } finally {
+    await db.close();
+  }
+}

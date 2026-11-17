@@ -91,6 +91,45 @@ For the weekly [PR sweep](prs.md), `scripts/run.sh prs-service` installs and sta
 
 `KillMode=process` keeps agent sessions alive when the service restarts. `bun tender.ts status` lists sources, repos (with their `autoMerge` and `maxInReview`), a line when a `maxInReview` is reached, and one row per worktree; see [Watching sessions](watching.md#watching-sessions).
 
+## GitHub identity (optional)
+
+By default `tender` acts as your `gh` login: it claims tickets, comments and merges as you, and sessions push and open PRs as you, so you cannot approve their PRs. Two alternatives:
+
+| | GitHub App | Machine user |
+|---|---|---|
+| PRs and comments by | `<app-slug>[bot]`, so you can approve them | the second account, so you can approve them |
+| Token | installation token minted per hour, limited to the allowlisted repos and the permissions below | a fine-grained token you create and rotate |
+| Claim | label and comment only: an App cannot be an assignee | unchanged, assigns the machine user |
+| Sandbox | every repo `nono` | any |
+| Cost | a free App; one owner per host config | a second GitHub seat on a paid org plan |
+
+### GitHub App
+
+1. Create an App (your account or org, **Settings → Developer settings → GitHub Apps → New**): no webhook, no callback URL, installable only on this account. Repository permissions:
+   - **Contents: Read and write:** clone, sessions push `agent/<ID>`, `gh pr merge`, deleting merged and orphan branches.
+   - **Pull requests: Read and write:** sessions' `gh pr create`, PR views, reviews and comments for feedback, `gh pr close` in the sweep.
+   - **Issues: Read and write:** labels, comments, sub-issues, filing findings and intake tickets, close and reopen.
+   - **Checks: Read** and **Commit statuses: Read:** `statusCheckRollup` for feedback, Ready to merge and the sweep.
+   - **Actions: Read:** failed CI logs for feedback (`gh run view --log-failed`).
+   - **Metadata: Read** (required).
+
+   Leave **Workflows** off: a session commit that touches `.github/workflows/` is then refused at push.
+2. **Generate a private key** and store it outside the repo, readable only by you: `install -m 600 ~/Downloads/<app>.*.private-key.pem ~/.config/tender/github-app.pem`. GitHub's `BEGIN RSA PRIVATE KEY` (PKCS#1) file is read as is.
+3. **Install** the App on the repos in `repos` (all must have one owner). The installation ID is the number at the end of the installation's settings URL (`…/settings/installations/<id>`); the App ID is on the App's page.
+4. Add to `tender.json`:
+
+   ```json
+   "githubApp": { "appId": 123456, "installationId": 7890123, "privateKeyFile": "~/.config/tender/github-app.pem" }
+   ```
+
+5. `scripts/run.sh` (its dry run mints a token) or `bun tender.ts once --dry-run`. A wrong ID or key fails here with GitHub's answer.
+
+`gh` itself stays logged in as you: `tender` passes the App token only to its own `gh` calls and an invalid `GH_TOKEN=tender-app-required` to every other command it runs, so a `gh` call it missed fails instead of acting as you. Host `git` (`fetch`, the session clone) is the exception and still uses your git credentials (read-only use). Switch with nothing In Progress or In Review, or remove yourself as assignee first: with the App any assignee is someone else, so such tickets would be stopped as reassigned. Token handling is in [Sandbox](sandbox.md) (GitHub credentials).
+
+### Machine user
+
+Create a second GitHub account, add it as a collaborator (Write) on each repo, and log `gh` in as it on the host (`gh auth login`, or `GH_TOKEN` in the service environment) with a fine-grained token limited to the allowlisted repos and the same permissions as the App above. Nothing in `tender.json` changes; the claim assigns the machine user, and `feedbackAuthors` stays your own login.
+
 ## On a VM
 
 Same steps on the VM (Tailscale for access), with `"sandbox": "none"` in `defaults` (or per repo) and `"host": "vm"` in `tender.json`. Tickets labelled `host:vm` go there. Connect your editor with Remote-SSH to `~/agent-ws/<owner>/<name>/<ID>`.

@@ -1,3 +1,4 @@
+import type { AppConfig } from "./github-app";
 export type AgentName = "claude" | "codex";
 
 /** Host-side settings for one allowlisted repo, from tender.json. */
@@ -109,6 +110,8 @@ export interface Config {
   judge?: { agent: AgentName; model: string; maxPerRun: number; guardrails?: true };
   /** `tender prs`; `digestIssue` is `owner/name#<n>` in a repo in `repos`. */
   prs: { staleDays: number; digestIssue?: string };
+  /** tender's GitHub identity when set; unset, `gh`'s own login. */
+  githubApp?: AppConfig;
 }
 
 export interface Ticket {
@@ -191,6 +194,8 @@ export interface Io {
   dry: boolean;
   log: (msg: string) => void;
   home: string;
+  /** The GitHub App's `<slug>[bot]` login when `githubApp` is set: the GitHub claim then adds no assignee. */
+  appLogin?: () => Promise<string>;
   /** Appends to `tender.db`'s events, once per `once` key when given; unset in dry runs. Never throws. */
   event?: (kind: EventKind, repo: string, ticket: string, data?: object, once?: string) => void;
 }

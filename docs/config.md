@@ -46,6 +46,7 @@ Unknown keys are errors in both files. Upgrading from older layouts is in [upgra
 | `intake` | object | none | which [intake](intake.md) rules run, and where |
 | `judge` | object | none | turns on the [judge](intake.md#judge) for intake tickets and, opt-in, [guardrails](intake.md#guardrails); needs `intake` |
 | `prs` | object | `{ "staleDays": 14 }` | the [PR sweep](prs.md) |
+| `githubApp` | object | none | act on GitHub as a GitHub App instead of your `gh` login, see [GitHub App](setup.md#github-app) |
 
 ### `repos` and `defaults`
 
@@ -118,6 +119,16 @@ A key the source's tracker doesn't use (e.g. `team` on a GitHub source) is rejec
 |---|---|---|---|
 | `prs.staleDays` | integer 1–365 | `14` | a PR with no update for this many days is `stale` (`draft-stale` for a draft); a clean PR older than this is `ready` |
 | `prs.digestIssue` | `"owner/name#<n>"` | none | a GitHub issue, in a repo in `repos`, whose body `tender prs` replaces with its report on each run |
+
+### `githubApp`
+
+| key | type | default | |
+|---|---|---|---|
+| `githubApp.appId` | positive integer | required with `githubApp` | the App's ID |
+| `githubApp.installationId` | positive integer | required with `githubApp` | the installation on the account that owns every repo in `repos` |
+| `githubApp.privateKeyFile` | path | required with `githubApp` | the App's private key (`.pem`, PKCS#1 or PKCS#8); never the key itself; keep it mode 600 |
+
+With `githubApp` set, every repo in `repos` must have the same owner, there may be at most 500 (GitHub's limit per token), and every repo needs `sandbox: "nono"`.
 
 ## Repo config
 

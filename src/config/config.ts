@@ -120,8 +120,18 @@ export function parseConfig(raw: any, base: string): Config {
   check(Number.isInteger(prs.staleDays) && prs.staleDays > 0 && prs.staleDays <= 365, "prs.staleDays: integer 1-365");
   const digest = /^([^#]+)#([1-9]\d{0,9})$/.exec(typeof prs.digestIssue === "string" ? prs.digestIssue : "");
   check(prs.digestIssue === undefined || (digest && keys.includes(digest[1]!)), `prs.digestIssue: "owner/name#<issue number>" for a repo in repos`);
+  const app = raw.githubApp;
+  check(app === undefined || (obj(app) && Object.keys(app).every((k) => ["appId", "installationId", "privateKeyFile"].includes(k))), "githubApp: object with appId, installationId and privateKeyFile");
+  if (obj(app)) {
+    check(posInt(app.appId), "githubApp.appId: positive integer, the App's ID");
+    check(posInt(app.installationId), "githubApp.installationId: positive integer");
+    check(str(app.privateKeyFile), "githubApp.privateKeyFile: path to the App's private key (.pem)");
+    check(new Set(keys.map((k) => k.slice(0, k.indexOf("/")).toLowerCase())).size <= 1, "githubApp: every repo in repos must belong to one owner, the account the App is installed on");
+    check(keys.length <= 500, "githubApp: at most 500 repos, GitHub's limit for one installation token");
+    for (const r of Object.values(repos)) check(r.sandbox === "nono", `repos (${r.key}).sandbox: "nono" while githubApp is set; an unsandboxed session would push as your own gh login`);
+  }
   if (errs.length) throw new Error(`invalid config:\n  ${errs.join("\n  ")}`);
-  return { host: raw.host, defaultHost, pollIntervalMs, workspaceRoot: expand(raw.workspaceRoot ?? "~/agent-ws", base), reposRoot, tmuxSession, maxConcurrent, maxInReview: raw.maxInReview, stallMinutes, repos, sources, ...(obj(intake) && { intake: { enabled: intake.enabled, host: intake.host } }), ...(judge && { judge }), prs: { staleDays: prs.staleDays, ...(prs.digestIssue && { digestIssue: prs.digestIssue }) } };
+  return { host: raw.host, defaultHost, pollIntervalMs, workspaceRoot: expand(raw.workspaceRoot ?? "~/agent-ws", base), reposRoot, tmuxSession, maxConcurrent, maxInReview: raw.maxInReview, stallMinutes, repos, sources, ...(obj(intake) && { intake: { enabled: intake.enabled, host: intake.host } }), ...(judge && { judge }), prs: { staleDays: prs.staleDays, ...(prs.digestIssue && { digestIssue: prs.digestIssue }) }, ...(obj(app) && { githubApp: { appId: app.appId, installationId: app.installationId, privateKeyFile: expand(app.privateKeyFile, base) } }) };
 }
 
 export const repoDir = (cfg: Config, key: string) => join(cfg.workspaceRoot, key);

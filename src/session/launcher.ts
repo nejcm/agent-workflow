@@ -5,6 +5,7 @@ import { AGENTS, CLAUDE_TOKEN, claudeHome, codexHome, tmpHome } from "./agents";
 import { checkLogin, findBun, readLogin } from "./claude-auth";
 import { repoDir } from "../config/config";
 import { canonical, sameRepo } from "../github";
+import { appTokenFile } from "../github-app";
 import { configCache, loadSession, promptFor } from "../config/repo-config";
 import type { Config, Io, Repo, Session, Source, Ticket, Tracker } from "../types";
 import { GIT, inDir, inRun, passLocked, put, read, remove, SLOW_SECS, write } from "../util";
@@ -44,7 +45,7 @@ export async function sweepScopes(cfg: Config, io: Io, cgroup = cgroupOf) {
   for (const unit of out.split("\n").map((l) => l.trim().split(/\s+/)[0])) if (unit && !live.has(unit)) await write(io, ["systemctl", "--user", "kill", "--signal=KILL", unit]);
 }
 
-export function launcher(l: Pick<Session, "agent" | "sandbox" | "path">, wt: string, promptFile: string, unit: string, tenderDir: string, bun: string) {
+export function launcher(l: Pick<Session, "agent" | "sandbox" | "path">, wt: string, promptFile: string, unit: string, tenderDir: string, bun: string, ghTokenFile?: string) {
   const prompt = `"$(cat ${q(promptFile)})"`;
   const nono = l.sandbox === "nono";
   const git = join(l.path, ".git");
@@ -55,7 +56,7 @@ export function launcher(l: Pick<Session, "agent" | "sandbox" | "path">, wt: str
   const [env, cmd] = AGENTS[l.agent].launch(q(wt), prompt, nono);
   // gh exits if it cannot read its config dir; <ID>.gh is never created, so gh runs on defaults plus nono's GH_TOKEN.
   // A private XDG cache: the host's ~/.cache (Claude's claude-cli-nodejs included) stays out of the sandbox.
-  const box = nono ? `unset CLAUDE_CODE_OAUTH_TOKEN\nexport GH_CONFIG_DIR=${q(wt)}.gh XDG_CACHE_HOME=${q(join(tmp, "cache"))} TENDER_BUN=${q(bun)}\n` : "";
+  const box = nono ? `unset CLAUDE_CODE_OAUTH_TOKEN\nexport GH_CONFIG_DIR=${q(wt)}.gh XDG_CACHE_HOME=${q(join(tmp, "cache"))} TENDER_BUN=${q(bun)}${ghTokenFile ? ` TENDER_GH_TOKEN_FILE=${q(ghTokenFile)}` : ""}\n` : "";
   const scope = ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--unit", q(unit), "--"];
   return `#!/usr/bin/env bash\ncd ${q(wt)} || exit 1\nunset LINEAR_API_KEY\nexport TMPDIR=${q(tmp)} TMP=${q(tmp)} TEMP=${q(tmp)}\n${box}${env}\nexec ${[...scope, ...wrap, ...cmd].join(" ")}\n`;
 }
@@ -358,7 +359,7 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
     inRun(wt, (d) => (rmSync(`${d}/.gitignore`, { force: true }), writeFileSync(`${d}/.gitignore`, "*\n", { flag: "wx" })));
   }
   put(io, promptFile, prompt(vars));
-  put(io, script, launcher(r, wt, promptFile, scopeUnit(cfg, r.key, id), tenderDir, bun), 0o755);
+  put(io, script, launcher(r, wt, promptFile, scopeUnit(cfg, r.key, id), tenderDir, bun, cfg.githubApp && appTokenFile(cfg.workspaceRoot)), 0o755);
   // Claimed last, so a failed start leaves the ticket ready; `<ID>.claim` goes first, so a claim lost to an error or a crash is retried while the window lives.
   if (source !== undefined) put(io, join(dir, `${id}.claim`), new Date().toISOString());
   await write(io, ["tmux", "new-window", "-d", "-t", `=${cfg.tmuxSession}:`, "-n", winName(r.key, id), script]);

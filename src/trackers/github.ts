@@ -12,11 +12,13 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
   const hostLabel = `host:${host}`;
   let login: Promise<string> | undefined;
   const viewer = () =>
-    (login ??= read(io, ["gh", "api", "user", "--jq", ".login"]).then((x) => {
-      if (!x.trim()) throw new Error("gh api user: no login");
-      return x.trim().toLowerCase();
-    }));
-  // GitHub allows several assignees: a ticket is someone else's only while the tender user is not among them.
+    (login ??=
+      io.appLogin?.() ??
+      read(io, ["gh", "api", "user", "--jq", ".login"]).then((x) => {
+        if (!x.trim()) throw new Error("gh api user: no login");
+        return x.trim().toLowerCase();
+      }));
+  // GitHub allows several assignees: a ticket is someone else's only while the tender user is not among them (an App, never assignable, sees any assignee as other).
   const otherAssignee = async (logins: string[]) => (logins.length && !logins.map((x) => x.toLowerCase()).includes(await viewer()) ? logins.join(", ") : undefined);
   const listMine = (labels: string[], search?: string, complete = false) =>
     defaultHost ? list(labels, search, complete).then((r) => r.filter((t) => ours(t, host, true))) : list([...labels, hostLabel], search, complete);
@@ -75,7 +77,7 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
       if (i.state === "CLOSED") return ["NOT_PLANNED", "DUPLICATE"].includes(i.stateReason) ? "canceled" : "done";
     },
     async claim(t) {
-      await edit(t, l.inProgressLabel, "--add-assignee", "@me");
+      await edit(t, l.inProgressLabel, ...(io.appLogin ? [] : ["--add-assignee", "@me"]));
       // Best-effort: once the ticket is in progress the claim has succeeded; a throw would only report it as failed.
       await comment(t, `picked up on ${host}`).catch((e) => io.log(`${t.id}: picked-up comment failed: ${e.message}`));
     },

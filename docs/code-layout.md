@@ -8,6 +8,7 @@ The poll, intake and the helpers every folder shares.
 
 - `src/types.ts`: shared types (`Config`, `Repo`, `Source`, `Ticket`, `Tracker`, `Io`).
 - `src/github.ts`: canonical-repo and PR lookup.
+- `src/github-app.ts`: GitHub App identity: the RS256 JWT (WebCrypto), installation tokens limited to the allowlisted repos, their cache and token file, `GH_TOKEN` for `gh` calls.
 - `src/intake.ts`: `intake`: the script protocol, the sandboxed run in a fresh clone, dedupe, filing, open-ticket updates and recheck.
 - `src/judge.ts`: the intake judge: ticket selection, the prompt, the sandboxed headless Claude or Codex call, verdict validation, the comment and the labelling decision.
 - `src/guardrail.ts`: guardrail proposals: merged agent PRs with feedback from events, the operator's comments from GitHub, the judge call with its own schema, the kind and prose-file guards and the filing.

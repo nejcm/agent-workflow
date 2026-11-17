@@ -6,6 +6,7 @@ import { hostLogin } from "./src/session/claude-auth";
 import { parseConfig } from "./src/config/config";
 import { dashboard, watch } from "./src/ui/dash";
 import { events } from "./src/db";
+import { appTokenFile, githubApp, withApp } from "./src/github-app";
 import { handoff, shellLine, ticketClone, type Tool, TOOLS } from "./src/session/handoff";
 import { intake } from "./src/intake";
 import { prs } from "./src/prs";
@@ -154,7 +155,9 @@ async function main(argv: string[]) {
   }
   const dry = argv.includes("--dry-run");
   const log = (m: string) => console.log(`${new Date().toISOString()} ${m}`);
-  const io: Io = { run: spawnRun, fetch, dry, log, home: homedir(), event: events(cfg, dry, log) };
+  // Dry runs leave the token file alone; only real runs start sessions that read it.
+  const app = cfg.githubApp && githubApp(cfg.githubApp, Object.keys(cfg.repos), fetch, dry ? undefined : appTokenFile(cfg.workspaceRoot));
+  const io: Io = { run: app ? withApp(spawnRun, app) : spawnRun, fetch, dry, log, home: homedir(), event: events(cfg, dry, log), ...(app && { appLogin: app.login }) };
   if (cmd === "stats") {
     const r = await stats(cfg, { ...io, log: (m) => console.error(m) }, { days });
     return console.log(argv.includes("--json") ? JSON.stringify(r, null, 2) : statsTable(r));
@@ -226,11 +229,17 @@ async function main(argv: string[]) {
         process.exit(1);
       })
     : undefined;
+  if (app)
+    await app.token().catch((e) => {
+      console.error(`github app: ${e.message}`);
+      process.exit(1);
+    });
   await cloneAll(cfg, io);
   const poll = () => (io.dry ? pass(cfg, io) : passLocked(cfg, io.log, () => pass(cfg, io)));
   if (cmd === "once") return poll();
   // Its own timer: a pass can block for minutes, longer than Claude's 5-minute refresh window.
   if (refresh) setInterval(refresh, 60_000);
+  if (app) setInterval(() => app.token().catch((e) => log(`github app token: ${e.message}`)), 60_000);
   for (;;) {
     await poll();
     await Bun.sleep(cfg.pollIntervalMs);

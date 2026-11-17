@@ -25,6 +25,7 @@ Move a GitHub issue or Linear ticket to **ready**, and `tender` starts a Claude 
 - **Isolation:** one git clone and branch `agent/<ID>` per ticket, in its own tmux window.
 - **Sandbox:** [nono](https://github.com/nolabs-ai/nono), or none on a VM where the VM is the boundary.
 - **Your config, read-only:** a fresh agent config dir per ticket. Agents use your `CLAUDE.md`, `AGENTS.md` and skills but cannot change them.
+- **GitHub identity:** your `gh` login, a machine user, or a [GitHub App](docs/setup.md#github-app) whose PRs you can approve.
 - **Claude login:** the sandbox holds only a phantom token. `tender` refreshes the host login itself before it expires ([Claude auth](docs/auth.md#claude-auth)).
 
 **While it works**

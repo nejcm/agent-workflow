@@ -203,9 +203,9 @@
   "credential_capture": {
     "github": {
       "command": [
-        "gh",
-        "auth",
-        "token"
+        "sh",
+        "-c",
+        "if [ -n \"$TENDER_GH_TOKEN_FILE\" ]; then cat -- \"$TENDER_GH_TOKEN_FILE\"; else gh auth token; fi"
       ],
       "timeout_secs": 5,
       "cache_ttl_secs": 900
@@ -214,7 +214,7 @@
       "command": [
         "sh",
         "-c",
-        "printf 'x-access-token:%s' \"$(gh auth token)\""
+        "t=$(if [ -n \"$TENDER_GH_TOKEN_FILE\" ]; then cat -- \"$TENDER_GH_TOKEN_FILE\"; else gh auth token; fi) && printf 'x-access-token:%s' \"$t\""
       ],
       "timeout_secs": 5,
       "cache_ttl_secs": 900

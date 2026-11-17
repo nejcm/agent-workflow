@@ -16,11 +16,16 @@ export interface Repo {
   feedbackAuthors: string[];
 }
 
+export type PromptText = string | { file: string };
+export interface PromptSet {
+  steps: Record<string, PromptText>;
+  append?: PromptText;
+}
+
 /** A repo's `.tender/` at one base commit: `files` maps each `prompts/` file name to its text. */
 export interface RepoConfig {
   agent: AgentName;
   testCmd?: string;
-  planStep: string;
   autoMerge?: AutoMerge;
   criticalPaths: string[];
   testPaths: string[];
@@ -28,7 +33,9 @@ export interface RepoConfig {
   trust: { paths: string[]; autoMerge: AutoMerge }[];
   /** Regexes for added lines that hold a merge back, on top of the built-in ones. */
   escapeHatches: string[];
-  prompts: { default?: string; byLabel: Record<string, string> };
+  prompt: PromptSet;
+  /** The first entry whose label the ticket has replaces `prompt`'s steps and append it sets. */
+  byLabel: Record<string, { prompt?: PromptSet }>;
   /** The Linear project whose tickets go to this repo; `team` is only checked against the ticket's source. */
   tracker?: { linear?: { project: string; team?: string } };
   intake: IntakeRule[];

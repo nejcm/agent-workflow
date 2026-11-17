@@ -13,10 +13,10 @@ import { DEFAULT_DAYS, stats, statsTable } from "./src/stats";
 import { cloned, cloneAll, resume } from "./src/session/launcher";
 import { CRITICAL_PATHS, TEST_PATHS } from "./src/review/merge";
 import { makeTracker, pass } from "./src/pass";
-import { dirEntries, parseRepoConfig } from "./src/config/repo-config";
+import { dirEntries, parseRepoConfig, STEPS } from "./src/config/repo-config";
 import { reviewLimit, snapshot, table } from "./src/ui/status";
 import { tail } from "./src/ui/tail";
-import type { Config, Io, RepoConfig, Run } from "./src/types";
+import type { Config, Io, PromptText, RepoConfig, Run } from "./src/types";
 import { passLocked, TENDER_DIR } from "./src/util";
 
 async function status(cfg: Config, io: Io) {
@@ -101,10 +101,11 @@ export function check(dir: string, print = console.log, fail = console.error) {
     fail(`${join(dir, ".tender")}: invalid:\n  ${(e as Error).message}`);
     return false;
   }
-  const { files, ...rest } = c;
-  const prompt = (f?: string) => (f ? `.tender/prompts/${f}` : undefined);
-  const prompts = { default: prompt(c.prompts.default ?? (Object.hasOwn(files, "default.md") ? "default.md" : undefined)) ?? "tender's prompts/default.md", byLabel: Object.fromEntries(Object.entries(c.prompts.byLabel).map(([l, f]) => [l, prompt(f)])) };
-  print(JSON.stringify({ ...rest, testCmd: c.testCmd ?? null, tracker: c.tracker ?? null, autoMerge: c.autoMerge ? `${c.autoMerge} (capped by the host's autoMerge)` : "unset (the host's autoMerge)", criticalPaths: [...CRITICAL_PATHS, ...c.criticalPaths], testPaths: [...TEST_PATHS, ...c.testPaths], prompts }, null, 2));
+  const { files, prompt, byLabel, ...rest } = c;
+  const from = (t?: PromptText) => (t === undefined ? undefined : typeof t !== "string" ? `.tender/prompts/${t.file}` : t.trim() ? "inline" : "disabled");
+  const steps = { steps: Object.fromEntries(STEPS.map((n) => [n, from(prompt.steps[n]) ?? "tender's"])), append: from(prompt.append) ?? null };
+  const labels = Object.fromEntries(Object.entries(byLabel).map(([l, e]) => [l, { prompt: e.prompt && { steps: Object.fromEntries(Object.entries(e.prompt.steps).map(([n, t]) => [n, from(t)])), append: from(e.prompt.append) } }]));
+  print(JSON.stringify({ ...rest, testCmd: c.testCmd ?? null, tracker: c.tracker ?? null, autoMerge: c.autoMerge ? `${c.autoMerge} (capped by the host's autoMerge)` : "unset (the host's autoMerge)", criticalPaths: [...CRITICAL_PATHS, ...c.criticalPaths], testPaths: [...TEST_PATHS, ...c.testPaths], prompt: steps, byLabel: labels }, null, 2));
   return true;
 }
 

@@ -126,9 +126,9 @@ A key the source's tracker doesn't use (e.g. `team` on a GitHub source) is rejec
 ```
 .tender/
   config.yaml        # optional
-  prompts/
-    default.md       # optional; else tender's prompts/default.md
-    bug.md           # chosen by ticket label
+  prompts/           # prompt text named by { file: <name>.md }
+    verify.md
+    bug.md
   intake/            # intake scripts, if any
   run/               # the agent's scratch dir, git-ignored by its own .gitignore
 ```
@@ -136,7 +136,6 @@ A key the source's tracker doesn't use (e.g. `team` on a GitHub source) is rejec
 ```yaml
 agent: claude
 testCmd: bun test
-planStep: Load the `orchestration` skill and use it to plan and implement the ticket.
 autoMerge: intelligent
 criticalPaths: ["src/billing/**"]
 testPaths: ["spec/**"]
@@ -144,10 +143,15 @@ trust:
   - { paths: ["docs/**", "**/*.md"], autoMerge: all }
   - { paths: ["supabase/migrations/**"], autoMerge: off }
 escapeHatches: ["pragma: no cover"]
-prompts:
-  default: default.md
-  byLabel:
-    "type:bug": bug.md
+prompt:
+  steps:
+    plan: Load the `orchestration` skill and use it to plan and implement the ticket.
+    verify: { file: verify.md }
+    review: ""
+  append: Never edit generated files under src/gen/.
+byLabel:
+  "type:bug":
+    prompt: { steps: { plan: { file: bug.md } } }
 tracker:
   linear:
     project: Web app
@@ -165,14 +169,14 @@ intake:
 |---|---|---|---|
 | `agent` | `claude` \| `codex` | `claude` | which agent CLI the session runs |
 | `testCmd` | string | none | the agent must pass it before opening a PR; unset, the prompt tells it to find and run the project's tests |
-| `planStep` | string | `Plan and implement the ticket.` | step 2 of the default prompt |
 | `autoMerge` | `off` \| `shadow` \| `intelligent` \| `all` | the host's | the repo's request; the effective mode is the lower of it and the host's `autoMerge` (`off < shadow < intelligent < all`) |
 | `criticalPaths` | list of globs | `[]` | added to the built-in critical paths, `.tender/**` and the host's `criticalPaths`, see [Auto-merge](auto-merge.md#auto-merge) |
 | `testPaths` | list of globs | `[]` | added to the built-in test paths |
 | `trust` | list of `{ paths: [glob, …], autoMerge }` | `[]` | a changed file takes the mode of the first rule matching it, else `autoMerge`; capped by the host's `autoMerge` |
 | `escapeHatches` | list of regexes, ≤ 20, each ≤ 200 chars | `[]` | added lines matching one hold a merge back, on top of the built-in ones |
-| `prompts.default` | file in `.tender/prompts/` | `default.md` if present, else tender's | |
-| `prompts.byLabel` | map of label to prompt file | `{}` | the first entry whose label the ticket has wins, else `prompts.default` |
+| `prompt.steps.<step>` | text, `""` or `{ file: <name>.md }` | tender's `prompts/steps/<step>.md` | replaces one step; `""` drops it; steps are `clarify`, `plan`, `test`, `verify`, `review`, `commit`, see [Prompt](#prompt) |
+| `prompt.append` | text or `{ file: <name>.md }` | none | added after the steps, before tender's closing instructions |
+| `byLabel` | map of label to `{ prompt }` | `{}` | the first entry whose label the ticket has sets steps and `append` over `prompt`'s |
 | `tracker.linear.project` | Linear project name | none | the project whose tickets come here when they name no repo themselves, see [Which repo a ticket goes to](lifecycle.md#which-repo-a-ticket-goes-to) |
 | `tracker.linear.team` | team key `[A-Z0-9]+` | none | only checked: a ticket routed here from another team's source is logged once |
 | `intake` | list of rules, ≤ 20 | `[]` | see below |
@@ -204,9 +208,24 @@ The script's flags (e.g. the Sentry script's `--org`, `--min-events`, `--no-fixe
 
 `tender` reads `.tender/` only from `origin/<base>` in its own clone (`git ls-tree` and `git cat-file` on that commit, fetched before each start and once per poll before merge decisions or Linear project routing), never from a session clone, which the agent can write. A repo's config changes only when a commit to the base branch changes it; it is cached per base commit. Each file must be a regular file of at most 64 KiB, prompt files must be named `[a-z0-9-]+.md`, and unknown keys are errors. If it is invalid, that repo starts no tickets: `tender` logs the errors once per base commit and posts one `tender: not started` comment per base commit on the next ticket that names that repo and would have started (recorded in `<workspaceRoot>/.invalid-config/<owner>/<name>`). Meanwhile Linear tickets that rely on their project wait, with no comment. `.tender` itself must be a directory, not a symlink. Run `bun tender.ts check [path]` (default `.`) before committing: it validates `<path>/.tender/` from the working tree, prints the repo's settings with defaults filled in (the host's `autoMerge` ceiling and `criticalPaths` from `tender.json` still apply on top) and its tracker target (`tracker`, `null` if none), and exits non-zero if it is invalid.
 
+### Prompt
+
+A session's prompt is tender's `prompts/header.md` (the ticket and the rules that always hold), then each step as `### <step>` in the order `clarify`, `plan`, `test`, `verify`, `review`, `commit`, then the repo's `append` (standing notes with no heading, not an extra step: it follows the commit step), then tender's `prompts/protocol.md` (push, merge file, `gh pr create`, and the phases, findings, question, feedback and merge files). The header and protocol are fixed, so every prompt keeps tender's required guidance; that is not an enforcement boundary, see [Auto-merge](auto-merge.md).
+
+| step | tender's default |
+|---|---|
+| `clarify` | if the acceptance criteria are missing or unclear, ask in the question file and stop |
+| `plan` | `Plan and implement the ticket.` |
+| `test` | run `{{tests}}` and make them pass |
+| `verify` | verify on the real surface, with the repo's verification skill if it has one |
+| `review` | get an independent review from a model of a different family, at most 2 rounds |
+| `commit` | commit with a message that references `{{id}}` |
+
+A step is the label's text if the first matching `byLabel` entry sets it, else the repo's `prompt.steps`, else tender's; a step that is empty or only whitespace is dropped, heading and all. A label's `append` replaces the repo's. Only the first `byLabel` entry whose label the ticket has applies (labels match case-insensitively, entries in file order, except that integer-like labels such as `"123"` come first); entries never stack. `{ file: <name>.md }` reads `.tender/prompts/<name>.md`; a bare `bug.md` is rejected as ambiguous. The repo's steps and append are capped at 32 KiB, and each label merged over them likewise. A ticket body over 24,000 characters is cut, with a note to read the full ticket at its URL; a prompt over 120 KiB stops the start before the ticket's clone, session or claim (the repo's base clone and fetch, needed to read `.tender/`, come first).
+
 ### Prompt placeholders
 
-`{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{testCmd}} {{tests}} {{repo}} {{planStep}}`. `{{tests}}` is `` `<testCmd>` ``, or "the project's tests (…)" when `testCmd` is unset; `{{testCmd}}` is then empty.
+`{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{testCmd}} {{tests}} {{repo}}`, in tender's prompt files and the repo's steps and append alike. The whole prompt is rendered once, so placeholders in ticket text stay literal. `{{tests}}` is `` `<testCmd>` ``, or "the project's tests (…)" when `testCmd` is unset; `{{testCmd}}` is then empty.
 
 ## Environment
 

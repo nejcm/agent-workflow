@@ -2,12 +2,15 @@ import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AUTO_MERGE, INTAKE_NAME } from "./config";
 import { baseBranch } from "../github";
-import type { AutoMerge, Check, IntakeRule, Io, Repo, RepoConfig, Session } from "../types";
+import type { AutoMerge, Check, IntakeRule, Io, PromptSet, PromptText, Repo, RepoConfig, Session } from "../types";
 import { GIT, hasLabel, read, TENDER_DIR, write } from "../util";
 
 const MAX_FILE = 64 * 1024;
 const PROMPT = /^[a-z0-9-]+\.md$/;
-const KEYS = ["agent", "testCmd", "planStep", "autoMerge", "criticalPaths", "testPaths", "trust", "escapeHatches", "prompts", "tracker", "intake"];
+const KEYS = ["agent", "testCmd", "autoMerge", "criticalPaths", "testPaths", "trust", "escapeHatches", "prompt", "byLabel", "tracker", "intake"];
+const RETIRED: Record<string, string> = { planStep: "moved to prompt.steps.plan", prompts: "replaced by prompt and byLabel" };
+export const STEPS = ["clarify", "plan", "test", "verify", "review", "commit"];
+const MAX_PROMPT_TEXT = 32 * 1024;
 const MAX_HATCHES = 20;
 const MAX_HATCH_CHARS = 200;
 
@@ -31,6 +34,7 @@ export function parseRepoConfig(entries: Entry[]): RepoConfig {
   let yaml: string | undefined;
   for (const e of entries) {
     if (e.name === ".") errs.push(".tender: must be a directory");
+    else if (e.name === "prompts/default.md") errs.push(`${e.name}: no longer replaces tender's prompt; move your changes into prompt.steps and prompt.append (see docs/upgrading.md)`);
     else if (!wanted(e.name)) errs.push(e.name.startsWith("prompts/") ? `${e.name}: prompt files must be named [a-z0-9-]+.md` : `${e.name}: not expected here`);
     else if (!e.regular) errs.push(`${e.name}: must be a regular file`);
     else if (e.size > MAX_FILE || e.text === undefined) errs.push(`${e.name}: over 64 KiB`);
@@ -45,27 +49,38 @@ export function parseRepoConfig(entries: Entry[]): RepoConfig {
   }
   check(obj(raw), "config.yaml: must be a mapping");
   raw = obj(raw) ? raw : {};
-  for (const k of Object.keys(raw)) check(KEYS.includes(k), `${k}: unknown key`);
-  const p = raw.prompts === undefined ? {} : raw.prompts;
-  check(obj(p) && Object.keys(p).every((k) => ["default", "byLabel"].includes(k)), "prompts: mapping with default and byLabel");
-  const byLabel = obj(p) && p.byLabel !== undefined ? p.byLabel : {};
+  for (const k of Object.keys(raw)) check(KEYS.includes(k), Object.hasOwn(RETIRED, k) ? `${k}: ${RETIRED[k]} (see docs/upgrading.md)` : `${k}: unknown key`);
+  const text = (t: unknown, at: string) => {
+    if (typeof t === "string") check(!/^\S+\.md$/.test(t.trim()), `${at}: ${JSON.stringify(t)} is a file name; write { file: <name>.md } to use a file in .tender/prompts/`);
+    else if (obj(t) && Object.keys(t).length === 1 && str(t.file)) check(Object.hasOwn(files, t.file), `${at}: ${JSON.stringify(t.file)} is not a file in .tender/prompts/`);
+    else errs.push(`${at}: text, "" to drop the step, or { file: <name>.md }`);
+  };
+  const promptSet = (p: unknown, at: string): PromptSet => {
+    if (p === undefined) return { steps: {} };
+    if (!obj(p) || !Object.keys(p).every((k) => ["steps", "append"].includes(k)) || !(p.steps === undefined || obj(p.steps))) return (errs.push(`${at}: mapping with steps and append`), { steps: {} });
+    const steps = p.steps ?? {};
+    for (const [n, t] of Object.entries(steps)) STEPS.includes(n) ? text(t, `${at}.steps.${n}`) : errs.push(`${at}.steps.${n}: unknown step; steps are ${STEPS.join(", ")}`);
+    if (p.append !== undefined) text(p.append, `${at}.append`);
+    return { steps, append: p.append };
+  };
+  const byLabel = raw.byLabel === undefined ? {} : raw.byLabel;
+  check(obj(byLabel), "byLabel: mapping of label to { prompt }");
   const c: RepoConfig = {
     agent: raw.agent === undefined ? "claude" : raw.agent,
     testCmd: raw.testCmd,
-    planStep: raw.planStep === undefined ? "Plan and implement the ticket." : raw.planStep,
     autoMerge: raw.autoMerge,
     criticalPaths: raw.criticalPaths === undefined ? [] : raw.criticalPaths,
     testPaths: raw.testPaths === undefined ? [] : raw.testPaths,
     trust: raw.trust === undefined ? [] : raw.trust,
     escapeHatches: raw.escapeHatches === undefined ? [] : raw.escapeHatches,
-    prompts: { default: obj(p) ? p.default : undefined, byLabel: obj(byLabel) ? byLabel : {} },
+    prompt: promptSet(raw.prompt, "prompt"),
+    byLabel: {},
     tracker: raw.tracker,
     intake: parseIntake(raw.intake, check),
     files,
   };
   check(["claude", "codex"].includes(c.agent), `agent: "claude" | "codex"`);
   check(c.testCmd === undefined || str(c.testCmd), "testCmd: non-empty string");
-  check(str(c.planStep), "planStep: non-empty string");
   const modes = AUTO_MERGE.map((m) => `"${m}"`).join(" | ");
   check(c.autoMerge === undefined || AUTO_MERGE.includes(c.autoMerge), `autoMerge: ${modes}`);
   for (const k of ["criticalPaths", "testPaths"] as const) check(Array.isArray(c[k]) && c[k].every(str), `${k}: list of non-empty glob strings`);
@@ -79,10 +94,17 @@ export function parseRepoConfig(entries: Entry[]): RepoConfig {
   };
   // Run on agent-written lines in a worker with a time limit, so a backtracking pattern stalls only its own check.
   check(Array.isArray(c.escapeHatches) && c.escapeHatches.length <= MAX_HATCHES && c.escapeHatches.every(regex), `escapeHatches: at most ${MAX_HATCHES} valid regexes of at most ${MAX_HATCH_CHARS} chars`);
-  const known = (f: unknown) => str(f) && Object.hasOwn(files, f);
-  check(c.prompts.default === undefined || known(c.prompts.default), `prompts.default: ${JSON.stringify(c.prompts.default)} is not a file in .tender/prompts/`);
-  check(obj(byLabel), "prompts.byLabel: mapping of label to prompt file");
-  for (const [l, f] of Object.entries(c.prompts.byLabel)) check(str(l) && known(f), `prompts.byLabel.${l}: ${JSON.stringify(f)} is not a file in .tender/prompts/`);
+  // fromEntries, not assignment, so a `__proto__` label stays an own entry.
+  c.byLabel = Object.fromEntries(
+    Object.entries(obj(byLabel) ? byLabel : {}).flatMap(([l, e]) => {
+      if (str(l) && obj(e) && Object.keys(e).every((k) => k === "prompt")) return [[l, e.prompt === undefined ? {} : { prompt: promptSet(e.prompt, `byLabel.${l}.prompt`) }]];
+      errs.push(`byLabel.${l}: mapping with prompt`);
+      return [];
+    }),
+  );
+  const size = (p: PromptSet) => [...Object.values(p.steps), p.append].reduce((n, t) => n + Buffer.byteLength(resolve(files, t)), 0);
+  if (!errs.length) check(size(c.prompt) <= MAX_PROMPT_TEXT, "prompt: steps and append over 32 KiB");
+  if (!errs.length) for (const [l, e] of Object.entries(c.byLabel)) check(size(merged(c.prompt, e.prompt)) <= MAX_PROMPT_TEXT, `byLabel.${l}.prompt: steps and append over 32 KiB with prompt's`);
   const lt = obj(c.tracker) ? c.tracker.linear : undefined;
   check(c.tracker === undefined || (obj(c.tracker) && Object.keys(c.tracker).every((k) => k === "linear")), "tracker: mapping with linear");
   check(lt === undefined || (obj(lt) && Object.keys(lt).every((k) => ["project", "team"].includes(k))), "tracker.linear: mapping with project and team");
@@ -138,10 +160,18 @@ function parseIntake(raw: unknown, check: Check): IntakeRule[] {
   return rules;
 }
 
-/** The prompt template for a ticket: the first `byLabel` match, else the repo's default, else tender's. */
+const resolve = (files: Record<string, string>, t?: PromptText) => (t === undefined ? "" : typeof t === "string" ? t : (files[t.file] ?? ""));
+const merged = (base: PromptSet, label?: PromptSet): PromptSet => ({ steps: { ...base.steps, ...label?.steps }, append: label?.append ?? base.append });
+
+/** The `byLabel` entry of the first label the ticket has, case-insensitively. */
+export const labelFor = (c: RepoConfig, labels: string[]) => Object.entries(c.byLabel).find(([l]) => hasLabel(labels, l))?.[1];
+
+/** The prompt template for a ticket: tender's header, the steps (label over repo over tender's), the repo's append, then tender's protocol. */
 export function promptFor(c: RepoConfig, labels: string[] = []) {
-  const name = Object.entries(c.prompts.byLabel).find(([l]) => hasLabel(labels, l))?.[1] ?? c.prompts.default ?? (Object.hasOwn(c.files, "default.md") ? "default.md" : undefined);
-  return name ? c.files[name]! : readFileSync(join(TENDER_DIR, "prompts/default.md"), "utf8");
+  const p = merged(c.prompt, labelFor(c, labels)?.prompt);
+  const tender = (name: string) => readFileSync(join(TENDER_DIR, "prompts", name), "utf8").trim();
+  const steps = STEPS.map((n) => [n, Object.hasOwn(p.steps, n) ? resolve(c.files, p.steps[n]).trim() : tender(`steps/${n}.md`)]).filter(([, t]) => t);
+  return [tender("header.md"), ...steps.map(([n, t]) => `### ${n}\n\n${t}`), resolve(c.files, p.append).trim(), tender("protocol.md")].filter(Boolean).join("\n\n") + "\n";
 }
 
 /** `.tender/` entries at commit `sha` of the clone at `path`. */

@@ -11,6 +11,10 @@ import { GIT, inDir, inRun, passLocked, put, read, remove, SLOW_SECS, write } fr
 
 export const render = (tpl: string, vars: Record<string, string>) => tpl.replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? m);
 
+const MAX_BODY = 24_000;
+// The prompt is one argv string, which Linux caps at 128 KiB.
+const MAX_PROMPT_KIB = 120;
+
 const q = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 
 export const nonoRun = (profile: string, tenderDir: string, grants: [string, string][], quote = (s: string) => s) =>
@@ -283,7 +287,8 @@ export async function start(cfg: Config, s: Source, host: Repo, t: Ticket, tr: T
     }
     return false;
   }
-  await launch(cfg, io, r, t.id, (vars) => render(promptFor(r, t.labels), { ...vars, title: t.title, body: t.body, url: t.url }), tenderDir, s.name);
+  const body = t.body.length > MAX_BODY ? `${t.body.slice(0, MAX_BODY)}\n[truncated: read the full ticket at its URL]` : t.body;
+  await launch(cfg, io, r, t.id, (vars) => render(promptFor(r, t.labels), { ...vars, title: t.title, body, url: t.url }), tenderDir, s.name);
   io.event?.("start", host.key, t.id, { agent: r.agent, source: s.name });
   await claim(io, tr, join(dir, `${t.id}.claim`), t).catch((e) => io.log(`${t.id}: claim failed, session left running and the claim retried next poll: ${e.message}`));
   return true;
@@ -321,6 +326,10 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
   const promptFile = join(dir, `${id}.prompt.md`);
   const script = join(dir, `${id}.sh`);
   const nono = r.sandbox === "nono";
+  const tests = r.testCmd ? `\`${r.testCmd}\`` : "the project's tests (find how they run: README, CI config, package or build files)";
+  const text = prompt({ id, branch, base: r.baseBranch, testCmd: r.testCmd ?? "", tests, repo: r.key });
+  const kib = Buffer.byteLength(text) / 1024;
+  if (kib > MAX_PROMPT_KIB) throw new Error(`${id}: prompt is ${Math.ceil(kib)} KiB, over ${MAX_PROMPT_KIB} KiB`);
   const token = join(io.home, CLAUDE_TOKEN);
   if (r.agent === "claude" && !nono && !existsSync(token)) throw new Error(`${token} is missing: run \`claude setup-token\` and save the token it prints there (chmod 600)`);
   const warn = r.agent === "claude" && nono ? checkLogin(readLogin(io.home), Date.now()) : undefined;
@@ -348,8 +357,6 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
   const root = existsSync(wt) ? realpathSync(wt) : wt;
   seedCodex(io, codexHome(wt), login, root);
   if (r.agent === "claude" || nono) seedClaude(io, claudeHome(wt), root);
-  const tests = r.testCmd ? `\`${r.testCmd}\`` : "the project's tests (find how they run: README, CI config, package or build files)";
-  const vars = { id, branch, base: r.baseBranch, testCmd: r.testCmd ?? "", tests, repo: r.key, planStep: r.planStep };
   io.log(`${io.dry ? "dry: " : ""}write ${join(wt, ".tender", "run", ".gitignore")}`);
   if (!io.dry) {
     mkdirSync(join(wt, ".tender"), { recursive: true });
@@ -357,7 +364,7 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
     // Unlink + exclusive create: never write through a symlink or hardlink the agent left there.
     inRun(wt, (d) => (rmSync(`${d}/.gitignore`, { force: true }), writeFileSync(`${d}/.gitignore`, "*\n", { flag: "wx" })));
   }
-  put(io, promptFile, prompt(vars));
+  put(io, promptFile, text);
   put(io, script, launcher(r, wt, promptFile, scopeUnit(cfg, r.key, id), tenderDir, bun), 0o755);
   // Claimed last, so a failed start leaves the ticket ready; `<ID>.claim` goes first, so a claim lost to an error or a crash is retried while the window lives.
   if (source !== undefined) put(io, join(dir, `${id}.claim`), new Date().toISOString());

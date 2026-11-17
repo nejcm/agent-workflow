@@ -26,7 +26,7 @@ Show the command to the user and confirm it. Chain several with `&&`. If nothing
 - **Agent:** `claude` (the default) or `codex`.
 - **Linear project:** the name of the project whose tickets should come to this repo, if any, and optionally its team key (for example `ENG`). Skip this for GitHub issues, which go to their own repo.
 - **Auto-merge:** suggest `shadow`, which posts what it would merge and never merges, or `off`. Use `intelligent` or `all` only if the user asks for it. The host's `autoMerge` for this repo in `tender.json` (default `off`) is a ceiling, and the lower of the two applies (`off < shadow < intelligent < all`).
-- **Custom prompt:** only if the user wants one. Without it, tender uses `<tender>/prompts/default.md`.
+- **Custom prompt steps:** only if the user wants them. Without them, tender uses its own steps in `<tender>/prompts/steps/`.
 
 ## 3. Write `.tender/config.yaml`
 
@@ -44,14 +44,24 @@ tracker:
 
 Add these keys only if the user asks for them:
 
-- `planStep`: step 2 of the prompt (default `Plan and implement the ticket.`). If it names a skill, the session's agent must have it: committed in the repo (`.claude/skills/` for Claude, `.agents/skills/` for Codex) or installed for the user.
+- `prompt.steps.plan`: the plan step of the prompt (default `Plan and implement the ticket.`). If it names a skill, the session's agent must have it: committed in the repo (`.claude/skills/` for Claude, `.agents/skills/` for Codex) or installed for the user.
 - `criticalPaths`: globs added to the built-in critical paths and the host's `criticalPaths`. A critical path is never auto-merged, in any mode.
 - `testPaths`: globs added to the built-in test paths. Under `intelligent`, a PR that deletes, renames or removes lines from an existing test file is not merged.
 - `trust`: a list of `{ paths: [glob, …], autoMerge: <mode> }`. The first rule that matches a file decides its mode, and the host ceiling still caps it.
 - `escapeHatches`: up to 20 regexes of at most 200 characters each, for added lines that block a merge.
 - `intake`: rules that file tickets from errors, database advisors and the like. Leave them out here; once the repo is set up, the `tender-maintain` skill suggests the ones it qualifies for.
 
-For a custom prompt, copy `<tender>/prompts/default.md` to `.tender/prompts/default.md` and edit it. tender picks the file up without any config key. Prompt files must be named `[a-z0-9-]+.md`. To choose a prompt by ticket label, add `prompts: { byLabel: { "type:bug": bug.md } }`. The placeholders are `{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{testCmd}} {{tests}} {{repo}} {{planStep}}`.
+tender's prompt header and closing protocol are fixed; a repo replaces only steps. Under `prompt.steps`, set any of `clarify`, `plan`, `test`, `verify`, `review`, `commit` to text, to `""` to drop it, or to `{ file: <name>.md }` for `.tender/prompts/<name>.md` (named `[a-z0-9-]+.md`); tender's defaults are in `<tender>/prompts/steps/`. `prompt.append` adds text after the steps. To change steps by ticket label, add a `byLabel` entry; the first matching label wins. Use block style, since a comma ends plain text inside `{ … }`:
+
+```yaml
+byLabel:
+  "type:bug":
+    prompt:
+      steps:
+        plan: Reproduce with a failing test first, then fix.
+```
+
+ Never create `.tender/prompts/default.md`: the check rejects it. The placeholders are `{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{testCmd}} {{tests}} {{repo}}`.
 
 ## 4. Validate
 

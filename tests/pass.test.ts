@@ -11,7 +11,7 @@ import { liveStates, pickAnswer } from "../src/session/question";
 import type { State } from "../src/session/state";
 import type { AgentName, Config, Io, Ticket, TicketComment, Tracker } from "../src/types";
 import { GIT, SLOW_SECS } from "../src/util";
-import { claudeFile, config, fakeIo, repoFiles, fakeTracker, noPr, root, src, ticket, two, useTempRoot, web, windowsOut, worktree } from "./helpers";
+import { claudeFile, config, fakeIo, repoFiles, fakeTracker, noPr, root, setBaseSha, src, ticket, two, useTempRoot, web, windowsOut, worktree } from "./helpers";
 
 useTempRoot();
 
@@ -105,6 +105,25 @@ test("starts ready tickets up to maxConcurrent", async () => {
   expect(readdirSync(`${wt}.tmpdir`)).toEqual(["cache"]);
   expect(readdirSync(`${wt}.tmpdir/cache`)).toEqual([]);
   expect(statSync(`${wt}.tmpdir`).mode & 0o777).toBe(0o700);
+});
+
+test("a start cuts a long ticket body and keeps placeholders in it literal; a prompt over 120 KiB gets no session clone, window or claim", async () => {
+  const run = (body: string) => {
+    const { tr, calls } = fakeTracker({ ready: [{ ...ticket(1), body }] });
+    const { io, cmds, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : a[5] === "--quiet" ? { code: 1 } : noPr(a)));
+    return pass(config(), io, () => tr, "/tender").then(() => ({ calls, cmds, logs }));
+  };
+  expect((await run(`{{id}} {{branch}} ${"x".repeat(24_000)}tail`)).calls).toEqual(["claim gh-1"]);
+  const prompt = readFileSync(join(root, "acme/web/gh-1.prompt.md"), "utf8");
+  expect(prompt.includes(`<body>\n{{id}} {{branch}} ${"x".repeat(23_982)}\n[truncated: read the full ticket at its URL]\n</body>`)).toBe(true);
+  rmSync(join(root, "acme"), { recursive: true });
+  repoFiles["config.yaml"] = 'prompt:\n  append: "{{body}}"\n';
+  setBaseSha("c".repeat(40));
+  const big = await run("\u20ac".repeat(30_000));
+  expect(big.calls).toEqual([]);
+  expect(big.logs.some((l) => /gh-1: prompt is 1\d\d KiB, over 120 KiB/.test(l))).toBe(true);
+  expect(big.cmds.some((c) => c.startsWith("tmux new-window") || c.includes(" clone "))).toBe(false);
+  expect(existsSync(join(root, "acme/web/gh-1.prompt.md"))).toBe(false);
 });
 
 test("a start records start and claim events; a failed event write still starts and claims", async () => {

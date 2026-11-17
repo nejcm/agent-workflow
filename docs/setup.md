@@ -15,7 +15,7 @@ The same are available as `bun run setup owner/repo`, `bun run start`, `bun run 
 
 ## 1. Requirements
 
-Linux. On `PATH`: `bun`, `git`, `gh` (logged in: `gh auth status`), `tmux`, GNU `timeout` (coreutils; bounds every command `tender` runs), a systemd user manager (`systemd-run --user`, `systemctl --user`; each session runs in its own scope), `pgrep` (procps), and `claude` and/or `codex`. A skill named in `planStep` must be committed in the repo (`.claude/skills/`, `.agents/skills/`) or installed globally in `~/.claude/skills` (`scripts/setup.sh` links that dir into both agent config dirs). For sandboxed repos, install nono:
+Linux. On `PATH`: `bun`, `git`, `gh` (logged in: `gh auth status`), `tmux`, GNU `timeout` (coreutils; bounds every command `tender` runs), a systemd user manager (`systemd-run --user`, `systemctl --user`; each session runs in its own scope), `pgrep` (procps), and `claude` and/or `codex`. A skill named in a repo's `prompt.steps` must be committed in the repo (`.claude/skills/`, `.agents/skills/`) or installed globally in `~/.claude/skills` (`scripts/setup.sh` links that dir into both agent config dirs). For sandboxed repos, install nono:
 
 ```bash
 curl -fsSL https://nono.sh/install.sh | sh

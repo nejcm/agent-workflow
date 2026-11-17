@@ -63,7 +63,7 @@ What a session leaves in `.tender/run/` and the merge decision.
 ## Other
 
 - `intake/`: example intake scripts that repos copy into `.tender/intake/`.
-- `prompts/default.md`: the ticket prompt used when a repo's `.tender/` names none.
+- `prompts/`: the ticket prompt: the fixed `header.md` and `protocol.md`, and the default `steps/*.md` a repo's `prompt.steps` can replace.
 - `nono/`: sandbox profiles for Claude and Codex sessions, intake scripts, the intake judge and checks.
 - `systemd/`: user units for `tender run`, the intake timer and the weekly PR sweep timer, installed by `scripts/run.sh`.
 - `.agents/skills/tender-setup/SKILL.md`: the setup skill for a repo's `.tender/`; `.agents/skills/tender-maintain/SKILL.md` proposes repairs and intake rules. `.claude/skills/` symlinks to them for Claude Code.

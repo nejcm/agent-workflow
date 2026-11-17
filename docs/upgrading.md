@@ -1,5 +1,23 @@
 # Upgrading
 
+## To prompt steps
+
+tender's single prompt file is now a fixed header and protocol around six steps a repo can replace, see [Prompt](config.md#prompt). In each repo's `.tender/config.yaml`:
+
+- `planStep: <text>` becomes `plan: <text>` under `prompt:` and `steps:`, in block style (a comma ends plain text inside `{ … }`):
+
+  ```yaml
+  prompt:
+    steps:
+      plan: <text>
+  ```
+
+- `prompts.default`, or a `.tender/prompts/default.md` used without a key, no longer replaces the whole prompt: move what differs from tender's into `prompt.steps.<step>` (text or `{ file: <name>.md }`) and `prompt.append`, and delete `default.md`.
+- `prompts.byLabel: { <label>: <file> }` becomes `byLabel: { <label>: { prompt: … } }`, block style as above. Each old file was a whole prompt, so cut it down to the steps it changes, like `default.md`, and reference what is left as `{ file: <file> }`.
+- `{{planStep}}` is gone; a file that keeps it shows the agent a literal `{{planStep}}`.
+
+Commit the change to the base branch before upgrading tender: an old key is an error, and a repo with an invalid `.tender/` starts no tickets and resumes no handed-off sessions. Running sessions keep the prompt they were started with.
+
 ## To `.tender/config.yaml`
 
 Move `agent`, `testCmd`, `planStep` and `testPaths` (and any `criticalPaths` that belong to the repo rather than the host) from `tender.json` (`defaults` and each repo) into each repo's `.tender/config.yaml`, along with the `autoMerge` you want there (`tender.json`'s `autoMerge` is now its ceiling; its `criticalPaths` stay as a floor), and a custom `prompt` into `.tender/prompts/default.md`. Commit it to the base branch; `tender` does not read it from anywhere else. `baseBranch` now defaults to the remote's default branch. A session records its agent in `<ID>.agent` next to its clone; sessions started before have none and are treated as Claude sessions, so finish or restart running Codex sessions before upgrading.

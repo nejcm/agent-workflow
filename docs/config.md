@@ -219,12 +219,12 @@ A session's prompt is tender's `prompts/header.md` (the ticket and the rules tha
 
 | step | tender's default |
 |---|---|
-| `clarify` | if the acceptance criteria are missing or unclear, ask in the question file and stop |
-| `plan` | `Plan and implement the ticket.` |
-| `test` | run `{{tests}}` and make them pass |
-| `verify` | verify on the real surface, with the repo's verification skill if it has one |
-| `review` | get an independent review from a model of a different family, at most 2 rounds |
-| `commit` | commit with a message that references `{{id}}` |
+| `clarify` | read the ticket and code first; ask in the question file and stop only if the acceptance criteria are still missing or ambiguous |
+| `plan` | plan and implement: read the code first, reproduce bugs as a failing test, smallest complete change, keep docs current |
+| `test` | add or update tests, run `{{tests}}` and make them pass by fixing the code, never by weakening tests |
+| `verify` | verify on the real surface, with the repo's verification skill if it has one, and record the command and output |
+| `review` | get an independent review against the ticket from a model of a different family, fix confirmed findings, at most 2 rounds |
+| `commit` | commit only the needed files, with a message in the repo's style that references `{{id}}` |
 
 A step is the label's text if the first matching `byLabel` entry sets it, else the repo's `prompt.steps`, else tender's; a step that is empty or only whitespace is dropped, heading and all. A label's `append` replaces the repo's. Only the first `byLabel` entry whose label the ticket has applies (labels match case-insensitively, entries in file order, except that integer-like labels such as `"123"` come first); entries never stack. `{ file: <name>.md }` reads `.tender/prompts/<name>.md`; a bare `bug.md` is rejected as ambiguous. The repo's steps and append are capped at 32 KiB, and each label merged over them likewise. A ticket body over 24,000 characters is cut, with a note to read the full ticket at its URL; a prompt over 120 KiB stops the start before the ticket's clone, session or claim (the repo's base clone and fetch, needed to read `.tender/`, come first).
 

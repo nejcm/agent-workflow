@@ -44,7 +44,7 @@ tracker:
 
 Add these keys only if the user asks for them:
 
-- `prompt.steps.plan`: the plan step of the prompt (default `Plan and implement the ticket.`). If it names a skill, the session's agent must have it: committed in the repo (`.claude/skills/` for Claude, `.agents/skills/` for Codex) or installed for the user.
+- `prompt.steps.plan`: the plan step of the prompt (default: read the relevant code, then plan and implement the ticket with the smallest complete change). If it names a skill, the session's agent must have it: committed in the repo (`.claude/skills/` for Claude, `.agents/skills/` for Codex) or installed for the user.
 - `criticalPaths`: globs added to the built-in critical paths and the host's `criticalPaths`. A critical path is never auto-merged, in any mode.
 - `testPaths`: globs added to the built-in test paths. Under `intelligent`, a PR that deletes, renames or removes lines from an existing test file is not merged.
 - `trust`: a list of `{ paths: [glob, …], autoMerge: <mode> }`. The first rule that matches a file decides its mode, and the host ceiling still caps it.

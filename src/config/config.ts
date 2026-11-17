@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Config, Repo, Source } from "../types";
+import { MODEL } from "../session/agents";
 import { TRACKERS } from "../trackers";
 import { validBranch } from "../util";
 
@@ -14,7 +15,6 @@ export const validRepo = (s: unknown) => typeof s === "string" && REPO.test(s) &
 export const allowedRepo = (cfg: Config, raw: unknown) => (validRepo(raw) ? Object.keys(cfg.repos).find((k) => k.toLowerCase() === (raw as string).toLowerCase()) : undefined);
 const LANE_KEYS = ["repo", "repoPath", "baseBranch", "agent", "sandbox", "maxConcurrent", "testCmd", "prompt"];
 const MOVED_KEYS = ["agent", "testCmd", "planStep", "prompt", "testPaths"];
-const MODEL = /^[A-Za-z0-9][A-Za-z0-9._:\[\]\/-]{0,99}$/;
 export const AUTO_MERGE = ["off", "shadow", "intelligent", "all"] as const;
 
 const expand = (p: string, base: string) => resolve(base, p.replace(/^~(?=$|\/)/, homedir()));
@@ -25,6 +25,7 @@ export function parseConfig(raw: any, base: string): Config {
   const str = (v: unknown) => typeof v === "string" && v.length > 0;
   const obj = (v: unknown): v is Record<string, any> => !!v && typeof v === "object" && !Array.isArray(v);
   const posInt = (v: unknown) => Number.isInteger(v) && (v as number) > 0;
+  const rounds = (v: unknown) => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 10;
   check(obj(raw), "config must be a JSON object");
   raw = obj(raw) ? raw : {};
   check(str(raw.host) && /^[A-Za-z0-9._-]+$/.test(raw.host), "host: required, [A-Za-z0-9._-]");
@@ -69,6 +70,8 @@ export function parseConfig(raw: any, base: string): Config {
       autoMerge: v.autoMerge === undefined ? "off" : v.autoMerge,
       criticalPaths: v.criticalPaths === undefined ? [] : v.criticalPaths,
       feedbackAuthors: v.feedbackAuthors === undefined ? [] : v.feedbackAuthors,
+      stallMinutes: v.stallMinutes ?? stallMinutes,
+      feedbackRounds: v.feedback === undefined ? 3 : v.feedback?.maxRounds,
     };
     check(r.baseBranch === undefined || validBranch(r.baseBranch), `${at}.baseBranch: invalid`);
     check(["nono", "none"].includes(r.sandbox), `${at}.sandbox: "nono" | "none" (here or in defaults)`);
@@ -77,6 +80,8 @@ export function parseConfig(raw: any, base: string): Config {
     check(AUTO_MERGE.includes(r.autoMerge), `${at}.autoMerge: ${AUTO_MERGE.map((m) => `"${m}"`).join(" | ")}`);
     check(Array.isArray(r.criticalPaths) && r.criticalPaths.every(str), `${at}.criticalPaths: array of non-empty glob strings`);
     check(Array.isArray(r.feedbackAuthors) && r.feedbackAuthors.every(str), `${at}.feedbackAuthors: array of non-empty strings (GitHub logins / Linear emails)`);
+    check(v.stallMinutes === undefined || posInt(r.stallMinutes), `${at}.stallMinutes: positive integer`);
+    check(v.feedback === undefined || (obj(v.feedback) && Object.keys(v.feedback).every((k) => k === "maxRounds") && rounds(r.feedbackRounds)), `${at}.feedback: { maxRounds: integer 1-10 }`);
     repos[key] = r;
     keys.push(key);
   }

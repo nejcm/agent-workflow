@@ -37,7 +37,7 @@ Move a GitHub issue or Linear ticket to **ready**, and `tender` starts a Claude 
 - **Ticket status:** moves to In Review once the PR exists, then to [Ready to merge](docs/lifecycle.md#ready-to-merge) once the PR is clean and nothing waits on the agent; back to In Review on new commits, a failed check or new feedback.
 - **[PR feedback](docs/lifecycle.md#pr-feedback):**
   - Review comments, failed checks and merge conflicts are delivered to the live session.
-  - After 3 rounds the ticket is parked with `needs-human`.
+  - After `feedback.maxRounds` rounds (default 3) the ticket is parked with `needs-human`.
 - **[Auto-merge](docs/auto-merge.md#auto-merge):** modes `off`, `all`, `shadow` and `intelligent`, set per path by the repo's `trust` rules. Critical paths and escape hatches (`@ts-ignore`, `eslint-disable`, …) on added lines hold back any mode; `intelligent` adds gates for deleted tests, PR size and the agent's own confidence.
 - **Cleanup:**
   - A done ticket ends its session, and its clone is deleted once nothing is unpushed.

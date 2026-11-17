@@ -1,4 +1,9 @@
 export type AgentName = "claude" | "codex";
+export interface AgentConfig {
+  name: AgentName;
+  model?: string;
+  effort?: string;
+}
 
 /** Host-side settings for one allowlisted repo, from tender.json. */
 export interface Repo {
@@ -14,6 +19,9 @@ export interface Repo {
   /** A floor: added to the built-in and the repo's critical paths. */
   criticalPaths: string[];
   feedbackAuthors: string[];
+  stallMinutes: number;
+  /** PR feedback rounds before the ticket is parked; the repo's `feedback.maxRounds` overrides it. */
+  feedbackRounds: number;
 }
 
 export type PromptText = string | { file: string };
@@ -25,6 +33,8 @@ export interface PromptSet {
 /** A repo's `.tender/` at one base commit: `files` maps each `prompts/` file name to its text. */
 export interface RepoConfig {
   agent: AgentName;
+  model?: string;
+  effort?: string;
   testCmd?: string;
   autoMerge?: AutoMerge;
   criticalPaths: string[];
@@ -35,10 +45,11 @@ export interface RepoConfig {
   escapeHatches: string[];
   prompt: PromptSet;
   /** The first entry whose label the ticket has replaces `prompt`'s steps and append it sets. */
-  byLabel: Record<string, { prompt?: PromptSet }>;
+  byLabel: Record<string, { prompt?: PromptSet; agent?: AgentConfig }>;
   /** The Linear project whose tickets go to this repo; `team` is only checked against the ticket's source. */
   tracker?: { linear?: { project: string; team?: string } };
   intake: IntakeRule[];
+  feedbackRounds?: number;
   files: Record<string, string>;
 }
 

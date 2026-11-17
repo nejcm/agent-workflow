@@ -37,7 +37,7 @@ test("repo config: every key parsed, every problem listed", () => {
     'agent: "claude" | "codex"', "testCmd: non-empty string", "planStep: moved to prompt.steps.plan (see docs/upgrading.md)", "autoMerge:", "criticalPaths: list", "testPaths: list", "sandbox: unknown key",
     "prompts: replaced by prompt and byLabel (see docs/upgrading.md)", "prompt.steps.implement: unknown step; steps are clarify, plan, test, verify, review, commit", 'prompt.steps.plan: text, "" to drop the step, or { file: <name>.md }',
     'prompt.steps.verify: "nope.md" is not a file in .tender/prompts/', 'prompt.steps.review: "bug.md" is a file name; write { file: <name>.md } to use a file in .tender/prompts/', 'prompt.append: text, "" to drop the step, or { file: <name>.md }',
-    "byLabel.bug: mapping with prompt", 'byLabel.ui.prompt.steps.test: text, "" to drop the step, or { file: <name>.md }',
+    "byLabel.bug: mapping with prompt and agent", 'byLabel.ui.prompt.steps.test: text, "" to drop the step, or { file: <name>.md }',
   ])
     expect(bad).toContain(k);
   expect(bad).not.toContain("planStep: unknown key");
@@ -47,8 +47,27 @@ test("repo config: every key parsed, every problem listed", () => {
   expect(errors([file("config.yaml", "agent: codex\n---\nagent: claude\n")])).toContain("config.yaml: must be a mapping");
   expect(errors([file("config.yaml", "prompt: [a]\n")])).toBe("prompt: mapping with steps and append");
   expect(errors([file("config.yaml", "prompt:\n  steps: x\n")])).toBe("prompt: mapping with steps and append");
-  expect(errors([file("config.yaml", "byLabel: [a]\n")])).toBe("byLabel: mapping of label to { prompt }");
+  expect(errors([file("config.yaml", "byLabel: [a]\n")])).toBe("byLabel: mapping of label to { prompt, agent }");
   expect(errors([file("config.yaml", "byLabel:\n  bug: { prompt: x }\n")])).toBe("byLabel.bug.prompt: mapping with steps and append");
+});
+
+test("repo config: agent is a name or { name, model, effort }, checked per agent; feedback.maxRounds is 1-10", () => {
+  expect(parseRepoConfig([file("config.yaml", "agent: codex\n")])).toMatchObject({ agent: "codex", model: undefined, effort: undefined });
+  expect(parseRepoConfig([file("config.yaml", "agent: { name: claude, model: \"opus[1m]\", effort: max }\nfeedback: { maxRounds: 10 }\n")])).toMatchObject({ agent: "claude", model: "opus[1m]", effort: "max", feedbackRounds: 10 });
+  expect(parseRepoConfig([file("config.yaml", "agent: { name: codex, effort: minimal }\n")])).toMatchObject({ agent: "codex", effort: "minimal" });
+  const c = parseRepoConfig([file("config.yaml", "byLabel:\n  big:\n    agent: { name: codex, model: gpt-5, effort: xhigh }\n  quick:\n    agent: claude\n")]);
+  expect(c.byLabel).toEqual({ big: { agent: { name: "codex", model: "gpt-5", effort: "xhigh" } }, quick: { agent: { name: "claude" } } });
+  const err = (y: string) => errors([file("config.yaml", y)]);
+  expect(err("agent:\n")).toBe('agent: "claude" | "codex" or { name, model, effort }');
+  expect(err("agent: [claude]\n")).toBe('agent: "claude" | "codex" or { name, model, effort }');
+  expect(err("agent: { name: claude, args: [--yolo] }\n")).toBe("agent: mapping with name, model and effort");
+  expect(err("agent: { model: opus }\n")).toBe('agent.name: "claude" | "codex"');
+  for (const m of ["a b", "$(x)", "-m", "x".repeat(101)]) expect(err(`agent: { name: claude, model: ${JSON.stringify(m)} }\n`)).toBe("agent.model: model name like sonnet or gpt-5 ([A-Za-z0-9._:[]/-], at most 100 chars)");
+  expect(err("agent: { name: claude, effort: minimal }\n")).toBe("agent.effort: low | medium | high | xhigh | max for claude");
+  expect(err("agent: { name: codex, effort: max }\n")).toBe("agent.effort: minimal | low | medium | high | xhigh for codex");
+  expect(err("byLabel:\n  big:\n    agent: gpt\n")).toBe('byLabel.big.agent: "claude" | "codex" or { name, model, effort }');
+  for (const y of ["feedback: 3\n", "feedback: { rounds: 3 }\n"]) expect(err(y)).toStartWith("feedback: mapping with maxRounds");
+  for (const n of [0, 11, 1.5, '"3"']) expect(err(`feedback: { maxRounds: ${n} }\n`)).toBe("feedback.maxRounds: integer 1-10");
 });
 
 test("repo config: tracker.linear names the project, with an optional team key", () => {
@@ -122,6 +141,11 @@ test("combine: autoMerge is the lower of the repo's request and the host's ceili
   expect(combine(host("all"), "main", repo("")).autoMerge).toBe("all");
   expect(combine(host("off"), "main", repo("autoMerge: all\n")).autoMerge).toBe("off");
   expect(combine(host("intelligent"), "main", repo("autoMerge: shadow\n")).ceiling).toBe("intelligent");
+  const rounds = (h: object, y: string) => combine(web(config({ repos: [{ name: "acme/web", ...h }] })), "main", repo(y)).feedbackRounds;
+  expect(rounds({}, "")).toBe(3);
+  expect(rounds({ feedback: { maxRounds: 2 } }, "")).toBe(2);
+  expect(rounds({ feedback: { maxRounds: 2 } }, "feedback: { maxRounds: 5 }\n")).toBe(5);
+  expect(rounds({ feedback: { maxRounds: 5 } }, "feedback: { maxRounds: 1 }\n")).toBe(1);
   const s = combine(host("all"), "dev", repo('autoMerge: intelligent\ncriticalPaths: ["src/billing/**"]\n'));
   expect(s).toMatchObject({ baseBranch: "dev", sandbox: "nono", agent: "claude" });
   const pr = (filename: string): PrFacts => ({ state: "OPEN", isDraft: false, isCrossRepository: false, baseRefName: "dev", mergeable: "MERGEABLE", additions: 1, deletions: 0, changedFiles: 1, statusCheckRollup: [], labels: [], files: [{ filename, status: "modified", additions: 1, deletions: 0 }] }) as any;
@@ -207,7 +231,7 @@ test("an invalid repo config starts nothing: logged once and commented once per 
   const c = config();
   await pass(c, io, () => tr, "/tender");
   await pass(c, io, () => tr, "/tender");
-  const invalid = (sha: string) => `[web] acme/web: .tender/ on main at ${sha.slice(0, 12)} is invalid, so no tickets start:\n  agent: "claude" | "codex"`;
+  const invalid = (sha: string) => `[web] acme/web: .tender/ on main at ${sha.slice(0, 12)} is invalid, so no tickets start:\n  agent: "claude" | "codex" or { name, model, effort }`;
   expect(logs.filter((l) => l.includes("is invalid"))).toEqual([invalid("a".repeat(40))]);
   expect(calls).toEqual([`comment gh-1 not started: acme/web's .tender/ at ${"a".repeat(12)} is invalid; run \`tender check\` in the repo for details`]);
   expect(cmds.some((x) => / clone -q | new-window /.test(x))).toBe(false);
@@ -304,10 +328,10 @@ test("tender check validates a working tree's .tender/ and prints the effective 
   expect(check(root, (s) => out.push(s), (s) => out.push(s))).toBe(true);
   expect(JSON.parse(out[0]!)).toMatchObject({ agent: "claude", testCmd: null, tracker: null, criticalPaths: expect.arrayContaining([".tender/**", ".github/**"]), prompt: { steps: { clarify: "tender's", plan: "tender's", test: "tender's", verify: "tender's", review: "tender's", commit: "tender's" }, append: null }, byLabel: {} });
   mkdirSync(join(root, ".tender/prompts"), { recursive: true });
-  writeFileSync(join(root, ".tender/config.yaml"), 'testCmd: make\ncriticalPaths: ["x/**"]\nprompt:\n  steps: { plan: Use X., review: "" }\nbyLabel:\n  bug:\n    prompt: { steps: { verify: { file: bug.md } }, append: Notes. }\ntracker:\n  linear:\n    project: Web app\n');
+  writeFileSync(join(root, ".tender/config.yaml"), 'testCmd: make\ncriticalPaths: ["x/**"]\nprompt:\n  steps: { plan: Use X., review: "" }\nbyLabel:\n  bug:\n    prompt: { steps: { verify: { file: bug.md } }, append: Notes. }\n    agent: { name: codex, effort: high }\nfeedback: { maxRounds: 2 }\ntracker:\n  linear:\n    project: Web app\n');
   writeFileSync(join(root, ".tender/prompts/bug.md"), "B");
   expect(check(root, (s) => out.push(s))).toBe(true);
-  expect(JSON.parse(out[1]!)).toMatchObject({ testCmd: "make", tracker: { linear: { project: "Web app" } }, criticalPaths: expect.arrayContaining(["x/**", ".tender/**"]), prompt: { steps: { clarify: "tender's", plan: "inline", review: "disabled" }, append: null }, byLabel: { bug: { prompt: { steps: { verify: ".tender/prompts/bug.md" }, append: "inline" } } } });
+  expect(JSON.parse(out[1]!)).toMatchObject({ testCmd: "make", tracker: { linear: { project: "Web app" } }, criticalPaths: expect.arrayContaining(["x/**", ".tender/**"]), prompt: { steps: { clarify: "tender's", plan: "inline", review: "disabled" }, append: null }, byLabel: { bug: { prompt: { steps: { verify: ".tender/prompts/bug.md" }, append: "inline" }, agent: { name: "codex", effort: "high" } } }, feedbackRounds: 2 });
   symlinkSync(join(root, ".tender/prompts/bug.md"), join(root, ".tender/prompts/evil.md"));
   writeFileSync(join(root, ".tender/prompts/Bad.md"), "x");
   expect(dirEntries(root).map((e) => e.name)).toEqual(["config.yaml", "prompts/Bad.md", "prompts/bug.md", "prompts/evil.md"]);

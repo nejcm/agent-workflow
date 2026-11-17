@@ -23,7 +23,7 @@ Show the command to the user and confirm it. Chain several with `&&`. If nothing
 
 ## 2. Ask the user
 
-- **Agent:** `claude` (the default) or `codex`.
+- **Agent:** `claude` (the default) or `codex`, optionally with a model and effort: `agent: { name: claude, model: sonnet, effort: high }`. Quote a model with brackets: `model: "opus[1m]"`. Effort is `low`, `medium`, `high`, `xhigh` or `max` for Claude, `minimal`, `low`, `medium`, `high` or `xhigh` for Codex.
 - **Linear project:** the name of the project whose tickets should come to this repo, if any, and optionally its team key (for example `ENG`). Skip this for GitHub issues, which go to their own repo.
 - **Auto-merge:** suggest `shadow`, which posts what it would merge and never merges, or `off`. Use `intelligent` or `all` only if the user asks for it. The host's `autoMerge` for this repo in `tender.json` (default `off`) is a ceiling, and the lower of the two applies (`off < shadow < intelligent < all`).
 - **Custom prompt steps:** only if the user wants them. Without them, tender uses its own steps in `<tender>/prompts/steps/`.
@@ -59,7 +59,10 @@ byLabel:
     prompt:
       steps:
         plan: Reproduce with a failing test first, then fix.
+    agent: { name: codex, effort: xhigh }
 ```
+
+A label's `agent` replaces the repo's whole `agent`, model and effort included.
 
  Never create `.tender/prompts/default.md`: the check rejects it. The placeholders are `{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{testCmd}} {{tests}} {{repo}}`.
 

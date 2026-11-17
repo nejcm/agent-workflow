@@ -39,7 +39,7 @@ Unknown keys are errors in both files. Upgrading from older layouts is in [upgra
 | `tmuxSession` | string `[a-z0-9-]`, ≤ 32 | `tender` | tmux session that holds the agent windows |
 | `maxConcurrent` | positive integer | `2` | running sessions in total |
 | `maxInReview` | positive integer | unlimited | no new starts while this host has this many In Review plus Ready to merge tickets |
-| `stallMinutes` | positive integer | `30` | a session `working` with no transcript write for this long is parked, see [Stalled](lifecycle.md) |
+| `stallMinutes` | positive integer | `30` | a session `working` with no transcript write for this long is parked, see [Stalled](lifecycle.md); a repo entry or `defaults` can override it |
 | `defaults` | object | `{}` | per-repo settings applied to every entry in `repos` (no `path`) |
 | `repos` | non-empty array | required | the allowlist; tickets for any other repo are skipped |
 | `sources` | non-empty array | required | the trackers to poll |
@@ -61,6 +61,8 @@ A `repos` entry is `"owner/name"` or `{ "name": "owner/name", …settings }`. Ea
 | `autoMerge` | `off` \| `shadow` \| `intelligent` \| `all` | `off` | the ceiling for the repo's own `autoMerge` and `trust` rules, see [Auto-merge](auto-merge.md#auto-merge) |
 | `criticalPaths` | array of globs | `[]` | a floor of paths never auto-merged, added to the built-in and the repo's own |
 | `feedbackAuthors` | array of strings | `[]` | GitHub logins / Linear emails (case-insensitive) whose replies answer agent questions and whose PR reviews and comments go back to the session, see [Questions](lifecycle.md#questions) and [PR feedback](lifecycle.md#pr-feedback) |
+| `stallMinutes` | positive integer | the top-level `stallMinutes` | see [Stalled](lifecycle.md) |
+| `feedback` | `{ "maxRounds": 1-10 }` | `{ "maxRounds": 3 }` | PR feedback rounds before the ticket is parked; the repo's `feedback.maxRounds` overrides it whatever `autoMerge` is, see [PR feedback](lifecycle.md#pr-feedback) |
 
 `agent`, `testCmd`, `planStep`, `prompt` and `testPaths` are rejected here with `<key>: moved to .tender/config.yaml in the repo`.
 
@@ -134,7 +136,7 @@ A key the source's tracker doesn't use (e.g. `team` on a GitHub source) is rejec
 ```
 
 ```yaml
-agent: claude
+agent: { name: claude, model: sonnet, effort: high }
 testCmd: bun test
 autoMerge: intelligent
 criticalPaths: ["src/billing/**"]
@@ -152,6 +154,8 @@ prompt:
 byLabel:
   "type:bug":
     prompt: { steps: { plan: { file: bug.md } } }
+    agent: { name: codex, effort: xhigh }
+feedback: { maxRounds: 5 }
 tracker:
   linear:
     project: Web app
@@ -167,7 +171,8 @@ intake:
 
 | key | type | default | |
 |---|---|---|---|
-| `agent` | `claude` \| `codex` | `claude` | which agent CLI the session runs |
+| `agent` | `claude` \| `codex` or `{ name, model, effort }` | `claude` | which agent CLI the session runs; `model` is a model name (`[A-Za-z0-9._:[]/-]`, ≤ 100 chars), `effort` is `low`, `medium`, `high`, `xhigh` or `max` for Claude (`--model`, `--effort`) and `minimal`, `low`, `medium`, `high` or `xhigh` for Codex (`-m`, `-c model_reasoning_effort`); unset, the CLI's own default; quote a model with brackets: `model: "opus[1m]"` |
+| `feedback.maxRounds` | integer 1–10 | the host's `feedback.maxRounds` | PR feedback rounds before the ticket is parked |
 | `testCmd` | string | none | the agent must pass it before opening a PR; unset, the prompt tells it to find and run the project's tests |
 | `autoMerge` | `off` \| `shadow` \| `intelligent` \| `all` | the host's | the repo's request; the effective mode is the lower of it and the host's `autoMerge` (`off < shadow < intelligent < all`) |
 | `criticalPaths` | list of globs | `[]` | added to the built-in critical paths, `.tender/**` and the host's `criticalPaths`, see [Auto-merge](auto-merge.md#auto-merge) |
@@ -176,7 +181,7 @@ intake:
 | `escapeHatches` | list of regexes, ≤ 20, each ≤ 200 chars | `[]` | added lines matching one hold a merge back, on top of the built-in ones |
 | `prompt.steps.<step>` | text, `""` or `{ file: <name>.md }` | tender's `prompts/steps/<step>.md` | replaces one step; `""` drops it; steps are `clarify`, `plan`, `test`, `verify`, `review`, `commit`, see [Prompt](#prompt) |
 | `prompt.append` | text or `{ file: <name>.md }` | none | added after the steps, before tender's closing instructions |
-| `byLabel` | map of label to `{ prompt }` | `{}` | the first entry whose label the ticket has sets steps and `append` over `prompt`'s |
+| `byLabel` | map of label to `{ prompt, agent }` | `{}` | only the first entry whose label the ticket has applies: it sets steps and `append` over `prompt`'s, and its `agent` replaces `agent` whole (a provider switch never keeps the repo's model or effort); merge decisions never depend on it |
 | `tracker.linear.project` | Linear project name | none | the project whose tickets come here when they name no repo themselves, see [Which repo a ticket goes to](lifecycle.md#which-repo-a-ticket-goes-to) |
 | `tracker.linear.team` | team key `[A-Z0-9]+` | none | only checked: a ticket routed here from another team's source is logged once |
 | `intake` | list of rules, ≤ 20 | `[]` | see below |

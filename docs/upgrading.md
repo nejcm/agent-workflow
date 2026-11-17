@@ -16,6 +16,8 @@ tender's single prompt file is now a fixed header and protocol around six steps 
 - `prompts.byLabel: { <label>: <file> }` becomes `byLabel: { <label>: { prompt: … } }`, block style as above. Each old file was a whole prompt, so cut it down to the steps it changes, like `default.md`, and reference what is left as `{ file: <file> }`.
 - `{{planStep}}` is gone; a file that keeps it shows the agent a literal `{{planStep}}`.
 
+A session now records its agent in `<ID>.agent` as JSON when it has a model or effort; an older tender reads that as a Claude session, so finish such sessions before downgrading.
+
 Commit the change to the base branch before upgrading tender: an old key is an error, and a repo with an invalid `.tender/` starts no tickets and resumes no handed-off sessions. Running sessions keep the prompt they were started with.
 
 ## To `.tender/config.yaml`

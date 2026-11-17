@@ -1,14 +1,14 @@
 import { lstatSync, opendirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Live, State } from "./state";
-import type { AgentName } from "../types";
-import { clean, inDir, readRun, readIn } from "../util";
+import type { AgentConfig, AgentName } from "../types";
+import { clean, inDir, quote, readRun, readIn } from "../util";
 
 export type Lookup = (wt: string, since: number, now: number) => Live | undefined;
 
 export interface Agent {
-  /** The script's env line and command; every argument is already a shell word. */
-  launch(wt: string, prompt: string, nono: boolean): [env: string, argv: string[]];
+  /** The script's env line and command; every argument is already a shell word, and `model` and `effort` are quoted here. */
+  launch(wt: string, prompt: string, nono: boolean, a?: { model?: string; effort?: string }): [env: string, argv: string[]];
   /** The ticket's config dir and its subdir that holds every transcript of `wt`. */
   store(wt: string): [home: string, sub: string];
   /** Transcript files that may belong to `wt`; the caller matches them on the recorded cwd. */
@@ -26,15 +26,22 @@ const MAX_FILE = 4096;
 
 /** A `claude setup-token` token for `sandbox: "none"` lanes, relative to home; read by the launch script on the host. nono lanes get a phantom from nono's proxy instead. */
 export const CLAUDE_TOKEN = ".claude-tender/oauth-token";
-/** The agent a session was started with, from `<ID>.agent`; undefined for one started before tender recorded it. */
-export function recordedAgent(dir: string, id: string): AgentName | undefined {
+export const MODEL = /^[A-Za-z0-9][A-Za-z0-9._:\[\]\/-]{0,99}$/;
+export const EFFORTS: Record<AgentName, string[]> = { claude: ["low", "medium", "high", "xhigh", "max"], codex: ["minimal", "low", "medium", "high", "xhigh"] };
+
+/** The agent config a session was started with, from `<ID>.agent` (a plain name or JSON); undefined if missing or invalid. */
+export function recordedAgentConfig(dir: string, id: string): AgentConfig | undefined {
   try {
-    const a = readFileSync(join(dir, `${id}.agent`), "utf8").trim();
-    return a === "claude" || a === "codex" ? a : undefined;
+    const raw = readFileSync(join(dir, `${id}.agent`), "utf8").trim();
+    const a = raw.startsWith("{") ? JSON.parse(raw) : { name: raw };
+    const ok = (a.name === "claude" || a.name === "codex") && (a.model === undefined || (typeof a.model === "string" && MODEL.test(a.model))) && (a.effort === undefined || EFFORTS[a.name as AgentName].includes(a.effort));
+    return ok ? { name: a.name, model: a.model, effort: a.effort } : undefined;
   } catch {
     return undefined;
   }
 }
+/** The agent a session was started with; undefined for one started before tender recorded it. */
+export const recordedAgent = (dir: string, id: string) => recordedAgentConfig(dir, id)?.name;
 export const agentOf = (dir: string, id: string) => recordedAgent(dir, id) ?? "claude";
 
 /** The ticket's own Claude config dir, a sidecar of its worktree. */
@@ -130,7 +137,7 @@ const SESSION_SETTINGS = JSON.stringify({ skipDangerousModePermissionPrompt: tru
 
 export const AGENTS: Record<AgentName, Agent> = {
   claude: {
-    launch: (wt, prompt, nono) => [`${nono ? "export" : `CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/${CLAUDE_TOKEN}")" || exit 1\nexport CLAUDE_CODE_OAUTH_TOKEN`} CLAUDE_CONFIG_DIR=${claudeHome(wt)} CODEX_HOME=${codexHome(wt)} CLAUDE_CODE_TMPDIR=${tmpHome(wt)}`, ["claude", "--permission-mode", "bypassPermissions", "--settings", `'${SESSION_SETTINGS}'`, prompt]],
+    launch: (wt, prompt, nono, a = {}) => [`${nono ? "export" : `CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/${CLAUDE_TOKEN}")" || exit 1\nexport CLAUDE_CODE_OAUTH_TOKEN`} CLAUDE_CONFIG_DIR=${claudeHome(wt)} CODEX_HOME=${codexHome(wt)} CLAUDE_CODE_TMPDIR=${tmpHome(wt)}`, ["claude", "--permission-mode", "bypassPermissions", "--settings", `'${SESSION_SETTINGS}'`, ...(a.model ? ["--model", quote(a.model)] : []), ...(a.effort ? ["--effort", quote(a.effort)] : []), prompt]],
     store: (wt) => [claudeHome(wt), "projects"],
     transcripts: (wt) => jsonl(claudeDir(wt)),
     cwd: (o) => o?.cwd,
@@ -141,7 +148,7 @@ export const AGENTS: Record<AgentName, Agent> = {
   },
   codex: {
     // Hook trust is keyed on the config file's path, so every fresh CODEX_HOME would skip the hooks tender seeds from the template.
-    launch: (wt, prompt, nono) => [`export CODEX_HOME=${codexHome(wt)}${nono ? ` CLAUDE_CONFIG_DIR=${claudeHome(wt)} CLAUDE_CODE_TMPDIR=${tmpHome(wt)}` : ""}`, ["codex", ...(nono ? ["--no-daemon"] : []), "--dangerously-bypass-hook-trust", "--sandbox", "danger-full-access", "--ask-for-approval", "never", "-C", wt, prompt]],
+    launch: (wt, prompt, nono, a = {}) => [`export CODEX_HOME=${codexHome(wt)}${nono ? ` CLAUDE_CONFIG_DIR=${claudeHome(wt)} CLAUDE_CODE_TMPDIR=${tmpHome(wt)}` : ""}`, ["codex", ...(nono ? ["--no-daemon"] : []), "--dangerously-bypass-hook-trust", "--sandbox", "danger-full-access", "--ask-for-approval", "never", ...(a.model ? ["-m", quote(a.model)] : []), ...(a.effort ? ["-c", quote(`model_reasoning_effort="${a.effort}"`)] : []), "-C", wt, prompt]],
     store: (wt) => [codexHome(wt), "sessions"],
     transcripts: (wt) => jsonl(join(codexHome(wt), "sessions"), true),
     cwd: (o) => o?.type === "session_meta" && o.payload?.cwd,

@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { FEEDBACK_POINTER } from "../src/session/feedback";
 import { pass } from "../src/pass";
 import type { State } from "../src/session/state";
-import { config, fakeIo, fakeTracker, root, ticket, useTempRoot, windowsOut, worktree } from "./helpers";
+import { configCache } from "../src/config/repo-config";
+import { config, fakeIo, fakeTracker, repoFiles, root, ticket, useTempRoot, windowsOut, worktree } from "./helpers";
 
 useTempRoot();
 
@@ -13,7 +14,7 @@ const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
 const fail = { __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "FAILURE", detailsUrl: "https://github.com/acme/web/actions/runs/42/job/1" };
 const okCheck = { __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "SUCCESS" };
 
-function setup(o: { agent?: string; waiter?: boolean; authors?: string[]; open?: string[] } = {}) {
+function setup(o: { agent?: string; waiter?: boolean; authors?: string[]; open?: string[]; feedback?: object } = {}) {
   worktree("gh-1");
   writeFileSync(join(root, "acme/web/gh-1.agent"), o.agent ?? "codex");
   mkdirSync(join(root, "acme/web/gh-1/.tender/run"), { recursive: true });
@@ -31,7 +32,7 @@ function setup(o: { agent?: string; waiter?: boolean; authors?: string[]; open?:
     : a[0] === "sh" ? { out: log.split("\n").slice(-80).join("\n") }
     : a[0] === "systemctl" && a[2] === "show" ? { out: "/app.slice/s.scope\n" }
     : a[0] === "pgrep" ? { code: o.waiter ? 0 : 1 } : undefined);
-  const cfg = config({ repos: [{ name: "acme/web", path: join(root, "src-web"), feedbackAuthors: o.authors ?? ["op"] }] });
+  const cfg = config({ repos: [{ name: "acme/web", path: join(root, "src-web"), feedbackAuthors: o.authors ?? ["op"], feedback: o.feedback }] });
   let state: State = "idle";
   return {
     ...f, t, pr, cmds, logs,
@@ -175,6 +176,21 @@ test("feedback: the round limit parks the ticket with one comment; removing the 
   expect(d.keys()).toHaveLength(3);
   expect(d.file()).toContain('<failed-check name="test"');
   expect(d.cursor()).toEqual({ seenAt: 0, ciShas: ["a"], rounds: 1 });
+});
+
+test("feedback: the round limit is the repo's feedback.maxRounds with autoMerge off, else the host's when unset or the repo config is invalid", async () => {
+  for (const [yaml, host, limit] of [["feedback:\n  maxRounds: 1\n", undefined, 1], ["feedback:\n  maxRounds: 1\n", { maxRounds: 5 }, 1], ["", { maxRounds: 2 }, 2], ["agent: gpt\n", { maxRounds: 2 }, 2]] as const) {
+    configCache.clear();
+    repoFiles["config.yaml"] = yaml;
+    const d = setup({ authors: [], feedback: host });
+    d.pr.statusCheckRollup = [fail];
+    writeFileSync(join(root, "acme/web/gh-1.feedback"), JSON.stringify({ seenAt: 0, rounds: limit - 1 }));
+    await d.run();
+    expect(d.cursor().rounds).toBe(limit);
+    d.pr.headRefOid = "b";
+    await d.run();
+    expect(d.calls).toEqual(["park gh-1", `comment gh-1 PR feedback stopped after ${limit} rounds on ${URL}: a human is needed`]);
+  }
 });
 
 test("feedback: a failed park leaves the cursor uncapped and retries next poll", async () => {

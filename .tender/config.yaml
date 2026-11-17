@@ -4,9 +4,9 @@ planStep: Load the `orchestration` skill and use it to plan and implement the ti
 autoMerge: shadow
 criticalPaths:
   - tender.ts
-  - src/merge.ts
-  - src/repo-config.ts
-  - src/config.ts
+  - src/review/merge.ts
+  - src/config/repo-config.ts
+  - src/config/config.ts
   - prompts/**
   - scripts/**
   - systemd/**

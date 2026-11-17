@@ -42,7 +42,7 @@ export const CRITICAL_PATHS = [
 export const TEST_PATHS = ["**/*.test.*", "**/*.spec.*", "**/tests/**", "**/test/**", "**/__tests__/**", "**/e2e/**", "**/spec/**", "**/test_*.py", "**/*_test.go", "**/*_test.py"];
 
 // gitignore-style: a pattern without "/" matches the file name at any depth.
-const globRe = (g: string) =>
+export const globRe = (g: string) =>
   new RegExp(`^${g.includes("/") ? "" : "(?:.*/)?"}${g.replace(/\*\*\/|\*\*|\*|\?|[.+^${}()|[\]\\]/g, (m) => ({ "**/": "(?:.*/)?", "**": ".*", "*": "[^/]*", "?": "[^/]" })[m] ?? `\\${m}`)}$`, "is");
 export const isCritical = (path: string, extra: string[] = []) => [...CRITICAL_PATHS, ...extra].some((g) => globRe(g).test(path));
 export const isTest = (path: string, extra: string[] = []) => [...TEST_PATHS, ...extra].some((g) => globRe(g).test(path));

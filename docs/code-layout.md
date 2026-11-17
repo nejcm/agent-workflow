@@ -1,6 +1,6 @@
 # Code layout
 
-- `tender.ts`: CLI entry (`run`, `once`, `status`, `watch`, `tail`, `open`, `resume`, `intake`, `prs`, `check`).
+- `tender.ts`: CLI entry (`run`, `once`, `status`, `watch`, `tail`, `open`, `resume`, `intake`, `prs`, `stats`, `check`).
 
 ## `src/`
 
@@ -11,6 +11,7 @@ The poll, intake and the helpers every folder shares.
 - `src/intake.ts`: `intake`: the script protocol, the sandboxed run in a fresh clone, dedupe, filing, open-ticket updates and recheck.
 - `src/judge.ts`: the intake judge: ticket selection, the prompt, the sandboxed headless Claude or Codex call, verdict validation, the comment and the labelling decision.
 - `src/prs.ts`: `prs`: open-PR listing, classes, the orphan check and close, the report and digest issue.
+- `src/stats.ts`: `stats`: merged and reverted agent PRs per trust path from GitHub, shadow, judge and recheck agreement from events, the recommendation thresholds and the table.
 - `src/db.ts`: `tender.db` (bun:sqlite, WAL): ordered SQL migrations and the best-effort event recorder.
 - `src/pass.ts`: one poll: cleanup, start ready tickets by priority, reconcile.
 - `src/util.ts`: logged/dry-run-aware command and file helpers, the pinned `.tender/run` reader, control-char stripping.

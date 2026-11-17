@@ -48,7 +48,7 @@ function setup(script: (argv: string[]) => { code?: number; out?: string; err?: 
   const { comment, reopen } = tr;
   tr.comment = async (t, b) => (once("comment"), comment(t, b));
   tr.comments = async (t) => calls.filter((c) => c.startsWith(`comment ${t.id} `)).map((c, i) => ({ id: String(i), body: c.slice(`comment ${t.id} `.length), createdAt: "" }));
-  tr.reopen = async (t) => (once("reopen"), await reopen(t), void done.splice(0, done.length, ...done.filter((d) => d !== t.id)));
+  tr.reopen = async (t) => (once("reopen"), await reopen(t), done.splice(0, done.length, ...done.filter((d) => d !== t.id)), once("reopen-landed"));
   const cfg = config({ intake: { enabled: ["acme/web:errs"], host: "box" }, ...over });
   return { io, logs, calls, runs, events, done, fail, cfg, go: (now = T0, only?: string) => intake(cfg, io, TENDER_DIR, { now, only, tracker: () => tr }) };
 }
@@ -135,6 +135,7 @@ test("args reach the script as argv, unexpanded, on collect and before --recheck
   const tail = (argv: string[]) => argv.slice(argv.findIndex((x) => x.endsWith("/errs.sh")));
   expect(tail(s.runs[0]!.argv).slice(1)).toEqual(["--org", "a b; $(x)"]);
   expect(tail(s.runs.find((r) => r.argv.includes("--recheck"))!.argv).slice(1)).toEqual(["--org", "a b; $(x)", "--recheck", "a"]);
+  expect(s.events.filter((e) => e[0] === "recheck").map((e) => (e[3] as any).state)).toEqual(["gone"]);
 });
 
 test("dedupe: intake_seen alone stops a refile, and every gates the timer", async () => {
@@ -190,6 +191,7 @@ test("recheck: a Done ticket still seen after recheckAfter is commented and reop
   await s.go(T0 + 60 * HOUR);
   await s.go(T0 + 90 * HOUR);
   expect(sideCalls(s)).toEqual([RECHECKED, "reopen gh-101"]);
+  expect(s.events.filter((e) => e[0] === "recheck")).toEqual([["recheck", "acme/web", "gh-101", { rule: "acme/web:errs", key: "a", state: "still" }, "acme/web:errs:a"]]);
   expect(seen()[0]!.state).toBe("closed");
   expect(s.calls.filter((c) => c.startsWith("intake "))).toHaveLength(1);
 });
@@ -208,12 +210,43 @@ test("recheck: a failed comment or reopen is retried next run, never doubled; no
     expect(s.logs.some((l) => l.includes(`${what} failed`))).toBe(true);
     expect(s.calls.some((c) => c.startsWith("reopen "))).toBe(false);
     expect(seen()[0]!.state).toBe("reopening");
+    expect(s.events.some((e) => e[0] === "recheck")).toBe(false);
     await s.go(T0 + 29 * HOUR);
     await s.go(T0 + 31 * HOUR);
     expect(sideCalls(s).map((c) => (c.startsWith("comment ") ? c.endsWith("\n\ntender-intake-recheck: acme/web:errs:a") : c)).sort()).toEqual(["reopen gh-101", true]);
     expect(seen()[0]!.state).toBe("reopened");
+    expect(s.events.filter((e) => e[0] === "recheck").map((e) => (e[3] as any).state)).toEqual(["still"]);
     dropDb();
   }
+});
+
+test("recheck: a reopen that lands but reports failure is counted once, on the next sweep", async () => {
+  const s = setup(STILL, { done: ["gh-101"] });
+  await s.go();
+  await s.go(T0 + 2 * HOUR);
+  s.fail.add("reopen-landed");
+  await s.go(T0 + 27 * HOUR);
+  expect(seen()[0]!.state).toBe("reopening");
+  expect(s.events.some((e) => e[0] === "recheck")).toBe(false);
+  await s.go(T0 + 29 * HOUR);
+  await s.go(T0 + 31 * HOUR);
+  expect(seen()[0]!.state).toBe("reopened");
+  expect(sideCalls(s)).toEqual([RECHECKED, "reopen gh-101"]);
+  expect(s.events.filter((e) => e[0] === "recheck").map((e) => (e[3] as any).state)).toEqual(["still"]);
+});
+
+test("recheck: a human reopen after a failed comment is not counted as tender's", async () => {
+  const s = setup(STILL, { done: ["gh-101"] });
+  await s.go();
+  await s.go(T0 + 2 * HOUR);
+  s.fail.add("comment");
+  await s.go(T0 + 27 * HOUR);
+  expect(seen()[0]!.state).toBe("reopening");
+  s.done.length = 0;
+  await s.go(T0 + 29 * HOUR);
+  expect(seen()[0]!.state).toBe("reopened");
+  expect(s.calls.some((c) => c.startsWith("reopen "))).toBe(false);
+  expect(s.events.some((e) => e[0] === "recheck")).toBe(false);
 });
 
 test("recheck: with the db lost after the marked comment but before the reopen, the ticket is never reopened twice", async () => {
@@ -241,6 +274,7 @@ test("recheck: a pending reopen is dropped once recheck is turned off or the tic
     await s.go(T0 + 29 * HOUR);
     expect(sideCalls(s)).toEqual([RECHECKED]);
     expect(seen()[0]!.state).toBe("closed");
+    expect(s.events.some((e) => e[0] === "recheck")).toBe(false);
     dropDb();
   }
 });

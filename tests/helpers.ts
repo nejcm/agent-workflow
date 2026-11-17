@@ -57,7 +57,7 @@ export const config = (over: object = {}): Config => parseConfig(raw(over), TEND
 export const web = (c: Config) => c.repos["acme/web"]!;
 export const ticket = (n: number, repo = "acme/web"): Ticket => ({ id: `gh-${n}`, ref: String(n), title: `Fix thing ${n}`, body: "body; rm -rf ~ $(whoami)", url: `https://x/${n}`, repo });
 
-export function fakeTracker(s: { ready?: Ticket[]; inProgress?: Ticket[]; inReview?: Ticket[]; done?: string[]; canceled?: string[]; globalIds?: boolean; readyToMerge?: boolean; markers?: Record<string, string> }) {
+export function fakeTracker(s: { ready?: Ticket[]; inProgress?: Ticket[]; inReview?: Ticket[]; done?: string[]; canceled?: string[]; globalIds?: boolean; readyToMerge?: boolean; markers?: Record<string, string>; views?: Record<string, { title?: string; body?: string; labels?: string[]; open?: boolean }> }) {
   const calls: string[] = [];
   const subs: { ref: string; title: string }[] = [];
   const tr: Tracker = {
@@ -95,6 +95,8 @@ export function fakeTracker(s: { ready?: Ticket[]; inProgress?: Ticket[]; inRevi
     fileTicket: async (target, title, body, labels) => (calls.push(`intake ${target.repo} ${title} [${labels}] | ${body}`), `https://github.com/${target.repo}/issues/${100 + calls.length}`),
     findMarker: async (_target, m) => s.markers?.[m],
     reopen: async (t) => void calls.push(`reopen ${t.id}`),
+    view: async (t) => ({ title: `Ticket ${t.id}`, body: "body", labels: [], open: true, ...s.views?.[t.id] }),
+    addLabels: async (t, labels) => void calls.push(`label ${t.id} [${labels}]`),
     listPhases: async () => subs,
     setPhase: async (_t, ref, st) => void calls.push(`set ${ref} ${st}`),
   };

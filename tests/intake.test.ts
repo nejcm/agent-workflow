@@ -479,3 +479,11 @@ test("host config: intake names repos in repos and one host", () => {
   expect(() => config({ intake: { enabled: [] } })).toThrow("intake.host");
   expect(config().intake).toBeUndefined();
 });
+
+test("judge: runs after filing on every intake run, not only when the rule is due", async () => {
+  const s = setup(() => ({ out: line("a") }), {}, { judge: { agent: "claude", model: "sonnet" } });
+  await s.go();
+  await s.go(T0 + 15 * 60_000);
+  expect(s.logs.filter((l) => l.startsWith("judge acme/web:errs gh-101: failed, retried next run"))).toHaveLength(2);
+  expect(s.calls.filter((c) => c.startsWith("intake "))).toHaveLength(1);
+});

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { DB_FILE, memoryDb, openDb } from "./db";
 import { sanitized, unmention } from "./review/findings";
 import { nonoRun } from "./session/launcher";
+import { judgeRule } from "./judge";
 import { makeTracker } from "./pass";
 import { DURATION, loadSession, securityFact } from "./config/repo-config";
 import type { Config, IntakeRule, Io, Session, Source, Target, Ticket, Tracker } from "./types";
@@ -43,6 +44,9 @@ export const ms = (d: string) => {
   const [, n, unit] = DURATION.exec(d)!;
   return Number(n) * { m: 60_000, h: 3_600_000, d: DAY }[unit as "m" | "h" | "d"];
 };
+
+/** The ready label, plus `host:<host>` unless this is the default host. */
+export const readyLabels = (cfg: Config, s: Source) => [s.readyLabel, ...(cfg.defaultHost ? [] : [`host:${cfg.host}`])];
 
 export const marker = (rule: string, key: string) => `tender-intake: ${rule}:${key}`;
 
@@ -177,14 +181,15 @@ export async function intake(cfg: Config, io: Io, tenderDir: string, { only, now
     // A dry run gets its own clones, so it cannot disturb a live run.
     work = io.dry ? mkdtempSync(join(tmpdir(), "tender-intake-dry-")) : join(cfg.workspaceRoot, ".intake");
     const vis = new Map<string, string>();
-    for (const id of ids) await runRule(cfg, io, db, work, id, tenderDir, only !== undefined, now, tracker, vis).catch((e) => io.log(`intake ${id}: failed: ${e.message}`));
+    const budget = { left: cfg.judge?.maxPerRun ?? 0 };
+    for (const id of ids) await runRule(cfg, io, db, work, id, tenderDir, only !== undefined, now, tracker, vis, budget).catch((e) => io.log(`intake ${id}: failed: ${e.message}`));
   } finally {
     if (io.dry && work) rmSync(work, { recursive: true, force: true });
     db.close();
   }
 }
 
-async function runRule(cfg: Config, io: Io, db: Database, work: string, id: string, tenderDir: string, force: boolean, now: number, tracker: (s: Source) => Tracker, vis: Map<string, string>) {
+async function runRule(cfg: Config, io: Io, db: Database, work: string, id: string, tenderDir: string, force: boolean, now: number, tracker: (s: Source) => Tracker, vis: Map<string, string>, budget: { left: number }) {
   const host = cfg.repos[id.slice(0, id.lastIndexOf(":"))]!;
   const name = id.slice(id.lastIndexOf(":") + 1);
   const r = await loadSession(io, host, SLOW_SECS);
@@ -192,7 +197,14 @@ async function runRule(cfg: Config, io: Io, db: Database, work: string, id: stri
   const rule = r.intake.find((x) => x.name === name);
   if (!rule) return io.log(`intake ${id}: no rule ${name} in .tender/config.yaml on ${r.baseBranch}`);
   const ran = db.query<{ ran_at: string }, [string]>("SELECT ran_at FROM intake_runs WHERE rule = ?").get(id)?.ran_at;
-  if (!force && ran && now - Date.parse(ran) < ms(rule.every) - SLACK_MS) return;
+  if (force || !ran || now - Date.parse(ran) >= ms(rule.every) - SLACK_MS) await fileRule(cfg, io, db, work, id, tenderDir, now, tracker, vis, r, rule).catch((e) => io.log(`intake ${id}: failed: ${e.message}`));
+  // Every run, not only when the rule is due, so tickets the cap or a failed call left over wait 15 minutes, not `every`.
+  if (!cfg.judge) return;
+  const s = intakeSource(cfg, r);
+  await judgeRule(cfg, io, db, work, tenderDir, id, r, rule, s, tracker(s), budget);
+}
+
+async function fileRule(cfg: Config, io: Io, db: Database, work: string, id: string, tenderDir: string, now: number, tracker: (s: Source) => Tracker, vis: Map<string, string>, r: Session, rule: IntakeRule) {
   const save: Save = (sql, ...params) => void (io.dry || db.run(sql, params));
   // Marked before running: a failing script waits its interval like a working one.
   save("INSERT INTO intake_runs (rule, ran_at) VALUES (?, ?) ON CONFLICT (rule) DO UPDATE SET ran_at = excluded.ran_at", id, new Date(now).toISOString());
@@ -328,7 +340,7 @@ async function collect(cfg: Config, io: Io, db: Database, save: Save, tr: Tracke
     const text = sanitized(f.title, f.body);
     const title = defang(text.title);
     const body = head + defang(text.body).slice(0, MAX_BODY - head.length - foot.length) + foot;
-    const labels = [...rule.labels, ...(autoLabels(rule.autoLabel, f.facts) ? [s.readyLabel, ...(cfg.defaultHost ? [] : [`host:${cfg.host}`])] : [])];
+    const labels = [...rule.labels, ...(autoLabels(rule.autoLabel, f.facts) ? readyLabels(cfg, s) : [])];
     upsert(null, "filing");
     const url = await tr.fileTicket(target, title, body, labels);
     if (io.dry) continue;

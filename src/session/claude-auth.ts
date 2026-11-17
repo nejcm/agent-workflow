@@ -26,11 +26,13 @@ export function hostExe(name: string, path: string | null | undefined, writable:
   return r;
 }
 
-/** The real Claude executable: `mise which` when mise exists, else PATH. */
-export async function findClaude(run: Run, writable: string[], which: (cmd: string) => string | null = Bun.which) {
-  const viaMise = which("mise") ? await run(["mise", "which", "claude"], TENDER_DIR) : undefined;
-  return hostExe("claude", viaMise?.code === 0 ? viaMise.out.trim() : which("claude"), writable);
+/** The real executable for `name`: `mise which` when mise exists, else PATH. */
+export async function findExe(name: string, run: Run, writable: string[], which: (cmd: string) => string | null = Bun.which) {
+  const viaMise = which("mise") ? await run(["mise", "which", name], TENDER_DIR) : undefined;
+  return hostExe(name, viaMise?.code === 0 ? viaMise.out.trim() : which(name), writable);
 }
+
+export const findClaude = (run: Run, writable: string[], which?: (cmd: string) => string | null) => findExe("claude", run, writable, which);
 
 export const findBun = (writable: string[]) => hostExe("bun", process.execPath, writable);
 

@@ -8,9 +8,10 @@ import { PR_URL } from "../github";
 import { type Row, reviewLimit, snapshot } from "./status";
 import { follower } from "./tail";
 import { clean } from "../util";
+import { ticketTree, treeLayout, treeMove, treeScreen, type TreeSelection } from "./tree";
 import type { Config, Io } from "../types";
 
-export type Action = "down" | "up" | "first" | "last" | "focus" | "tab" | "back" | "attach" | "open" | "refresh" | "help" | "quit";
+export type Action = "down" | "up" | "left" | "right" | "first" | "last" | "focus" | "tab" | "back" | "attach" | "open" | "refresh" | "help" | "quit" | "tree";
 export interface View {
   sel: number;
   pane: Pane;
@@ -18,6 +19,7 @@ export interface View {
   help: boolean;
   /** Transcript rows scrolled up from the end; 0 follows new events. */
   back: number;
+  tree?: TreeSelection;
 }
 
 const KEYS = new Map<string, Action>([
@@ -25,6 +27,9 @@ const KEYS = new Map<string, Action>([
   ["down", "down"],
   ["k", "up"],
   ["up", "up"],
+  ["left", "left"],
+  ["right", "right"],
+  ["t", "tree"],
   ["return", "focus"],
   ["linefeed", "focus"],
   ["tab", "tab"],
@@ -43,9 +48,22 @@ export function action(k: { name: string; shift?: boolean; ctrl?: boolean; meta?
   return KEYS.get(k.name);
 }
 
-/** The view after `a` on `n` rows; movement scrolls the transcript (up to `maxBack`) while it has focus. */
-export function reduce(v: View, a: Action, n: number, maxBack = Infinity): View {
+/** Applies `a` on `n` tickets, laid-out `cards`, or transcript scroll bounded by `maxBack`. */
+export function reduce(v: View, a: Action, n: number, maxBack = Infinity, cards: ReturnType<typeof treeLayout>["cards"] = []): View {
   const last = Math.max(0, n - 1);
+  if (a === "tree") return { ...v, tree: v.tree ? undefined : { sel: 0, detail: false }, pane: "list", max: false, back: 0 };
+  if (v.tree) {
+    const t = v.tree;
+    const moveNode = (sel: number) => ({ ...v, tree: { ...t, sel: Math.max(0, Math.min(cards.length - 1, sel)) } });
+    if (a === "down" || a === "right" || a === "up" || a === "left") return moveNode(treeMove(cards, t.sel, a));
+    if (a === "first") return moveNode(0);
+    if (a === "last") return moveNode(cards.length - 1);
+    if (a === "focus") return { ...v, tree: { ...t, detail: !t.detail } };
+    if (a === "tab") return { ...v, sel: n ? (v.sel + 1) % n : 0, tree: { sel: 0, detail: false } };
+    if (a === "back") return v.help ? { ...v, help: false } : { ...v, tree: t.detail ? { ...t, detail: false } : undefined };
+    if (a === "help") return { ...v, help: !v.help };
+    return v;
+  }
   const move = (i: number) => {
     const sel = Math.max(0, Math.min(last, i));
     return sel === v.sel ? v : { ...v, sel, back: 0 };
@@ -200,13 +218,8 @@ export async function dashboard(cfg: Config, io: Io, interval: number) {
     if (memo.size > 4 * MAX_TAIL) memo.clear();
     const { width, height } = r;
     const sel = rs[view.sel];
-    const out = screen(
-      { ...view, rs, host: cfg.host, at, every: interval, note, msg, events: tail.lines, empty: tail.path ? "no events yet" : "no transcript yet", ctx: { now: Date.now(), home, wt: sel ? join(repoDir(cfg, sel.repo), sel.id) : "" } },
-      width,
-      height,
-      P,
-      memo,
-    );
+    const model = { ...view, rs, host: cfg.host, at, every: interval, note, msg, events: tail.lines, empty: tail.path ? "no events yet" : "no transcript yet", ctx: { now: Date.now(), home, wt: sel ? join(repoDir(cfg, sel.repo), sel.id) : "" } };
+    const out = view.tree ? treeScreen(model, width, height, P, view.tree) : screen(model, width, height, P, memo);
     maxBack = out.maxBack;
     while (pool.length < out.lines.length) {
       const t = new TextRenderable(r, { id: `line-${pool.length}`, content: "", height: 1, flexShrink: 0, wrapMode: "none", fg: RGBA.defaultForeground() });
@@ -230,7 +243,9 @@ export async function dashboard(cfg: Config, io: Io, interval: number) {
       const next = await snapshot(cfg, io);
       const prev = key(rs[view.sel]);
       rs = sortRows(next);
-      view = { ...view, sel: reselect(prev, rs, view.sel) };
+      const sel = reselect(prev, rs, view.sel);
+      const tree = view.tree ? { ...view.tree, sel: prev === key(rs[sel]) ? Math.min(view.tree.sel, rs[sel]?.phases?.items.length ?? 0) : 0 } : undefined;
+      view = { ...view, sel, tree };
       at = new Date().toTimeString().slice(0, 8);
       note = reviewLimit(cfg);
     } catch (e) {
@@ -288,7 +303,9 @@ export async function dashboard(cfg: Config, io: Io, interval: number) {
     if (a === "attach") return void attach();
     if (a === "open") return open();
     if (a === "refresh") return void refresh().then((ran) => ran || say("refresh already running"));
-    view = reduce(view, a, rs.length, maxBack);
+    const row = rs[view.sel];
+    const cards = view.tree && row ? treeLayout(ticketTree(row), r.width).cards : [];
+    view = reduce(view, a, rs.length, maxBack, cards);
     paint();
   });
   r.on("resize", paint);

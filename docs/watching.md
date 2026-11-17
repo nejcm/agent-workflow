@@ -13,16 +13,19 @@ The dashboard has a header (host, a count per state: `◆ waiting` highlighted s
 
 - On a terminal at least 110 columns wide, the ticket list on the left and the selected ticket on the right. Each ticket is a card: state glyph, ID, repo, agent, then a phase progress bar with `done/total`, idle and runtime (one line per ticket when the list is short on rows). Waiting tickets sort first, then question, working, idle, unknown, handoff, orphan, ended, by ID within each; the selection follows the ticket across refreshes. The right side shows the ticket's title row (agent, state and what it is waiting for), runtime, idle, start time, PR (`held` when not auto-merged, `ready` when Ready to merge), branch and worktree, its phases (one bar segment per phase, then a checklist; `+N more` when they don't fit) and below, the live `tail` of its transcript, read incrementally and only for that ticket (wrapped under the message column).
 - Narrower terminals stack the list (one line per ticket), the detail and the transcript; below 50 columns or 14 rows only the list and the transcript's last lines are shown.
+- `t` switches to a tree: the selected ticket/session above its reported phases, with status and phase-completion bars. Cards wrap on narrow terminals; details stay beside or above/below the selected card when space permits, otherwise overlay it. The header counts working and running agent sessions; phases are not additional agents.
 
 Colours are truecolor; `NO_COLOR` (set and non-empty) switches to bold, dim and reverse only. Keys:
 
 | key | |
 |---|---|
-| `j`/`k`, `↓`/`↑` | select; scroll the transcript while it has focus |
-| `g` / `G` | first / last; top / follow while the transcript has focus |
-| `Tab` | move focus between the list and the transcript (the focused pane has the bright border) |
-| `Enter` | maximise the transcript, again to go back |
-| `Esc` | close help, or leave the maximised transcript |
+| `t` | switch list/tree; the list is the default |
+| `j`/`k`, `↓`/`↑` | select; scroll the focused transcript; in the tree, nearest card in the row below/above |
+| `←`/`→` | in the tree, select within the current row |
+| `g` / `G` | first / last ticket or tree card; top / follow in the focused transcript |
+| `Tab` | switch list/transcript focus; in the tree, next ticket (wraps) |
+| `Enter` | maximise/restore the transcript; in the tree, open/close card details |
+| `Esc` | close help, then tree details, then return to the list; leave a maximised transcript |
 | `a` | show the ticket's tmux window: outside tmux the dashboard suspends and runs `tmux attach` (detach with `Ctrl-b d` to come back); inside tmux it runs `tmux switch-client` so your client switches to the `tender` session without nesting (switch back with `Ctrl-b (`/`)` or `L`). Needs a `running` window. |
 | `o` | open the PR with `xdg-open` (only `https://github.com/<owner>/<repo>/pull/<n>` links) |
 | `r` | refresh now |

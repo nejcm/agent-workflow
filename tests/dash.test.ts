@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { action, attachCmd, exclusive, installed, openable, reduce, reselect, type View, watch } from "../src/ui/dash";
 import { statusRow as row } from "./helpers";
+import { ticketTree, treeLayout } from "../src/ui/tree";
 
 const v = (over: Partial<View> = {}): View => ({ sel: 0, pane: "list", max: false, help: false, back: 0, ...over });
 
@@ -13,6 +14,27 @@ test("keys map to actions; unknown, ctrl and meta combos do nothing", () => {
     "down", "down", "up", "up", "first", "last", "focus", "tab", "back", "attach", "open", "refresh", "help", "quit", "quit",
   ]);
   expect([k("x"), k("toString"), k("__proto__"), k("j", { ctrl: true }), k("q", { meta: true })]).toEqual([undefined, undefined, undefined, undefined, undefined]);
+  expect([k("t"), k("left"), k("right")]).toEqual(["tree", "left", "right"]);
+});
+
+test("tree mode selects cards, toggles detail, cycles tickets and restores the default view", () => {
+  const tree = reduce(v({ pane: "tail", max: true }), "tree", 3);
+  const cards = treeLayout(ticketTree(row()), 120).cards;
+  expect(tree).toEqual(v({ tree: { sel: 0, detail: false } }));
+  const moved = reduce(tree, "down", 3, 0, cards);
+  expect(moved.tree?.sel).toBe(2);
+  expect(reduce(moved, "left", 3, 0, cards).tree?.sel).toBe(1);
+  expect(reduce(tree, "up", 3, 0, cards).tree?.sel).toBe(0);
+  expect(reduce(moved, "last", 3, 0, cards).tree?.sel).toBe(3);
+  expect(reduce({ ...tree, tree: { sel: 3, detail: false } }, "down", 3, 0, cards).tree?.sel).toBe(3);
+  const detail = reduce(moved, "focus", 3);
+  expect(detail.tree).toEqual({ sel: 2, detail: true });
+  expect(reduce(detail, "focus", 3)).toEqual(moved);
+  expect(reduce(detail, "back", 3)).toEqual(moved);
+  expect(reduce({ ...detail, help: true }, "back", 3)).toEqual(detail);
+  expect(reduce(detail, "tab", 3)).toEqual(v({ sel: 1, tree: { sel: 0, detail: false } }));
+  expect(reduce({ ...tree, sel: 2 }, "tab", 3).sel).toBe(0);
+  expect(reduce(tree, "tree", 3)).toEqual(v({ tree: undefined }));
 });
 
 test("reduce clamps selection, resets the scroll on a move, and toggles panes, maximise and help", () => {
@@ -94,7 +116,7 @@ test("watch picks the dashboard only on a TTY without --plain, and falls back wh
   expect(calls).toEqual(["dash", "plain", "plain", "dash", "tender: dashboard unavailable (no native lib), using plain output", "plain"]);
 });
 
-// One real run in a throwaway tmux server: j, then q, must exit 0 with the alt screen off and the tty back in cooked mode.
+// A real tmux PTY exercises both views and restores the terminal on quit and SIGTERM.
 test.skipIf(!Bun.which("tmux"))("dashboard starts, moves and quits cleanly in a tmux pty", async () => {
   const dir = mkdtempSync(join(tmpdir(), "tenderd-"));
   const repo = join(import.meta.dir, "..");
@@ -107,7 +129,11 @@ test.skipIf(!Bun.which("tmux"))("dashboard starts, moves and quits cleanly in a 
     }
   };
   try {
-    for (const id of ["PER-1", "PER-2"]) mkdirSync(join(dir, "ws/acme/web", id), { recursive: true });
+    for (const id of ["PER-1", "PER-2"]) {
+      const run = join(dir, "ws/acme/web", id, ".tender/run");
+      mkdirSync(run, { recursive: true });
+      writeFileSync(join(run, "phases.json"), JSON.stringify([{ key: "verify", title: "Verify behavior", status: "in-progress" }, { key: "review", title: "Review result", status: "todo" }]));
+    }
     mkdirSync(join(dir, "bin"));
     writeFileSync(join(dir, "tender.json"), JSON.stringify({ host: "box", workspaceRoot: join(dir, "ws"), tmuxSession: "tendertest-none", defaults: { sandbox: "none" }, repos: ["acme/web"], sources: [{ name: "gh", tracker: "github" }] }));
     const cmd = `NO_COLOR= HOME=${dir} PATH=${dir}/bin:$PATH ${process.execPath} ${join(repo, "tender.ts")} watch --config ${dir}/tender.json; echo EXIT=$? > ${dir}/out; stty -a >> ${dir}/out; sleep 30`;
@@ -123,6 +149,22 @@ test.skipIf(!Bun.which("tmux"))("dashboard starts, moves and quits cleanly in a 
     tmux("send-keys", "j");
     expect(await until(() => /▌. PER-2\s+acme\/web/.test(pane()))).toBe(true);
     expect(pane()).toMatch(/│ . PER-1\s+acme\/web/);
+    tmux("send-keys", "t");
+    expect(await until(() => pane().includes("Tab ticket"))).toBe(true);
+    expect(pane()).toContain("PER-2");
+    expect(pane()).toContain("Verify behavior");
+    tmux("send-keys", "Down", "Left", "Enter");
+    expect(await until(() => pane().includes("phase · verify · Working"))).toBe(true);
+    expect(pane()).toContain("[Enter Close]");
+    tmux("send-keys", "Right");
+    expect(await until(() => pane().includes("phase · review · Idle"))).toBe(true);
+    tmux("send-keys", "Left");
+    expect(await until(() => pane().includes("phase · verify · Working"))).toBe(true);
+    tmux("send-keys", "Enter", "Tab");
+    expect(await until(() => pane().includes("PER-1 · acme/web"))).toBe(true);
+    expect(pane()).not.toContain("[Enter Close]");
+    tmux("send-keys", "t");
+    expect(await until(() => /▌. PER-1\s+acme\/web/.test(pane()))).toBe(true);
     const restored = async (status: string) => {
       expect(await until(() => out().includes("icanon"))).toBe(true);
       expect(out()).toStartWith(status);

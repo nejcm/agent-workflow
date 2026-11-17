@@ -1,6 +1,6 @@
 # Intake
 
-Intake turns signals (errors, lint debt, slow queries) into tracker tickets. An intake rule is a script in the repo that prints JSON lines; `tender intake` runs it in a sandbox, dedupes, sanitizes and files what it prints. It never starts a session itself: a filed ticket is worked like any other once it has the `agent` label.
+Intake turns signals (errors, slow queries) into tracker tickets. An intake rule is a script in the repo that prints JSON lines; `tender intake` runs it in a sandbox, dedupes, sanitizes and files what it prints. It never starts a session itself: a filed ticket is worked like any other once it has the `agent` label.
 
 ## Turning a rule on
 
@@ -43,9 +43,6 @@ Example scripts live in tender's [`intake/`](../intake) dir; copy one into the r
 - `sentry.ts`: one ticket per unresolved Sentry issue in a project and environment, most frequent first, keyed `sentry:<issue id>`. See [Sentry](#sentry).
 - `posthog-errors.ts`: one ticket per active PostHog error tracking issue, most frequent first, keyed `posthog:<issue id>`. See [PostHog](#posthog).
 - `pg-lint.ts` and `pg-slow.ts`: one ticket per Supabase database lint, and one per query that got slow since the last run. See [Postgres and Supabase](#postgres-and-supabase).
-- `lint-debt.ts`: existing violations of one lint rule, a batch of files per ticket. See [Lint debt](#lint-debt).
-
-The plan named a shell script for lint debt; it is TypeScript like the others, so its parsing and batching are tested.
 
 ### Sentry
 
@@ -190,40 +187,6 @@ intake:
 - **Recheck:** for a lint, `still` while splinter still reports that `cache_key`. For a slow query, `still` while it is over both thresholds in the window from the last collect's snapshot to now; that window must start after the merge (`TENDER_DONE_AT`), so a recheck before the first collect after the merge, across a stats reset or a changed `--user` list, after the query's counters went down, while it is still over `--min-mean-ms` on fewer calls than `--min-calls`, or after it left `pg_stat_statements` since that snapshot fails and is retried next run; a query in neither snapshot had no calls, so it is `gone`. The window is one `every`, so give it enough traffic, and make `recheckAfter` cover the deploy: a merged migration or query change that has not reached the database still shows as `still`.
 - **Private:** both example rules set `private: true`, since tickets show schema and query shapes; see [Filing](#filing).
 
-### Lint debt
-
-Runs the lint command given after `--` in the rule's `args` (never through a shell), reads every line shaped `path:line[:col]: …`, and files the failing files in batches of `--batch`, in sorted order. Use it after a rule (often a [guardrail](#guardrails)) lands, to clear the existing copies agents would otherwise imitate. The command must report only the one rule, so select it there (`--select`, `--rule`, a dedicated config).
-
-| Flag | Default | |
-|------|---------|--|
-| `--rule` | required | the rule's name, for the key, title and facts |
-| `--batch` | 5 | files per ticket, 1–50 |
-| `--install` | off | run `bun install --frozen-lockfile --ignore-scripts` first (cache in `TMPDIR`); needs `registry.npmjs.org` in `network` and a `bun.lock` |
-
-Formats that parse: ESLint `--format unix` (built in up to ESLint 8; ESLint 9 needs the `eslint-formatter-unix` package in `devDependencies`; absolute paths are made relative to the clone), Ruff `--output-format concise`, ShellCheck `-f gcc`, mypy's default output. Other lines (summaries, blanks) and paths outside the clone are ignored. Exit 0 and 1 are a run (linters exit 1 when they report); 1 with nothing parsed, any other code, or a missing command fails the run.
-
-- **Sandbox:** the clone is a fresh checkout of the base branch with no `node_modules` or virtualenv and, by default, no network. A linter that is a system binary readable in the sandbox (`/usr/bin`, `/usr/local/bin`; not `~/.local/bin`) runs as is. A Node linter whose config imports plugins needs `--install` and the registry in `network`; install plus lint must fit the 5-minute limit.
-- **Keys:** `lint-debt:<rule>:<hash of the batch's file list>`. The batches are kept in `TENDER_STATE`, so a batch keeps its key while any of its files still fails, and newly failing files form new batches instead of shifting the old ones. Facts: `rule`, `files`, `violations`.
-- **Recheck:** runs the whole command again and looks at the batch's files: `gone` when none fails, `still` (naming them) otherwise. A key missing from the state file, or a failed lint, cannot be decided: non-zero exit, retried next run. A file that fails again after its batch went clean is reported only by that one recheck.
-- **Auto-labeling:** the lint rule is the proof, so this is the safest kind to label automatically, with `autoLabel: [{ rule: <name> }]` as below.
-
-```yaml
-intake:
-  - name: lint-debt-floating
-    run: .tender/intake/lint-debt.ts
-    args: [--rule, no-floating-promises, --batch, "5", --install, --, bun, node_modules/eslint/bin/eslint.js, --format, unix, --config, eslint.debt.config.js, src]
-    every: 1d
-    maxPerRun: 2
-    secrets: []
-    network: [registry.npmjs.org]
-    labels: [lint-debt]
-    autoLabel: [{ rule: no-floating-promises }]
-    recheck: true
-    recheckAfter: 1h
-```
-
-Here `eslint.debt.config.js` turns on only that rule, and ESLint runs under Bun, which the sandbox can always read (a Node from mise or nvm is not). A system linter needs no install and no network: `args: [--rule, F401, --, ruff, check, --select, F401, --output-format, concise, .]` with `network: []`.
-
 ## Script protocol
 
 - **Collect:** `run` with the rule's `args` prints at most 100 JSON lines `{ "key", "title", "body", "facts"?, "fixes"? }` and exits 0. `key` is `[A-Za-z0-9.:/-]`, at most 128 chars, unique in the output. `facts` is a flat map of at most 20 numbers and strings, used by `autoLabel`; a `categories` fact that lists `SECURITY` (comma-separated, any case) means the finding never gets the ready label. `fixes` is an error tracker short ID (`^[A-Z0-9][A-Z0-9_-]{0,63}-[A-Z0-9]{1,32}$`, e.g. `WEB-1A2`); tender puts it on its own line `tender-intake-fixes: <ID>` right after the ticket's header, before the body, so truncation never drops it, and since script text is defanged no script or error text can write that line. The default prompt uses only that line for a `Fixes <ID>` and ignores any other request for one; a human editing the ticket on the tracker could still add one. Order by importance: `maxPerRun` takes the first new keys.
@@ -279,5 +242,4 @@ Turn each correction into a check. With `"guardrails": true` in the `judge` bloc
 - **Reply:** `{ "propose": bool, "kind": "lint" | "type" | "test" | "api" | null, "title": ≤ 120 chars | null, "body": ≤ 2000 chars | null, "reason": ≤ 300 chars }`. Another shape, a non-zero exit or a timeout is logged and retried next run.
 - **Guards:** tender files nothing, whatever the prompt said, for `propose: false`, a `kind` outside the four, or a title or body naming a prose instruction file (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `CONVENTIONS.md`, `copilot-instructions`, `.cursorrules`, `.cursor/rules`, `.windsurfrules`, `.clinerules`, `.tender/prompts`), after folding compatibility forms (NFKC, so fullwidth letters), dropping invisible characters and collapsing `//`, `/./` and a leading `./`. Look-alikes from other scripts (a Cyrillic А) are not caught: an accepted limit, since the ticket never gets the ready label and a human reads it. Each of these is recorded as a `guardrail` event, so the PR is never asked again.
 - **Filing:** at most one ticket per PR, into the repo's tracker as [intake files](#filing), labelled `guardrail` and never with the ready label. If the source uses `guardrail` as one of its own workflow labels (ready, needs-human or, on GitHub, the in-progress, in-review or ready-to-merge label; any case), nothing is asked or filed and the run logs why. Create the `guardrail` label first, as for a rule's [labels](#labels). Title and body are sanitized like intake text (mentions and Linear links neutralized, `tender-intake` / `tender-guardrail` broken); the body opens with "Untrusted data: a guardrail proposed by tender's judge" and the PR URL, and ends with the line `tender-guardrail: <owner>/<name>#<PR>`. Before a call, tender searches the tracker for that line, so a filing whose event was never recorded (the recorder drops events under contention) is adopted instead of asked again; a lost `propose: false` costs one more call.
-- **After it lands:** run [lint debt](#lint-debt) with the new rule to clear the existing copies.
 - **`--dry-run`:** no call and no tracker write; like the judge, it starts from an empty `tender.db`, so it finds nothing.

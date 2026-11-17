@@ -30,7 +30,7 @@ Read `.tender/config.yaml`'s `intake` and suggest only rules the repo lacks, eac
 | `shortcut:` comments (`git grep -n 'shortcut:'`) | `shortcuts.ts` | Example scripts |
 | no `contract` rule yet | `contract.ts` | Contract |
 
-For each, show the rule block from the doc filled in from the repo (project slugs), with `labels` set and `autoLabel: []`, so tickets start in shadow. The user copies the script from `<tender>/intake/` to `.tender/intake/`, keeps it executable, adds any secrets to the host's `.env`, and enables the rule in `tender.json` `intake.enabled`.
+For each, show the rule block from the doc filled in from the repo (project slugs), with `labels` set, `autoLabel: []` and no `judge` key, so tickets start in shadow: nothing gives them the ready label. Add `judge: { minWorth, minFixable }` only when the user wants the host's judge to label them. The user copies the script from `<tender>/intake/` to `.tender/intake/`, keeps it executable, adds any secrets to the host's `.env`, and enables the rule in `tender.json` `intake.enabled`.
 
 ## 3. Hand off
 

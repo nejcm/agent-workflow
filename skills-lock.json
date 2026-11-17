@@ -4,12 +4,12 @@
     "tender-maintain": {
       "source": "./skills",
       "sourceType": "local",
-      "computedHash": "0c5562da7fca1deaa12ab66599a58a03ab22e66a6a01e7c52d8da4a37d079a1a"
+      "computedHash": "9d2aaf127d49179999d38331291ecc31d23316f6deaa23b38343af668c74c572"
     },
     "tender-setup": {
       "source": "./skills",
       "sourceType": "local",
-      "computedHash": "633e436c44e0a4714c62a29165f04eca160aa1c0f1cd3fa196b5b23a3bbf71c5"
+      "computedHash": "4a41e01bca9d53a13ebe52a827bcf2390e42fcbcf07743f867749e815dfcaad4"
     }
   }
 }

@@ -44,11 +44,12 @@ tracker:
 
 Add these keys only if the user asks for them:
 
-- `planStep`: step 2 of the prompt (default `Plan and implement the ticket.`). If it names a skill, that skill must be installed in `~/.claude/skills`.
+- `planStep`: step 2 of the prompt (default `Plan and implement the ticket.`). If it names a skill, the session's agent must have it: committed in the repo (`.claude/skills/` for Claude, `.agents/skills/` for Codex) or installed for the user.
 - `criticalPaths`: globs added to the built-in critical paths and the host's `criticalPaths`. A critical path is never auto-merged, in any mode.
 - `testPaths`: globs added to the built-in test paths. Under `intelligent`, a PR that deletes, renames or removes lines from an existing test file is not merged.
 - `trust`: a list of `{ paths: [glob, …], autoMerge: <mode> }`. The first rule that matches a file decides its mode, and the host ceiling still caps it.
 - `escapeHatches`: up to 20 regexes of at most 200 characters each, for added lines that block a merge.
+- `intake`: rules that file tickets from errors, database advisors and the like. Leave them out here; once the repo is set up, the `tender-maintain` skill suggests the ones it qualifies for.
 
 For a custom prompt, copy `<tender>/prompts/default.md` to `.tender/prompts/default.md` and edit it. tender picks the file up without any config key. Prompt files must be named `[a-z0-9-]+.md`. To choose a prompt by ticket label, add `prompts: { byLabel: { "type:bug": bug.md } }`. The placeholders are `{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{testCmd}} {{tests}} {{repo}} {{planStep}}`.
 

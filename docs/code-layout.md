@@ -10,6 +10,7 @@ The poll, intake and the helpers every folder shares.
 - `src/github.ts`: canonical-repo and PR lookup.
 - `src/intake.ts`: `intake`: the script protocol, the sandboxed run in a fresh clone, dedupe, filing, open-ticket updates and recheck.
 - `src/judge.ts`: the intake judge: ticket selection, the prompt, the sandboxed headless Claude or Codex call, verdict validation, the comment and the labelling decision.
+- `src/guardrail.ts`: guardrail proposals: merged agent PRs with feedback from events, the operator's comments from GitHub, the judge call with its own schema, the kind and prose-file guards and the filing.
 - `src/prs.ts`: `prs`: open-PR listing, classes, the orphan check and close, the report and digest issue.
 - `src/stats.ts`: `stats`: merged and reverted agent PRs per trust path from GitHub, shadow, judge and recheck agreement from events, the recommendation thresholds and the table.
 - `src/db.ts`: `tender.db` (bun:sqlite, WAL): ordered SQL migrations and the best-effort event recorder.

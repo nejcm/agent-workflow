@@ -10,3 +10,4 @@ criticalPaths:
   - prompts/**
   - scripts/**
   - systemd/**
+  - .claude/**

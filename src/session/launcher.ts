@@ -1,21 +1,19 @@
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { AGENTS, CLAUDE_TOKEN, claudeHome, codexHome, tmpHome } from "./agents";
+import { AGENTS, CLAUDE_TOKEN, claudeHome, codexHome, recordedAgentConfig, tmpHome } from "./agents";
 import { checkLogin, findBun, readLogin } from "./claude-auth";
 import { repoDir } from "../config/config";
 import { canonical, sameRepo } from "../github";
-import { configCache, loadSession, promptFor } from "../config/repo-config";
-import type { Config, Io, Repo, Session, Source, Ticket, Tracker } from "../types";
-import { GIT, inDir, inRun, passLocked, put, read, remove, SLOW_SECS, write } from "../util";
+import { configCache, labelFor, loadSession, promptFor } from "../config/repo-config";
+import type { AgentConfig, Config, Io, Repo, Session, Source, Ticket, Tracker } from "../types";
+import { GIT, inDir, inRun, passLocked, put, quote, read, remove, SLOW_SECS, write } from "../util";
 
 export const render = (tpl: string, vars: Record<string, string>) => tpl.replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? m);
 
 const MAX_BODY = 24_000;
 // The prompt is one argv string, which Linux caps at 128 KiB.
 const MAX_PROMPT_KIB = 120;
-
-const q = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 
 export const nonoRun = (profile: string, tenderDir: string, grants: [string, string][], quote = (s: string) => s) =>
   ["nono", "run", "--no-rollback-prompt", "--profile", quote(join(tenderDir, "nono", `${profile}.json`)), ...grants.flatMap(([flag, path]) => [flag, quote(path)]), "--"];
@@ -48,20 +46,20 @@ export async function sweepScopes(cfg: Config, io: Io, cgroup = cgroupOf) {
   for (const unit of out.split("\n").map((l) => l.trim().split(/\s+/)[0])) if (unit && !live.has(unit)) await write(io, ["systemctl", "--user", "kill", "--signal=KILL", unit]);
 }
 
-export function launcher(l: Pick<Session, "agent" | "sandbox" | "path">, wt: string, promptFile: string, unit: string, tenderDir: string, bun: string) {
-  const prompt = `"$(cat ${q(promptFile)})"`;
+export function launcher(l: Pick<Session, "agent" | "sandbox" | "path" | "model" | "effort">, wt: string, promptFile: string, unit: string, tenderDir: string, bun: string) {
+  const prompt = `"$(cat ${quote(promptFile)})"`;
   const nono = l.sandbox === "nono";
   const git = join(l.path, ".git");
   const own = [claudeHome(wt), codexHome(wt)].map((p): [string, string] => ["--allow", p]);
   const tmp = tmpHome(wt);
   const grants: [string, string][] = [["--allow", wt], ["--allow-unix-socket-subtree-bind", wt], ["--allow", tmp], ["--allow-unix-socket-subtree-bind", tmp], ...own, ["--read", join(git, "objects")]];
-  const wrap = nono ? nonoRun(`tender-${l.agent}`, tenderDir, grants, q) : [];
-  const [env, cmd] = AGENTS[l.agent].launch(q(wt), prompt, nono);
+  const wrap = nono ? nonoRun(`tender-${l.agent}`, tenderDir, grants, quote) : [];
+  const [env, cmd] = AGENTS[l.agent].launch(quote(wt), prompt, nono, l);
   // gh exits if it cannot read its config dir; <ID>.gh is never created, so gh runs on defaults plus nono's GH_TOKEN.
   // A private XDG cache: the host's ~/.cache (Claude's claude-cli-nodejs included) stays out of the sandbox.
-  const box = nono ? `unset CLAUDE_CODE_OAUTH_TOKEN\nexport GH_CONFIG_DIR=${q(wt)}.gh XDG_CACHE_HOME=${q(join(tmp, "cache"))} TENDER_BUN=${q(bun)}\n` : "";
-  const scope = ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--unit", q(unit), "--"];
-  return `#!/usr/bin/env bash\ncd ${q(wt)} || exit 1\nunset LINEAR_API_KEY\nexport TMPDIR=${q(tmp)} TMP=${q(tmp)} TEMP=${q(tmp)}\n${box}${env}\nexec ${[...scope, ...wrap, ...cmd].join(" ")}\n`;
+  const box = nono ? `unset CLAUDE_CODE_OAUTH_TOKEN\nexport GH_CONFIG_DIR=${quote(wt)}.gh XDG_CACHE_HOME=${quote(join(tmp, "cache"))} TENDER_BUN=${quote(bun)}\n` : "";
+  const scope = ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--unit", quote(unit), "--"];
+  return `#!/usr/bin/env bash\ncd ${quote(wt)} || exit 1\nunset LINEAR_API_KEY\nexport TMPDIR=${quote(tmp)} TMP=${quote(tmp)} TEMP=${quote(tmp)}\n${box}${env}\nexec ${[...scope, ...wrap, ...cmd].join(" ")}\n`;
 }
 
 /** Kills the session's scope, then its window, as for a canceled ticket; drops it from `wins`. */
@@ -267,6 +265,9 @@ async function cloneSession(io: Io, r: Session, wt: string, branch: string) {
   if (!io.dry) renameSync(tmp, wt);
 }
 
+// The whole config, so a label that switches provider never inherits the repo's model or effort.
+const withAgent = (r: Session, a?: AgentConfig): Session => (a ? { ...r, agent: a.name, model: a.model, effort: a.effort } : r);
+
 /** Starts a session for `t`; false, with one comment per commit, when the repo's config on its base branch is invalid. */
 export async function start(cfg: Config, s: Source, host: Repo, t: Ticket, tr: Tracker, io: Io, tenderDir: string) {
   const dir = repoDir(cfg, host.key);
@@ -288,8 +289,9 @@ export async function start(cfg: Config, s: Source, host: Repo, t: Ticket, tr: T
     return false;
   }
   const body = t.body.length > MAX_BODY ? `${t.body.slice(0, MAX_BODY)}\n[truncated: read the full ticket at its URL]` : t.body;
-  await launch(cfg, io, r, t.id, (vars) => render(promptFor(r, t.labels), { ...vars, title: t.title, body, url: t.url }), tenderDir, s.name);
-  io.event?.("start", host.key, t.id, { agent: r.agent, source: s.name });
+  const ses = withAgent(r, labelFor(r, t.labels)?.agent);
+  await launch(cfg, io, ses, t.id, (vars) => render(promptFor(r, t.labels), { ...vars, title: t.title, body, url: t.url }), tenderDir, s.name);
+  io.event?.("start", host.key, t.id, { agent: ses.agent, source: s.name });
   await claim(io, tr, join(dir, `${t.id}.claim`), t).catch((e) => io.log(`${t.id}: claim failed, session left running and the claim retried next poll: ${e.message}`));
   return true;
 }
@@ -309,7 +311,7 @@ async function resumeLocked(cfg: Config, io: Io, { key, id }: { key: string; id:
   const r = await loadSession(io, host, SLOW_SECS);
   if (!r) throw new Error(`${key}'s .tender/ on its base branch is invalid; run \`tender check\` in the repo for details`);
   const old = readFileSync(join(dir, `${id}.prompt.md`), "utf8");
-  await launch(cfg, io, r, id, (vars) => {
+  await launch(cfg, io, withAgent(r, recordedAgentConfig(dir, id)), id, (vars) => {
     const head = render(CONTINUE, vars);
     return old.startsWith(head) ? old : head + old;
   }, tenderDir);
@@ -351,7 +353,7 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
     remove(io, join(dir, `${id}.ended`));
     remove(io, join(dir, `${id}.reassigned`));
   }
-  put(io, join(dir, `${id}.agent`), r.agent);
+  put(io, join(dir, `${id}.agent`), r.model || r.effort ? JSON.stringify({ name: r.agent, model: r.model, effort: r.effort }) : r.agent);
   if (existsSync(wt)) io.log(`reuse ${wt}`);
   else await cloneSession(io, r, wt, branch);
   const root = existsSync(wt) ? realpathSync(wt) : wt;

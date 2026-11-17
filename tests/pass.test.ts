@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { validRepo } from "../src/config/config";
 import { canonCache } from "../src/github";
 import { github } from "../src/trackers/github";
-import { authStamp, CODEX_AUTH, codexHooksWarning, codexLogin, codexRefresh, launcher, render, scopeUnit, sweepScopes, seedClaude, seedCodex } from "../src/session/launcher";
+import { authStamp, CODEX_AUTH, codexHooksWarning, codexLogin, codexRefresh, launcher, render, resume, scopeUnit, sweepScopes, seedClaude, seedCodex } from "../src/session/launcher";
 import { events, openDb, recorder } from "../src/db";
 import { endedNotice, pass } from "../src/pass";
 import { liveStates, pickAnswer } from "../src/session/question";
@@ -161,6 +161,31 @@ const login = (exp: number) => {
   writeFileSync(join(root, CODEX_AUTH), JSON.stringify({ auth_mode: "chatgpt", OPENAI_API_KEY: "secret-k", personal_access_token: "secret-pat", tokens, last_refresh: "x" }));
 };
 const DAY = 24 * 3600_000;
+
+test("a label's agent replaces the repo's whole agent config, so a switch to codex drops claude's model and effort; resume keeps the recorded one", async () => {
+  login(Date.now() + 5 * DAY);
+  repoFiles["config.yaml"] = 'agent:\n  name: claude\n  model: "opus[1m]"\n  effort: high\nbyLabel:\n  big:\n    agent: codex\n';
+  const start = async (labels: string[]) => {
+    const { tr } = fakeTracker({ ready: [{ ...ticket(1), labels }] });
+    const { io } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : a[5] === "--quiet" ? { code: 1 } : noPr(a)));
+    await pass(config(), io, () => tr, "/tender");
+    return { sh: readFileSync(join(root, "acme/web/gh-1.sh"), "utf8"), agent: readFileSync(join(root, "acme/web/gh-1.agent"), "utf8") };
+  };
+  const big = await start(["Big"]);
+  expect(big.agent).toBe("codex");
+  expect(big.sh).toContain("-- codex --no-daemon ");
+  expect(big.sh).not.toMatch(/ -m | -c |--model|--effort/);
+  rmSync(join(root, "acme/web"), { recursive: true });
+  const base = await start([]);
+  expect(JSON.parse(base.agent)).toEqual({ name: "claude", model: "opus[1m]", effort: "high" });
+  expect(base.sh).toContain(" --model 'opus[1m]' --effort 'high' \"$(cat ");
+  writeFileSync(join(root, "acme/web/gh-1.agent"), JSON.stringify({ name: "codex", model: "gpt-5", effort: "minimal" }));
+  writeFileSync(join(root, "acme/web/gh-1.handoff"), "editor\n");
+  await resume(config(), fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : noPr(a))).io, { key: "acme/web", id: "gh-1" }, "/tender");
+  const sh = readFileSync(join(root, "acme/web/gh-1.sh"), "utf8");
+  expect(sh).toContain(`-- codex --no-daemon --dangerously-bypass-hook-trust --sandbox danger-full-access --ask-for-approval never -m 'gpt-5' -c 'model_reasoning_effort="minimal"' -C `);
+  expect(JSON.parse(readFileSync(join(root, "acme/web/gh-1.agent"), "utf8"))).toEqual({ name: "codex", model: "gpt-5", effort: "minimal" });
+});
 
 test("codexLogin copies only the allowlisted fields of a fresh template login, refresh token emptied, and runs nothing", async () => {
   login(Date.now() + 5 * DAY);
@@ -1048,7 +1073,7 @@ test("endedNotice keeps indentation and inner spacing but still strips escapes, 
   expect(endedNotice(say)).toBe("session ended without a PR. Last message:\n\n```\n  steps:\n    - a  b\n x y z\n   q r\n```");
 });
 
-function stall(o: { inReview?: boolean; labels?: string[]; swapped?: boolean } = {}) {
+function stall(o: { inReview?: boolean; labels?: string[]; swapped?: boolean; cfg?: Config } = {}) {
   worktree("gh-1");
   const wt = join(root, "acme/web/gh-1");
   const old = new Date(Date.now() - 31 * 60_000);
@@ -1068,7 +1093,7 @@ function stall(o: { inReview?: boolean; labels?: string[]; swapped?: boolean } =
   return {
     ...f, t, cmds, tx, old,
     setState: (s: State) => void (state = s),
-    run: () => pass(config(), io, () => f.tr, "/tender", async () => state),
+    run: () => pass(o.cfg ?? config(), io, () => f.tr, "/tender", async () => state),
     cursor: () => readFileSync(join(root, "acme/web/gh-1.stall"), "utf8"),
   };
 }
@@ -1089,6 +1114,15 @@ test("stall: a quiet working session is parked with one sanitized comment of its
   utimesSync(d.tx, later, later);
   await d.run();
   expect(d.calls.length).toBe(4);
+});
+
+test("stall: the repo's stallMinutes overrides the top-level one", async () => {
+  const later = stall({ cfg: config({ stallMinutes: 20, repos: [{ name: "acme/web", path: join(root, "src-web"), stallMinutes: 60 }] }) });
+  await later.run();
+  expect(later.calls).toEqual([]);
+  const sooner = stall({ cfg: config({ stallMinutes: 60, repos: [{ name: "acme/web", path: join(root, "src-web"), stallMinutes: 30 }] }) });
+  await sooner.run();
+  expect(sooner.calls[0]).toBe("park gh-1");
 });
 
 test("stall: a window whose launcher pane was swapped out is parked without capturing any pane", async () => {

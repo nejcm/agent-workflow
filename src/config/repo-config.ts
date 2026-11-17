@@ -2,12 +2,13 @@ import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AUTO_MERGE, INTAKE_NAME } from "./config";
 import { baseBranch } from "../github";
-import type { AutoMerge, Check, IntakeRule, Io, PromptSet, PromptText, Repo, RepoConfig, Session } from "../types";
+import { EFFORTS, MODEL } from "../session/agents";
+import type { AgentConfig, AgentName, AutoMerge, Check, IntakeRule, Io, PromptSet, PromptText, Repo, RepoConfig, Session } from "../types";
 import { GIT, hasLabel, read, TENDER_DIR, write } from "../util";
 
 const MAX_FILE = 64 * 1024;
 const PROMPT = /^[a-z0-9-]+\.md$/;
-const KEYS = ["agent", "testCmd", "autoMerge", "criticalPaths", "testPaths", "trust", "escapeHatches", "prompt", "byLabel", "tracker", "intake"];
+const KEYS = ["agent", "testCmd", "autoMerge", "feedback", "criticalPaths", "testPaths", "trust", "escapeHatches", "prompt", "byLabel", "tracker", "intake"];
 const RETIRED: Record<string, string> = { planStep: "moved to prompt.steps.plan", prompts: "replaced by prompt and byLabel" };
 export const STEPS = ["clarify", "plan", "test", "verify", "review", "commit"];
 const MAX_PROMPT_TEXT = 32 * 1024;
@@ -63,10 +64,26 @@ export function parseRepoConfig(entries: Entry[]): RepoConfig {
     if (p.append !== undefined) text(p.append, `${at}.append`);
     return { steps, append: p.append };
   };
+  const agentConfig = (a: unknown, at: string): AgentConfig => {
+    if (typeof a === "string") return (check(a === "claude" || a === "codex", `${at}: "claude" | "codex" or { name, model, effort }`), { name: a as AgentName });
+    if (!obj(a)) return (errs.push(`${at}: "claude" | "codex" or { name, model, effort }`), { name: "claude" });
+    check(Object.keys(a).every((k) => ["name", "model", "effort"].includes(k)), `${at}: mapping with name, model and effort`);
+    const known = a.name === "claude" || a.name === "codex";
+    check(known, `${at}.name: "claude" | "codex"`);
+    check(a.model === undefined || (typeof a.model === "string" && MODEL.test(a.model)), `${at}.model: model name like sonnet or gpt-5 ([A-Za-z0-9._:[]/-], at most 100 chars)`);
+    if (known) check(a.effort === undefined || EFFORTS[a.name as AgentName].includes(a.effort), `${at}.effort: ${EFFORTS[a.name as AgentName].join(" | ")} for ${a.name}`);
+    return { name: a.name, model: a.model, effort: a.effort };
+  };
+  const agent = agentConfig(raw.agent === undefined ? "claude" : raw.agent, "agent");
+  const fb = raw.feedback;
+  check(fb === undefined || (obj(fb) && Object.keys(fb).every((k) => k === "maxRounds")), "feedback: mapping with maxRounds");
+  if (obj(fb)) check(Number.isInteger(fb.maxRounds) && fb.maxRounds >= 1 && fb.maxRounds <= 10, "feedback.maxRounds: integer 1-10");
   const byLabel = raw.byLabel === undefined ? {} : raw.byLabel;
-  check(obj(byLabel), "byLabel: mapping of label to { prompt }");
+  check(obj(byLabel), "byLabel: mapping of label to { prompt, agent }");
   const c: RepoConfig = {
-    agent: raw.agent === undefined ? "claude" : raw.agent,
+    agent: agent.name,
+    model: agent.model,
+    effort: agent.effort,
     testCmd: raw.testCmd,
     autoMerge: raw.autoMerge,
     criticalPaths: raw.criticalPaths === undefined ? [] : raw.criticalPaths,
@@ -77,9 +94,9 @@ export function parseRepoConfig(entries: Entry[]): RepoConfig {
     byLabel: {},
     tracker: raw.tracker,
     intake: parseIntake(raw.intake, check),
+    feedbackRounds: obj(fb) ? fb.maxRounds : undefined,
     files,
   };
-  check(["claude", "codex"].includes(c.agent), `agent: "claude" | "codex"`);
   check(c.testCmd === undefined || str(c.testCmd), "testCmd: non-empty string");
   const modes = AUTO_MERGE.map((m) => `"${m}"`).join(" | ");
   check(c.autoMerge === undefined || AUTO_MERGE.includes(c.autoMerge), `autoMerge: ${modes}`);
@@ -97,8 +114,9 @@ export function parseRepoConfig(entries: Entry[]): RepoConfig {
   // fromEntries, not assignment, so a `__proto__` label stays an own entry.
   c.byLabel = Object.fromEntries(
     Object.entries(obj(byLabel) ? byLabel : {}).flatMap(([l, e]) => {
-      if (str(l) && obj(e) && Object.keys(e).every((k) => k === "prompt")) return [[l, e.prompt === undefined ? {} : { prompt: promptSet(e.prompt, `byLabel.${l}.prompt`) }]];
-      errs.push(`byLabel.${l}: mapping with prompt`);
+      if (str(l) && obj(e) && Object.keys(e).every((k) => k === "prompt" || k === "agent"))
+        return [[l, { ...(e.prompt !== undefined && { prompt: promptSet(e.prompt, `byLabel.${l}.prompt`) }), ...(e.agent !== undefined && { agent: agentConfig(e.agent, `byLabel.${l}.agent`) }) }]];
+      errs.push(`byLabel.${l}: mapping with prompt and agent`);
       return [];
     }),
   );
@@ -164,7 +182,7 @@ const resolve = (files: Record<string, string>, t?: PromptText) => (t === undefi
 const merged = (base: PromptSet, label?: PromptSet): PromptSet => ({ steps: { ...base.steps, ...label?.steps }, append: label?.append ?? base.append });
 
 /** The `byLabel` entry of the first label the ticket has, case-insensitively. */
-export const labelFor = (c: RepoConfig, labels: string[]) => Object.entries(c.byLabel).find(([l]) => hasLabel(labels, l))?.[1];
+export const labelFor = (c: RepoConfig, labels?: string[]) => Object.entries(c.byLabel).find(([l]) => hasLabel(labels, l))?.[1];
 
 /** The prompt template for a ticket: tender's header, the steps (label over repo over tender's), the repo's append, then tender's protocol. */
 export function promptFor(c: RepoConfig, labels: string[] = []) {
@@ -230,7 +248,7 @@ const rank = (m: AutoMerge) => AUTO_MERGE.indexOf(m);
 /** Host settings plus the repo's config: autoMerge is the lower of the repo's request and the host's ceiling, which also caps trust rules; critical paths add up. */
 export function combine(r: Repo, base: string, c: RepoConfig): Session {
   const { baseBranch: _, ...host } = r;
-  return { ...host, ...c, baseBranch: base, ceiling: r.autoMerge, criticalPaths: [...r.criticalPaths, ...c.criticalPaths], autoMerge: c.autoMerge !== undefined && rank(c.autoMerge) < rank(r.autoMerge) ? c.autoMerge : r.autoMerge };
+  return { ...host, ...c, feedbackRounds: c.feedbackRounds ?? r.feedbackRounds, baseBranch: base, ceiling: r.autoMerge, criticalPaths: [...r.criticalPaths, ...c.criticalPaths], autoMerge: c.autoMerge !== undefined && rank(c.autoMerge) < rank(r.autoMerge) ? c.autoMerge : r.autoMerge };
 }
 
 /** Fetches `origin/<base>` into the clone, then the settings there; undefined if the repo's config is invalid, logged once per commit. */

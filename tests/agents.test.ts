@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { AGENTS, claudeDir, claudeSessions, codexHome, codexState, INBOX_HOOK, INBOX_WAITER, parseAgents } from "../src/session/agents";
+import { AGENTS, claudeDir, claudeSessions, codexHome, codexState, INBOX_HOOK, INBOX_WAITER, parseAgents, recordedAgent, recordedAgentConfig } from "../src/session/agents";
 import { root, session, useTempRoot } from "./helpers";
 
 useTempRoot();
@@ -132,4 +132,24 @@ test("inbox waiter pattern matches the hook's shell, not Claude's own argv that 
   const [, argv] = AGENTS.claude.launch("/w", "p", true);
   expect(re.test(`/usr/bin/claude ${argv.slice(1).join(" ")}`)).toBe(false);
   expect(re.test(`/home/u/.local/bin/nono run --profile x -- claude ${argv.slice(1).join(" ")}`)).toBe(false);
+});
+
+test("launch passes model and effort as quoted words: claude --model/--effort, codex -m and -c before -C", () => {
+  const [, claude] = AGENTS.claude.launch("'/w'", "P", false, { model: "opus[1m]", effort: "max" });
+  expect(claude.slice(-5)).toEqual(["--model", "'opus[1m]'", "--effort", "'max'", "P"]);
+  const [, codex] = AGENTS.codex.launch("'/w'", "P", false, { model: "gpt-5", effort: "high" });
+  expect(codex.slice(-7)).toEqual(["-m", "'gpt-5'", "-c", `'model_reasoning_effort="high"'`, "-C", "'/w'", "P"]);
+  expect(AGENTS.codex.launch("'/w'", "P", false, {})).toEqual(AGENTS.codex.launch("'/w'", "P", false));
+  expect(AGENTS.claude.launch("'/w'", "P", true, { model: "sonnet" })[1].slice(-3)).toEqual(["--model", "'sonnet'", "P"]);
+});
+
+test("recordedAgentConfig reads a plain name or JSON, and nothing invalid", () => {
+  const dir = join(root, "acme/web");
+  mkdirSync(dir, { recursive: true });
+  const rec = (s: string) => (writeFileSync(join(dir, "gh-1.agent"), s), recordedAgentConfig(dir, "gh-1"));
+  expect(rec("codex\n")).toEqual({ name: "codex", model: undefined, effort: undefined });
+  expect(rec('{"name":"claude","model":"opus[1m]","effort":"max"}')).toEqual({ name: "claude", model: "opus[1m]", effort: "max" });
+  expect(recordedAgent(dir, "gh-1")).toBe("claude");
+  for (const bad of ["gpt", "{", "null", '{"name":"codex","effort":"max"}', '{"name":"claude","model":"a b"}', '{"name":"claude","model":7}']) expect(rec(bad)).toBeUndefined();
+  expect(recordedAgentConfig(dir, "gh-2")).toBeUndefined();
 });

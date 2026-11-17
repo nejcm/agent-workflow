@@ -6,6 +6,9 @@ export const TENDER_DIR = dirname(import.meta.dir);
 
 export const validBranch = (b: string) => /^[\w.][\w./-]*$/.test(b) && !b.includes("..");
 
+/** One single-quoted shell word. */
+export const quote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
+
 export const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
 
 export const subdirs = (d: string) => (existsSync(d) ? readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name) : []);

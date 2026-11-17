@@ -36,7 +36,7 @@ Agent sessions: launch, live state, questions and feedback.
 
 - `src/session/question.ts`: agent questions: `.tender/run/question.md` posted to the ticket, the operator's answer picked and pasted back into the session.
 - `src/session/feedback.ts`: PR reviews, comments, failed checks and conflicts fed back into an idle In Review session.
-- `src/session/agents.ts`: the Claude and Codex adapters: launch env and command, config dirs and transcript files, live state (Claude's session records, read as untrusted files; the Codex hook state file).
+- `src/session/agents.ts`: the Claude and Codex adapters: launch env and command (with quoted model and effort flags), the session's recorded agent config, valid model names and efforts, config dirs and transcript files, live state (Claude's session records, read as untrusted files; the Codex hook state file).
 - `src/session/claude-auth.ts`: the host Claude login: finding the host `claude` and `bun`, reading and checking the login, the refresher that keeps it fresh.
 - `src/session/launcher.ts`: base clone, session clone, prompt and launcher script, tmux window, stop and resume.
 - `src/session/handoff.ts`: `open`: ticket lookup, transcript copy into your own store, the command per tool.

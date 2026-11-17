@@ -121,7 +121,7 @@ async function checkStall(cfg: Config, s: Source, t: Ticket, tr: Tracker, io: Io
   const now = Date.now();
   const wt = join(dir, t.id);
   const started = mtime(`${wt}.sh`) ?? mtime(wt) ?? now;
-  const quiet = (since: number) => now - since >= cfg.stallMinutes * 60_000;
+  const quiet = (since: number) => now - since >= cfg.repos[t.repo!]!.stallMinutes * 60_000;
   if (!quiet(started) || (await state(dir, t.id, now, true)) !== "working") return;
   const tx = transcript(wt, agentOf(dir, t.id), io.home, started);
   const at = Math.max(started, (tx ? mtime(tx) : undefined) ?? 0);
@@ -240,7 +240,9 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
         await step(io, `pr ${t.id}`, async () => void (pr = share!.pr = await viewPr(io, key, n, PR_FIELDS + share!.fields)));
       }
       let clear: boolean | undefined;
-      await step(io, `feedback ${t.id}`, async () => void (clear = await deliverFeedback(r, w, tr, io, dir, win, scopeUnit(cfg, key, t.id), () => state(dir, t.id), warned, share)));
+      // Loaded whatever the merge mode; an invalid config or failed fetch keeps the host's maxRounds.
+      const rounds = (await sessionOf(io, sessions, r).catch(() => undefined))?.feedbackRounds ?? r.feedbackRounds;
+      await step(io, `feedback ${t.id}`, async () => void (clear = await deliverFeedback({ ...r, feedbackRounds: rounds }, w, tr, io, dir, win, scopeUnit(cfg, key, t.id), () => state(dir, t.id), warned, share)));
       pr &&= share!.pr;
       // Never from the live state, which the session writes: ended is a listing without the window, idle is tmux's own output clock.
       // Listed again with its clock at the decision, since a pass can outlast IDLE_SECS.

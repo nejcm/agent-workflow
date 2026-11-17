@@ -17,7 +17,7 @@ test("config: defaults applied and errors listed", () => {
   expect(c.reposRoot).toMatch(/\/agent-repos$/);
   expect(c.sources[0]).toEqual({ name: "web", tracker: "github", readyLabel: "agent", needsHumanLabel: "needs-human", inProgressLabel: "in-progress", inReviewLabel: "in-review", readyToMergeLabel: "ready-to-merge" });
   expect(config({ sources: [src({ tracker: "linear", team: "ENG" })] }).sources[0]).toEqual({ name: "web", tracker: "linear", readyLabel: "agent", needsHumanLabel: "needs-human", team: "ENG", todo: "Todo", inProgress: "In Progress", inReview: "In Review", done: ["Done"] });
-  expect(web(c)).toEqual({ key: "acme/web", path: join(root, "src-web"), baseBranch: undefined, sandbox: "nono", maxConcurrent: undefined, autoMerge: "off", criticalPaths: [], feedbackAuthors: [] });
+  expect(web(c)).toEqual({ key: "acme/web", path: join(root, "src-web"), baseBranch: undefined, sandbox: "nono", maxConcurrent: undefined, autoMerge: "off", criticalPaths: [], feedbackAuthors: [], stallMinutes: 30, feedbackRounds: 3 });
   const c2 = config({ reposRoot: "/r", repos: ["acme/web", { name: "acme/api", maxConcurrent: 1, baseBranch: "dev" }] });
   expect(web(c2).path).toBe("/r/acme/web");
   expect(c2.repos["acme/api"]).toMatchObject({ path: "/r/acme/api", sandbox: "nono", maxConcurrent: 1, baseBranch: "dev" });
@@ -58,6 +58,15 @@ test("config: repo overrides of the wrong type are rejected, not replaced by def
     expect(() => config({ repos: [{ name: "acme/web", [k]: v }] })).toThrow(`repos[0] (acme/web).${k}: non-empty string`);
   expect(() => config({ defaults: { sandbox: "nono", baseBranch: 1 } })).toThrow(".baseBranch: non-empty string");
   for (const b of ["a..b", "-x", "a b"]) expect(() => config({ repos: [{ name: "acme/web", baseBranch: b }] })).toThrow(".baseBranch: invalid");
+});
+
+test("config: stallMinutes per repo entry, else defaults, else the top level; feedback.maxRounds 1-10, default 3", () => {
+  const c = config({ stallMinutes: 45, defaults: { sandbox: "nono", stallMinutes: 20, feedback: { maxRounds: 2 } }, repos: [{ name: "acme/web", path: "/a", stallMinutes: 5, feedback: { maxRounds: 10 } }, { name: "acme/api", path: "/b" }] });
+  expect(c.repos["acme/web"]).toMatchObject({ stallMinutes: 5, feedbackRounds: 10 });
+  expect(c.repos["acme/api"]).toMatchObject({ stallMinutes: 20, feedbackRounds: 2 });
+  expect(web(config({ stallMinutes: 45 }))).toMatchObject({ stallMinutes: 45, feedbackRounds: 3 });
+  for (const v of [0, 1.5, "5"]) expect(() => config({ repos: [{ name: "acme/web", stallMinutes: v }] })).toThrow("repos[0] (acme/web).stallMinutes: positive integer");
+  for (const f of [3, { maxRounds: 0 }, { maxRounds: 11 }, { maxRounds: 2, x: 1 }, {}]) expect(() => config({ repos: [{ name: "acme/web", feedback: f }] })).toThrow("repos[0] (acme/web).feedback: { maxRounds: integer 1-10 }");
 });
 
 test("config: work keys moved to the repo's .tender/config.yaml are rejected", () => {

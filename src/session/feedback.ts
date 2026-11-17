@@ -8,7 +8,6 @@ import type { Io, Repo, Ticket, TicketComment, Tracker } from "../types";
 import { put, read, writeRun } from "../util";
 
 const DEBOUNCE_MS = 2 * 60_000;
-export const MAX_ROUNDS = 3;
 const MAX_RUNS = 3;
 const LOG_LINES = 80;
 const MAX_ITEM_CHARS = 8000;
@@ -86,12 +85,12 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
     warned.add(seen);
     return false;
   }
-  if (cur.rounds >= MAX_ROUNDS) {
+  if (cur.rounds >= r.feedbackRounds) {
     // Label first: if adding it fails, this retries next poll instead of leaving a capped cursor that reads as resumed.
     await tr.park(t);
     io.event?.("park", r.key, t.id, { why: "feedback rounds" });
     put(io, file, JSON.stringify({ ...cur, capped: true } satisfies FeedbackCursor));
-    await tr.comment(t, `PR feedback stopped after ${MAX_ROUNDS} rounds on ${url}: a human is needed`);
+    await tr.comment(t, `PR feedback stopped after ${r.feedbackRounds} rounds on ${url}: a human is needed`);
     return false;
   }
   if ((await state()) !== "idle") return false;

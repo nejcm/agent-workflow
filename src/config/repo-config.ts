@@ -1,4 +1,4 @@
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AUTO_MERGE, INTAKE_NAME } from "./config";
 import { baseBranch } from "../github";
@@ -184,11 +184,14 @@ const merged = (base: PromptSet, label?: PromptSet): PromptSet => ({ steps: { ..
 /** The `byLabel` entry of the first label the ticket has, case-insensitively. */
 export const labelFor = (c: RepoConfig, labels?: string[]) => Object.entries(c.byLabel).find(([l]) => hasLabel(labels, l))?.[1];
 
-/** The prompt template for a ticket: tender's header, the steps (label over repo over tender's), the repo's append, then tender's protocol. */
+/** The prompt template for a ticket: tender's header, the steps (label over repo over tender's type over tender's), the repo's append, then tender's protocol. */
 export function promptFor(c: RepoConfig, labels: string[] = []) {
   const p = merged(c.prompt, labelFor(c, labels)?.prompt);
-  const tender = (name: string) => readFileSync(join(TENDER_DIR, "prompts", name), "utf8").trim();
-  const steps = STEPS.map((n) => [n, Object.hasOwn(p.steps, n) ? resolve(c.files, p.steps[n]).trim() : tender(`steps/${n}.md`)]).filter(([, t]) => t);
+  const path = (name: string) => join(TENDER_DIR, "prompts", name);
+  const tender = (name: string) => readFileSync(path(name), "utf8").trim();
+  const type = labels.map((l) => /^type:([a-z0-9-]+)$/i.exec(l)?.[1]?.toLowerCase()).find((t) => t && existsSync(path(`types/${t}`)));
+  const fallback = (n: string) => (type && existsSync(path(`types/${type}/${n}.md`)) ? tender(`types/${type}/${n}.md`) : tender(`steps/${n}.md`));
+  const steps = STEPS.map((n) => [n, Object.hasOwn(p.steps, n) ? resolve(c.files, p.steps[n]).trim() : fallback(n)]).filter(([, t]) => t);
   return [tender("header.md"), ...steps.map(([n, t]) => `### ${n}\n\n${t}`), resolve(c.files, p.append).trim(), tender("protocol.md")].filter(Boolean).join("\n\n") + "\n";
 }
 

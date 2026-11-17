@@ -1,5 +1,9 @@
 # Upgrading
 
+## To ticket types
+
+A ticket labelled `type:bug` or `type:docs`, or a GitHub issue with that issue type, now gets tender's steps for that type, see [Prompt](config.md#prompt); the bug reproduce-first guidance moved out of the base plan step into the `bug` type. A GitHub issue type counts as the label `type:<name>`, so a repo's `byLabel` entry for `type:<name>` now also matches issues of that type, its `agent` included. Listing reads the `issueType` field, so update `gh` to 2.94.0 or later first.
+
 ## To prompt steps
 
 tender's single prompt file is now a fixed header and protocol around six steps a repo can replace, see [Prompt](config.md#prompt). In each repo's `.tender/config.yaml`:

@@ -133,6 +133,23 @@ test("prompt: tender's header, the steps (label over repo over tender's), the ap
   expect(promptFor(proto, ["__proto__"])).toContain("### plan\n\nSpecial.");
 });
 
+test("prompt: a type:<name> label picks tender's type steps; repo steps and byLabel still win", () => {
+  const tender = (n: string) => readFileSync(join(TENDER_DIR, "prompts", n), "utf8").trim();
+  const step = (p: string, n: string) => p.split(`### ${n}\n\n`)[1]!.split("\n\n### ")[0];
+  const none = parseRepoConfig([]);
+  expect(step(promptFor(none, ["Type:BUG"]), "plan")).toBe(tender("types/bug/plan.md"));
+  expect(step(promptFor(none, ["Type:BUG"]), "test")).toBe(tender("steps/test.md"));
+  const docs = promptFor(none, ["type:docs"]);
+  expect([step(docs, "plan"), step(docs, "test")]).toEqual([tender("types/docs/plan.md"), tender("types/docs/test.md")]);
+  expect(promptFor(none, ["type:foo", "type:docs", "type:bug"])).toBe(docs);
+  expect(promptFor(none, ["type:foo"])).toBe(promptFor(none));
+  expect(promptFor(none, ["type:../steps"])).toBe(promptFor(none));
+  const c = parseRepoConfig([file("config.yaml", "prompt:\n  steps: { plan: Repo plan. }\nbyLabel:\n  ui:\n    prompt: { steps: { test: UI tests. } }\n")]);
+  expect(step(promptFor(c, ["type:docs"]), "plan")).toBe("Repo plan.");
+  expect(step(promptFor(c, ["type:docs"]), "test")).toBe(tender("types/docs/test.md"));
+  expect(step(promptFor(c, ["type:docs", "ui"]), "test")).toBe("UI tests.");
+});
+
 test("combine: autoMerge is the lower of the repo's request and the host's ceiling; critical paths only grow", () => {
   const host = (autoMerge: string) => web(config({ repos: [{ name: "acme/web", autoMerge }] }));
   const repo = (y: string) => parseRepoConfig([file("config.yaml", y)]);

@@ -51,7 +51,7 @@ Add these keys only if the user asks for them:
 - `escapeHatches`: up to 20 regexes of at most 200 characters each, for added lines that block a merge.
 - `intake`: rules that file tickets from errors, database advisors and the like. Leave them out here; once the repo is set up, the `tender-maintain` skill suggests the ones it qualifies for.
 
-tender's prompt header and closing protocol are fixed; a repo replaces only steps. Under `prompt.steps`, set any of `clarify`, `plan`, `test`, `verify`, `review`, `commit` to text, to `""` to drop it, or to `{ file: <name>.md }` for `.tender/prompts/<name>.md` (named `[a-z0-9-]+.md`); tender's defaults are in `<tender>/prompts/steps/`. `prompt.append` adds text after the steps. To change steps by ticket label, add a `byLabel` entry; the first matching label wins. Use block style, since a comma ends plain text inside `{ … }`:
+tender's prompt header and closing protocol are fixed; a repo replaces only steps. Under `prompt.steps`, set any of `clarify`, `plan`, `test`, `verify`, `review`, `commit` to text, to `""` to drop it, or to `{ file: <name>.md }` for `.tender/prompts/<name>.md` (named `[a-z0-9-]+.md`); tender's defaults are in `<tender>/prompts/steps/`, with per-type replacements for `type:bug` and `type:docs` tickets in `<tender>/prompts/types/`. `prompt.append` adds text after the steps. To change steps by ticket label, add a `byLabel` entry; the first matching label wins. Use block style, since a comma ends plain text inside `{ … }`:
 
 ```yaml
 byLabel:

@@ -212,6 +212,12 @@ test("github adapter: tickets assigned only to others carry them; unassigned or 
   await expect(github(gh(), "box", noUser, false, ["acme/web"]).listReady()).rejects.toThrow("gh api user: no login");
 });
 
+test("github adapter: an issue type adds a type:<name> label unless one is there", async () => {
+  const issue = (number: number, issueType: unknown, ...labels: string[]) => ({ number, title: "t", body: "", url: "u", labels: ["agent", ...labels].map((name) => ({ name })), assignees: [], issueType });
+  const { io } = fakeIo((a) => (a[2] === "list" ? { out: JSON.stringify([issue(1, { name: "Bug" }), issue(2, null), issue(3, { name: "Bug" }, "Type:Bug")]) } : undefined));
+  expect((await github(gh(), "box", io, false, ["acme/web"]).listReady()).map((t) => t.labels)).toEqual([["agent", "type:bug"], ["agent"], ["agent", "Type:Bug"]]);
+});
+
 test("github adapter: intake files with labels, finds a marker only in a body that holds it, reopens without the ready label", async () => {
   const m = "tender-intake: acme/web:errs:a";
   const found = [{ url: "https://github.com/acme/web/issues/1", body: "mentions tender intake acme web errs a" }, { url: "https://github.com/acme/web/issues/4", body: `x\n${m}bc` }, { url: "https://github.com/acme/web/issues/5", body: `quoted ${m} inline` }, { url: "https://github.com/acme/web/issues/2", body: `x\n${m}` }];

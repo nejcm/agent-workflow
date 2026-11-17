@@ -181,7 +181,7 @@ intake:
 | `escapeHatches` | list of regexes, ≤ 20, each ≤ 200 chars | `[]` | added lines matching one hold a merge back, on top of the built-in ones |
 | `prompt.steps.<step>` | text, `""` or `{ file: <name>.md }` | tender's `prompts/steps/<step>.md` | replaces one step; `""` drops it; steps are `clarify`, `plan`, `test`, `verify`, `review`, `commit`, see [Prompt](#prompt) |
 | `prompt.append` | text or `{ file: <name>.md }` | none | added after the steps, before tender's closing instructions |
-| `byLabel` | map of label to `{ prompt, agent }` | `{}` | only the first entry whose label the ticket has applies: it sets steps and `append` over `prompt`'s, and its `agent` replaces `agent` whole (a provider switch never keeps the repo's model or effort); merge decisions never depend on it |
+| `byLabel` | map of label to `{ prompt, agent }` | `{}` | only the first entry whose label the ticket has applies: it sets steps and `append` over `prompt`'s, and its `agent` replaces `agent` whole (a provider switch never keeps the repo's model or effort); a GitHub issue type counts as the label `type:<name>`; merge decisions never depend on it |
 | `tracker.linear.project` | Linear project name | none | the project whose tickets come here when they name no repo themselves, see [Which repo a ticket goes to](lifecycle.md#which-repo-a-ticket-goes-to) |
 | `tracker.linear.team` | team key `[A-Z0-9]+` | none | only checked: a ticket routed here from another team's source is logged once |
 | `intake` | list of rules, ≤ 20 | `[]` | see below |
@@ -220,13 +220,15 @@ A session's prompt is tender's `prompts/header.md` (the ticket and the rules tha
 | step | tender's default |
 |---|---|
 | `clarify` | read the ticket and code first; ask in the question file and stop only if the acceptance criteria are still missing or ambiguous |
-| `plan` | plan and implement: read the code first, reproduce bugs as a failing test, smallest complete change, keep docs current |
+| `plan` | plan and implement: read the code first, fix a bug's root cause, smallest complete change, keep docs current |
 | `test` | add or update tests, run `{{tests}}` and make them pass by fixing the code, never by weakening tests |
 | `verify` | verify on the real surface, with the repo's verification skill if it has one, and record the command and output |
 | `review` | get an independent review against the ticket from a model of a different family, fix confirmed findings, at most 2 rounds |
 | `commit` | commit only the needed files, with a message in the repo's style that references `{{id}}` |
 
-A step is the label's text if the first matching `byLabel` entry sets it, else the repo's `prompt.steps`, else tender's; a step that is empty or only whitespace is dropped, heading and all. A label's `append` replaces the repo's. Only the first `byLabel` entry whose label the ticket has applies (labels match case-insensitively, entries in file order, except that integer-like labels such as `"123"` come first); entries never stack. `{ file: <name>.md }` reads `.tender/prompts/<name>.md`; a bare `bug.md` is rejected as ambiguous. The repo's steps and append are capped at 32 KiB, and each label merged over them likewise. A ticket body over 24,000 characters is cut, with a note to read the full ticket at its URL; a prompt over 120 KiB stops the start before the ticket's clone, session or claim (the repo's base clone and fetch, needed to read `.tender/`, come first).
+A ticket's type is its first label of the form `type:<name>` (case-insensitive, in the ticket's label order) for which tender ships `prompts/types/<name>/`: `bug` (the plan step reproduces the bug with a test that fails for the reported reason, fixes the root cause and keeps the test as a regression test) and `docs` (the plan step changes docs only and checks them against the code; the test step adds no tests, runs `{{tests}}` and checks every changed command, snippet and link, running only read-only ones). Each type file replaces tender's step of the same name and never chooses the agent or the merge decision. A GitHub issue type adds the label `type:<name>` (lowercased) unless the ticket already has it, and that label counts everywhere labels are read: a `byLabel` entry `type:bug` also matches issue type Bug, its `agent` included. A Linear label group `Type` gives `Type:<name>` as is.
+
+A step is the label's text if the first matching `byLabel` entry sets it, else the repo's `prompt.steps`, else tender's type step if the ticket has a type that ships one, else tender's; a step that is empty or only whitespace is dropped, heading and all. A label's `append` replaces the repo's. Only the first `byLabel` entry whose label the ticket has applies (labels match case-insensitively, entries in file order, except that integer-like labels such as `"123"` come first); entries never stack. `{ file: <name>.md }` reads `.tender/prompts/<name>.md`; a bare `bug.md` is rejected as ambiguous. The repo's steps and append are capped at 32 KiB, and each label merged over them likewise. A ticket body over 24,000 characters is cut, with a note to read the full ticket at its URL; a prompt over 120 KiB stops the start before the ticket's clone, session or claim (the repo's base clone and fetch, needed to read `.tender/`, come first).
 
 ### Prompt placeholders
 

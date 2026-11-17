@@ -32,7 +32,7 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
       if (search) argv.push("--search", search);
       let issues: any[];
       try {
-        issues = JSON.parse(await read(io, [...argv, "--json", "number,title,body,url,labels,assignees"]));
+        issues = JSON.parse(await read(io, [...argv, "--json", "number,title,body,url,labels,assignees,issueType"]));
       } catch (e) {
         if (complete) throw e;
         io.log(`repo ${repo}: issue list failed, skipped: ${(e as Error).message}`);
@@ -42,6 +42,8 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
       for (const i of issues)
         if (Number.isInteger(i.number)) {
           const labels: string[] = (i.labels ?? []).map((x: any) => x.name);
+          const type = i.issueType?.name && `type:${String(i.issueType.name).toLowerCase()}`;
+          if (type && !hasLabel(labels, type)) labels.push(type);
           const assignees = (i.assignees ?? []).map((x: any) => String(x.login));
           all.push({ id: `gh-${i.number}`, ref: String(i.number), title: i.title ?? "", body: i.body ?? "", url: i.url ?? "", labels, repo, priority: labelPriority(labels), otherAssignee: await otherAssignee(assignees) });
         }

@@ -119,7 +119,7 @@ test("prompt: tender's header, the steps (label over repo over tender's), the ap
   const assemble = (over: Record<string, string> = {}, append?: string) =>
     [tender("header.md"), ...steps.map((n) => [n, over[n] ?? tender(`steps/${n}.md`)]).filter(([, t]) => t).map(([n, t]) => `### ${n}\n\n${t}`), ...(append ? [append] : []), tender("protocol.md")].join("\n\n") + "\n";
   expect(promptFor(parseRepoConfig([]))).toBe(assemble());
-  expect(promptFor(parseRepoConfig([]))).toContain("Do these steps in order:\n\n### clarify\n\nIf the acceptance criteria");
+  expect(promptFor(parseRepoConfig([]))).toContain("Do these steps in order:\n\n### clarify\n\nRead the ticket and the code it touches");
   const yaml = 'prompt:\n  steps:\n    plan: Use X.\n    verify: { file: verify.md }\n    review: "  "\n  append: Notes.\nbyLabel:\n  "type:bug":\n    prompt: { steps: { plan: Reproduce first. }, append: { file: bug.md } }\n  ui:\n    prompt: { steps: { test: UI tests. } }\n  docs: {}\n';
   const c = parseRepoConfig([file("config.yaml", yaml), file("prompts/verify.md", "V\n"), file("prompts/bug.md", "B")]);
   expect(promptFor(c, [])).toBe(assemble({ plan: "Use X.", verify: "V", review: "" }, "Notes."));

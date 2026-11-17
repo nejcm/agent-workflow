@@ -194,7 +194,7 @@ intake:
 
 Checks the repo's own tender setup in the clone, one ticket per broken item, in this order:
 
-- **Config:** `.tender/` passes `tender check`, using tender's own parser (`src/config/repo-config.ts`). Only when the script runs from tender's checkout (`bun <tender>/intake/contract.ts`, as the [`tender-maintain`](../skills/tender-maintain/SKILL.md) skill does): a copy in a repo has no parser beside it and the sandbox cannot read tender's, so it skips this check. Under `tender intake` that loses nothing, because tender runs a repo's rules only when its config parses. Key `contract:config:check`. Facts: `check: config`.
+- **Config:** `.tender/` passes `tender check`, using tender's own parser (`src/config/repo-config.ts`). Only when the script runs from tender's checkout (`bun <tender>/intake/contract.ts`, as the [`tender-maintain`](../.agents/skills/tender-maintain/SKILL.md) skill does): a copy in a repo has no parser beside it and the sandbox cannot read tender's, so it skips this check. Under `tender intake` that loses nothing, because tender runs a repo's rules only when its config parses. Key `contract:config:check`. Facts: `check: config`.
 - **Globs:** every `criticalPaths` glob and every `trust` rule's `paths` glob matches at least one file in `git ls-files`, with the matcher tender's auto-merge uses. Key `contract:<criticalPaths | trust>:<glob, sanitized>-<hash of the glob>`. Facts: `check` (the field), `glob`.
 
 The repo config has no verify skill or smoke command, so the plan's "verify skill still exists and its smoke command runs" has nothing to check.

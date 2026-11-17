@@ -1,6 +1,6 @@
 # Code layout
 
-- `tender.ts`: CLI entry (`run`, `once`, `status`, `watch`, `tail`, `open`, `resume`, `intake`, `check`).
+- `tender.ts`: CLI entry (`run`, `once`, `status`, `watch`, `tail`, `open`, `resume`, `intake`, `prs`, `check`).
 
 ## `src/`
 
@@ -10,6 +10,7 @@ The poll, intake and the helpers every folder shares.
 - `src/github.ts`: canonical-repo and PR lookup.
 - `src/intake.ts`: `intake`: the script protocol, the sandboxed run in a fresh clone, dedupe, filing, open-ticket updates and recheck.
 - `src/judge.ts`: the intake judge: ticket selection, the prompt, the sandboxed headless Claude or Codex call, verdict validation, the comment and the labelling decision.
+- `src/prs.ts`: `prs`: open-PR listing, classes, the orphan check and close, the report and digest issue.
 - `src/db.ts`: `tender.db` (bun:sqlite, WAL): ordered SQL migrations and the best-effort event recorder.
 - `src/pass.ts`: one poll: cleanup, start ready tickets by priority, reconcile.
 - `src/util.ts`: logged/dry-run-aware command and file helpers, the pinned `.tender/run` reader, control-char stripping.
@@ -62,7 +63,7 @@ What a session leaves in `.tender/run/` and the merge decision.
 - `intake/`: example intake scripts that repos copy into `.tender/intake/`.
 - `prompts/default.md`: the ticket prompt used when a repo's `.tender/` names none.
 - `nono/`: sandbox profiles for Claude and Codex sessions, intake scripts, the intake judge and checks.
-- `systemd/`: user units for `tender run` and the intake timer, installed by `scripts/run.sh`.
+- `systemd/`: user units for `tender run`, the intake timer and the weekly PR sweep timer, installed by `scripts/run.sh`.
 - `skills/tender-setup/SKILL.md`: the setup skill for a repo's `.tender/`.
 - `scripts/setup.sh`: idempotent host setup and tracker labels; `scripts/run.sh`: preflight, then poll, or install the systemd units.
 - `scripts/codex-hooks.sh`: installs or refreshes tender's Codex state hooks in a `config.toml`.

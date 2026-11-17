@@ -241,7 +241,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
       }
       let clear: boolean | undefined;
       // Loaded whatever the merge mode; an invalid config or failed fetch keeps the host's maxRounds.
-      const rounds = (await sessionOf(io, sessions, r).catch(() => undefined))?.feedbackRounds ?? r.feedbackRounds;
+      const rounds = (await sessionOf(io, sessions, r).catch((e) => void (fresh || io.log(`feedback ${t.id}: .tender/ unavailable, using the host's feedback rounds: ${e.message}`))))?.feedbackRounds ?? r.feedbackRounds;
       await step(io, `feedback ${t.id}`, async () => void (clear = await deliverFeedback({ ...r, feedbackRounds: rounds }, w, tr, io, dir, win, scopeUnit(cfg, key, t.id), () => state(dir, t.id), warned, share)));
       pr &&= share!.pr;
       // Never from the live state, which the session writes: ended is a listing without the window, idle is tmux's own output clock.

@@ -58,6 +58,7 @@ What a session leaves in `.tender/run/` and the merge decision.
 - `src/ui/status.ts`: per-worktree status rows, the live-state snapshot and the table.
 - `src/ui/dash.ts`: the `watch` dashboard (OpenTUI): keys, selection, attach/open and the renderer wiring.
 - `src/ui/dash-view.ts`: the dashboard's pure view: palette, layout, cards, progress bars, detail and transcript rows, every screen line as styled spans.
+- `src/ui/tree.ts`: ticket/phase trees, pure card/connector layout, spatial selection and tree/detail rows using the dashboard's spans.
 - `src/ui/tail.ts`: transcript lookup by recorded cwd, line condensing, `tail`.
 
 ## Other

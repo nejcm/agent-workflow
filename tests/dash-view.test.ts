@@ -182,7 +182,7 @@ test("screen rows are exactly the terminal width at every size, including tiny a
   expect(wide[0]).toMatch(/^ tender  box  ◆ 1 waiting .* 12:00:00 · every 2s $/);
   expect(wide[1]).toMatch(/^╭─ tickets 3 ─+╮╭─ detail ─+╮$/);
   expect(wide[2]).toMatch(/^│▌◆ PER-2 /);
-  expect(wide.at(-1)).toMatch(/^ j\/k select  tab transcript  ⏎ maximise  a attach  o open PR  r refresh  \? help  q quit/);
+  expect(wide.at(-1)).toMatch(/^ j\/k select  tab transcript  ⏎ maximise  a attach  o open PR  r refresh  \? help  q quit  t tree/);
   expect(wide.join("\n")).toContain("12:00:01 Bash   ls");
   const narrow = screen(model({ rs }), 100, 30, C).lines.map(text);
   expect(narrow[1]).toMatch(/^╭─ tickets 3 ─+╮$/);

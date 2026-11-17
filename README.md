@@ -9,6 +9,8 @@ Move a GitHub issue or Linear ticket to **ready**, and `tender` starts a Claude 
 
 ![tender watch: ticket list with phase progress bars, selected ticket detail and live transcript](docs/dashboard.png)
 
+![tender watch tree view: a ticket as a card with its phases as child cards, status pills and progress bars](docs/tree.png)
+
 ## Features
 
 **Picking up work**

@@ -23,6 +23,7 @@ const COLORS = {
   faint: "#3d444d",
   ink: "#0d1117",
   accent: "#56d4dd",
+  blue: "#58a6ff",
   ok: "#7ee787",
   warn: "#e3b341",
   bad: "#f47067",
@@ -40,11 +41,11 @@ export type Palette = { mono: boolean } & Partial<Record<Tone, string>>;
 /** Truecolor palette, or none at all (bold/dim/reverse only) under NO_COLOR. */
 export const palette = (env: Record<string, string | undefined> = process.env): Palette => (env.NO_COLOR ? { mono: true } : { mono: false, ...COLORS });
 
-const TONE: Record<Look, Tone> = { working: "accent", waiting: "warn", question: "warn", idle: "idle", unknown: "bad", handoff: "idle", orphan: "orphan", ended: "gone" };
+export const TONE: Record<Look, Tone> = { working: "accent", waiting: "warn", question: "warn", idle: "idle", unknown: "bad", handoff: "idle", orphan: "orphan", ended: "gone" };
 const GLYPH: Record<Look, string> = { working: "●", waiting: "◆", question: "◇", idle: "○", unknown: "?", handoff: "◐", orphan: "◌", ended: "✕" };
 const ORDER: Look[] = ["waiting", "question", "working", "idle", "unknown", "handoff", "orphan", "ended"];
 
-const s = (P: Palette, tone: Tone, t: string, x: Omit<Span, "t"> = {}): Span => ({ t, fg: P[tone], d: P.mono && (tone === "dim" || tone === "faint" || tone === "gone") ? true : undefined, ...x });
+export const s = (P: Palette, tone: Tone, t: string, x: Omit<Span, "t"> = {}): Span => ({ t, fg: P[tone], d: P.mono && (tone === "dim" || tone === "faint" || tone === "gone") ? true : undefined, ...x });
 const w = (l: Line) => l.reduce((n, x) => n + Bun.stringWidth(x.t), 0);
 const seg = new Intl.Segmenter();
 
@@ -86,6 +87,14 @@ export function cut(l: Line, n: number): [Line, Line] {
     if (tb) b.push({ ...x, t: tb });
   }
   return [a, b];
+}
+
+export function put(lines: Line[], x: number, y: number, content: Line[]) {
+  content.forEach((line, i) => {
+    if (!lines[y + i]) return;
+    const [left, rest] = cut(lines[y + i]!, x);
+    lines[y + i] = [...left, ...line, ...cut(rest, w(line))[1]];
+  });
 }
 
 /** `left`, then `right` flush to column `n` when both fit, else `left` alone; padded with `pad`. */
@@ -253,6 +262,7 @@ export function footer(h: Hints, msg: string, n: number, P: Palette): Line {
         k("r", "refresh"),
         k("?", "help"),
         k("q", "quit"),
+        k("t", "tree"),
       ];
   const flat = keys.flat();
   return msg ? clip([s(P, "warn", ` ${msg} `, { b: true }), s(P, "faint", "│"), ...flat], n) : clip(flat, n);
@@ -270,20 +280,25 @@ const HELP: [string, string][] = [
   ["q  ctrl-c", "quit"],
 ];
 
+const TREE_HELP: [string, string][] = [
+  ["t", "switch list ↔ tree"],
+  ["↓ ↑ ← →", "select tree card by position"],
+  ["enter", "open / close tree card detail"],
+  ["tab", "next ticket in tree view"],
+];
+
 /** The key help box drawn over the middle of `screen` rows 1..n-2. */
-export function helpOverlay(screen: Line[], n: number, P: Palette): Line[] {
+export function helpOverlay(screen: Line[], n: number, P: Palette, tree = false): Line[] {
   const bw = Math.min(n, 50);
-  const lines = HELP.map(([key, what]) => [s(P, "accent", key.padEnd(11), { b: true }), s(P, "fg", what)]);
+  const lines = (tree ? [...TREE_HELP, ...HELP] : [...HELP, ...TREE_HELP]).map(([key, what]) => [s(P, "accent", key.padEnd(11), { b: true }), s(P, "fg", what)]);
   const bh = Math.min(lines.length + 2, screen.length - 2);
   if (bh < 3 || bw < 10) return screen;
   const panel = box({ title: [s(P, "fg", " keys ", { b: true })], focused: true, pad: true }, lines, bw, bh, P).map((l) => l.map((x) => ({ ...x, bg: x.bg ?? P.head })));
   const x0 = Math.floor((n - bw) / 2);
   const y0 = 1 + Math.max(0, Math.floor((screen.length - 2 - bh) / 2));
-  return screen.map((l, i) => {
-    if (i < y0 || i >= y0 + bh) return l;
-    const [a, rest] = cut(l, x0);
-    return [...a, ...panel[i - y0]!, ...cut(rest, bw)[1]];
-  });
+  const out = [...screen];
+  put(out, x0, y0, panel);
+  return out;
 }
 
 const home = (p: string, h: string) => (h && (p === h || p.startsWith(h + "/")) ? "~" + p.slice(h.length) : p);

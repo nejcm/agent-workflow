@@ -1,4 +1,5 @@
 import type { AppConfig } from "./github-app";
+import type { LinearApp, LinearAppConfig } from "./linear-app";
 export type AgentName = "claude" | "codex";
 
 /** Host-side settings for one allowlisted repo, from tender.json. */
@@ -112,6 +113,8 @@ export interface Config {
   prs: { staleDays: number; digestIssue?: string };
   /** tender's GitHub identity when set; unset, `gh`'s own login. */
   githubApp?: AppConfig;
+  /** tender's Linear identity when set; unset, the `LINEAR_API_KEY` user. */
+  linearApp?: LinearAppConfig;
 }
 
 export interface Ticket {
@@ -196,6 +199,8 @@ export interface Io {
   home: string;
   /** The GitHub App's `<slug>[bot]` login when `githubApp` is set: the GitHub claim then adds no assignee. */
   appLogin?: () => Promise<string>;
+  /** Set with `linearApp`: every Linear call uses its token, never `LINEAR_API_KEY`, and the claim sets the delegate. */
+  linearApp?: LinearApp;
   /** Appends to `tender.db`'s events, once per `once` key when given; unset in dry runs. Never throws. */
   event?: (kind: EventKind, repo: string, ticket: string, data?: object, once?: string) => void;
 }

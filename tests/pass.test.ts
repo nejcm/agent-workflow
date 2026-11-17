@@ -26,8 +26,8 @@ test("launcher: claude under nono drops any inherited token and gets only TENDER
   const c = config();
   const s = launcher(ses(c), "/ws/web/gh-1", "/ws/web/gh-1.prompt.md", unit("gh-1"), "/tender", "/b/bun");
   expect(s).not.toContain("oauth-token");
-  expect(s).toContain(`unset LINEAR_API_KEY\nexport TMPDIR='/ws/web/gh-1.tmpdir' TMP='/ws/web/gh-1.tmpdir' TEMP='/ws/web/gh-1.tmpdir'\nunset CLAUDE_CODE_OAUTH_TOKEN\nexport GH_CONFIG_DIR='/ws/web/gh-1'.gh XDG_CACHE_HOME='/ws/web/gh-1.tmpdir/cache' TENDER_BUN='/b/bun'\nexport CLAUDE_CONFIG_DIR='/ws/web/gh-1'.claude CODEX_HOME='/ws/web/gh-1'.codex CLAUDE_CODE_TMPDIR='/ws/web/gh-1'.tmpdir\n`);
-  expect(s).toContain(`unset LINEAR_API_KEY\nexport TMPDIR='/ws/web/gh-1.tmpdir' TMP='/ws/web/gh-1.tmpdir' TEMP='/ws/web/gh-1.tmpdir'\n`);
+  expect(s).toContain(`unset LINEAR_API_KEY LINEAR_CLIENT_SECRET\nexport TMPDIR='/ws/web/gh-1.tmpdir' TMP='/ws/web/gh-1.tmpdir' TEMP='/ws/web/gh-1.tmpdir'\nunset CLAUDE_CODE_OAUTH_TOKEN\nexport GH_CONFIG_DIR='/ws/web/gh-1'.gh XDG_CACHE_HOME='/ws/web/gh-1.tmpdir/cache' TENDER_BUN='/b/bun'\nexport CLAUDE_CONFIG_DIR='/ws/web/gh-1'.claude CODEX_HOME='/ws/web/gh-1'.codex CLAUDE_CODE_TMPDIR='/ws/web/gh-1'.tmpdir\n`);
+  expect(s).toContain(`unset LINEAR_API_KEY LINEAR_CLIENT_SECRET\nexport TMPDIR='/ws/web/gh-1.tmpdir' TMP='/ws/web/gh-1.tmpdir' TEMP='/ws/web/gh-1.tmpdir'\n`);
   expect(s).toContain("--no-rollback-prompt");
   expect(s).toContain(`exec systemd-run --user --scope --quiet --collect --unit '${unit("gh-1")}' -- nono run --no-rollback-prompt --profile '/tender/nono/tender-claude.json' --allow '/ws/web/gh-1' --allow-unix-socket-subtree-bind '/ws/web/gh-1' --allow '/ws/web/gh-1.tmpdir' --allow-unix-socket-subtree-bind '/ws/web/gh-1.tmpdir' --allow '/ws/web/gh-1.claude' --allow '/ws/web/gh-1.codex' --read '${root}/src-web/.git/objects' -- claude --permission-mode`);
   expect(s).toContain(`--permission-mode bypassPermissions --settings '{"skipDangerousModePermissionPrompt":true,"hooks":{"Stop":[{"hooks":[{"type":"command","command":`);
@@ -45,7 +45,7 @@ test("launcher: codex without sandbox keeps the daemon", () => {
 test("launcher scripts are byte-for-byte stable for each agent, with and without nono", () => {
   const head = String.raw`#!/usr/bin/env bash
 cd '/ws/it'\''s' || exit 1
-unset LINEAR_API_KEY
+unset LINEAR_API_KEY LINEAR_CLIENT_SECRET
 export TMPDIR='/ws/it'\''s.tmpdir' TMP='/ws/it'\''s.tmpdir' TEMP='/ws/it'\''s.tmpdir'
 `;
   const claudeEnv = String.raw`CLAUDE_CODE_OAUTH_TOKEN="$(cat "$HOME/.claude-tender/oauth-token")" || exit 1

@@ -130,8 +130,14 @@ export function parseConfig(raw: any, base: string): Config {
     check(keys.length <= 500, "githubApp: at most 500 repos, GitHub's limit for one installation token");
     for (const r of Object.values(repos)) check(r.sandbox === "nono", `repos (${r.key}).sandbox: "nono" while githubApp is set; an unsandboxed session would push as your own gh login`);
   }
+  const lapp = raw.linearApp;
+  check(lapp === undefined || (obj(lapp) && Object.keys(lapp).every((k) => k === "clientId")), "linearApp: object with clientId");
+  if (obj(lapp)) {
+    check(typeof lapp.clientId === "string" && /^[A-Za-z0-9]{1,128}$/.test(lapp.clientId), "linearApp.clientId: the OAuth app's client ID; its secret goes in .env as LINEAR_CLIENT_SECRET");
+    check(sources.some((s) => s.tracker === "linear"), "linearApp: needs a linear source");
+  }
   if (errs.length) throw new Error(`invalid config:\n  ${errs.join("\n  ")}`);
-  return { host: raw.host, defaultHost, pollIntervalMs, workspaceRoot: expand(raw.workspaceRoot ?? "~/agent-ws", base), reposRoot, tmuxSession, maxConcurrent, maxInReview: raw.maxInReview, stallMinutes, repos, sources, ...(obj(intake) && { intake: { enabled: intake.enabled, host: intake.host } }), ...(judge && { judge }), prs: { staleDays: prs.staleDays, ...(prs.digestIssue && { digestIssue: prs.digestIssue }) }, ...(obj(app) && { githubApp: { appId: app.appId, installationId: app.installationId, privateKeyFile: expand(app.privateKeyFile, base) } }) };
+  return { host: raw.host, defaultHost, pollIntervalMs, workspaceRoot: expand(raw.workspaceRoot ?? "~/agent-ws", base), reposRoot, tmuxSession, maxConcurrent, maxInReview: raw.maxInReview, stallMinutes, repos, sources, ...(obj(intake) && { intake: { enabled: intake.enabled, host: intake.host } }), ...(judge && { judge }), prs: { staleDays: prs.staleDays, ...(prs.digestIssue && { digestIssue: prs.digestIssue }) }, ...(obj(app) && { githubApp: { appId: app.appId, installationId: app.installationId, privateKeyFile: expand(app.privateKeyFile, base) } }), ...(obj(lapp) && { linearApp: { clientId: lapp.clientId } }) };
 }
 
 export const repoDir = (cfg: Config, key: string) => join(cfg.workspaceRoot, key);

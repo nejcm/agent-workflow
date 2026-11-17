@@ -47,6 +47,7 @@ Unknown keys are errors in both files. Upgrading from older layouts is in [upgra
 | `judge` | object | none | turns on the [judge](intake.md#judge) for intake tickets and, opt-in, [guardrails](intake.md#guardrails); needs `intake` |
 | `prs` | object | `{ "staleDays": 14 }` | the [PR sweep](prs.md) |
 | `githubApp` | object | none | act on GitHub as a GitHub App instead of your `gh` login, see [GitHub App](setup.md#github-app) |
+| `linearApp` | object | none | act on Linear as an OAuth app instead of the `LINEAR_API_KEY` user, see [Linear app](setup.md#linear-app) |
 
 ### `repos` and `defaults`
 
@@ -129,6 +130,14 @@ A key the source's tracker doesn't use (e.g. `team` on a GitHub source) is rejec
 | `githubApp.privateKeyFile` | path | required with `githubApp` | the App's private key (`.pem`, PKCS#1 or PKCS#8); never the key itself; keep it mode 600 |
 
 With `githubApp` set, every repo in `repos` must have the same owner, there may be at most 500 (GitHub's limit per token), and every repo needs `sandbox: "nono"`.
+
+### `linearApp`
+
+| key | type | default | |
+|---|---|---|---|
+| `linearApp.clientId` | string `[A-Za-z0-9]` | required with `linearApp` | the OAuth app's client ID; its secret goes in `.env` as `LINEAR_CLIENT_SECRET` |
+
+With `linearApp` set there must be a Linear source, `LINEAR_API_KEY` is unused, and the claim sets the delegate instead of the assignee.
 
 ## Repo config
 
@@ -223,7 +232,8 @@ The script's flags (e.g. the Sentry script's `--org`, `--min-events`, `--no-fixe
 
 | variable | where | |
 |---|---|---|
-| `LINEAR_API_KEY` | `.env` in tender's working directory | required with a Linear source, see [Auth](auth.md) |
+| `LINEAR_API_KEY` | `.env` in tender's working directory | required with a Linear source, see [Auth](auth.md); unused with `linearApp` |
+| `LINEAR_CLIENT_SECRET` | `.env` | required with `linearApp`, see [Linear app](setup.md#linear-app) |
 | intake `secrets` (e.g. `SENTRY_TOKEN`, `PG_INTAKE_URL`) | `.env` | passed only to the rules that declare them |
 
 GitHub uses `gh`'s own login; see [Auth](auth.md).

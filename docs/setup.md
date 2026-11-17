@@ -130,6 +130,26 @@ By default `tender` acts as your `gh` login: it claims tickets, comments and mer
 
 Create a second GitHub account, add it as a collaborator (Write) on each repo, and log `gh` in as it on the host (`gh auth login`, or `GH_TOKEN` in the service environment) with a fine-grained token limited to the allowlisted repos and the same permissions as the App above. Nothing in `tender.json` changes; the claim assigns the machine user, and `feedbackAuthors` stays your own login.
 
+## Linear identity (optional)
+
+By default `tender` acts on Linear as the owner of `LINEAR_API_KEY`: the claim assigns the ticket to you. As a Linear OAuth app it acts as the app instead: comments, moves and filed tickets are by the app, and the claim sets the ticket's **delegate** to the app and leaves its assignee alone, so a human keeps owning it ([Linear: agents](https://linear.app/developers/agents)).
+
+### Linear app
+
+1. Create an OAuth app (**Settings → API → OAuth applications → New**, workspace admin): no webhooks, any callback URL (unused). Turn on **Client credentials**.
+2. Put its client secret in `.env` as `LINEAR_CLIENT_SECRET` (like `LINEAR_API_KEY`, never in `tender.json`; sessions and `tender open --exec` never see it).
+3. Add to `tender.json`:
+
+   ```json
+   "linearApp": { "clientId": "<client ID>" }
+   ```
+
+4. `scripts/run.sh` (its dry run mints a token) or `bun tender.ts once --dry-run`.
+
+No browser install is needed: `tender` mints [client-credentials tokens](https://linear.app/developers/oauth-2-0-authentication#client-credentials-tokens) (`actor=app` always, 30 days, no refresh token) with the scopes `read,write,app:assignable`, keeps one in memory per process, mints a new one a day before expiry or after a 401, and never falls back to `LINEAR_API_KEY`. `run` and `once` exit if the first mint fails. Such a token reaches all public teams in the workspace; a private team must add the app. Keep the scopes fixed: Linear replaces the app's tokens when a request asks for different ones, and rotating the client secret revokes them. A client-credentials request also replaces an app installation made through the browser (`actor=app`) flow.
+
+The app shows in Linear's agent UI only as the delegate: tender posts no agent session activity. Linear opens a session on delegation; answering it without webhooks would mean finding and tracking that session across polls, which tender does not do yet, so it may show as unresponsive. Switching is safe with tickets In Progress: they are assigned to you and have no delegate, which counts as tender's. A ticket delegated to another agent is someone else's.
+
 ## On a VM
 
 Same steps on the VM (Tailscale for access), with `"sandbox": "none"` in `defaults` (or per repo) and `"host": "vm"` in `tender.json`. Tickets labelled `host:vm` go there. Connect your editor with Remote-SSH to `~/agent-ws/<owner>/<name>/<ID>`.
@@ -140,7 +160,7 @@ Prove the sandbox boundaries on a throwaway repo first.
 
 - [ ] Inside a sandboxed session, `cat ~/.ssh/id_*`, `ls ~/Work/<other-repo>`, `ls ~/.config` fail.
 - [ ] Writing `~/.claude/CLAUDE.md`, `~/.claude/settings.json` or anything in `~/.claude-tender` fails, and so does reading `~/.claude/.credentials.json`; your CLAUDE.md, AGENTS.md and skills load.
-- [ ] `env | grep -iE 'token|key'` shows only phantom values; `LINEAR_API_KEY` is absent.
+- [ ] `env | grep -iE 'token|key'` shows only phantom values; `LINEAR_API_KEY` and `LINEAR_CLIENT_SECRET` are absent.
 - [ ] `git push -u origin agent/<ID>` and `gh pr create` work, also with an SSH `origin`.
 - [ ] Sandboxed Codex reaches its backend (`chatgpt.com`, `auth.openai.com`).
 - [ ] Codex session is in the app history.

@@ -56,16 +56,19 @@ export function linearTicket(i: any): Ticket {
 }
 
 export function linear(l: LinearSource, host: string, io: Io, defaultHost = false, _repos: string[] = [], claims: () => Promise<ProjectClaim[]> = async () => []): Tracker {
+  const app = io.linearApp;
   const gql = async (query: string, variables: object, mutate = false) => {
     if (mutate) io.log(`${io.dry ? "dry: " : ""}linear ${/\{\s*(\w+)/.exec(query)?.[1]} ${JSON.stringify(variables)}`);
     if (mutate && io.dry) return {};
-    const key = process.env.LINEAR_API_KEY;
+    const key = app ? `Bearer ${await app.token()}` : process.env.LINEAR_API_KEY;
     if (!key) throw new Error("LINEAR_API_KEY not set");
     const r = await io.fetch("https://api.linear.app/graphql", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: key },
       body: JSON.stringify({ query, variables }),
     });
+    // Linear's recovery for a revoked or cleaned-up token: mint a new one.
+    if (r.status === 401) app?.reset();
     const j: any = await r.json().catch(() => ({}));
     if (!r.ok || j.errors) throw new Error(`linear ${r.status}: ${JSON.stringify(j.errors ?? j).slice(0, 300)}`);
     return j.data;
@@ -91,13 +94,15 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
   const unrouted = new WeakSet<Ticket>();
   const list = async (state: string, labels: string[], complete = false): Promise<Ticket[]> => {
     const filter = { team: { key: { eq: l.team } }, state: { name: { eq: state } }, and: labels.map((n) => ({ labels: { some: { name: { eq: n } } } })) };
-    const d = await gql(LINEAR_ISSUES, { f: filter });
+    const d = await gql(app ? LINEAR_ISSUES.replace("assignee {", "delegate {") : LINEAR_ISSUES, { f: filter });
     if (complete && d.issues.nodes.length >= 100) throw new Error(`linear ${l.team} ${state}: 100 issues listed, the rest unknown`);
     const nodes = d.issues.nodes.filter((i: any) => /^[A-Z0-9]+-\d+$/.test(i.identifier));
     return Promise.all(
       nodes.map(async (i: any) => {
         const t = linearTicket(i);
-        if (typeof i.assignee?.id === "string" && i.assignee.id !== (await viewer())) t.otherAssignee = String(i.assignee.name || i.assignee.id);
+        // As an app tender owns the delegate, not the assignee: any human may be assigned, another agent may not be delegated.
+        const owner = app ? i.delegate : i.assignee;
+        if (typeof owner?.id === "string" && owner.id !== (await viewer())) t.otherAssignee = String(owner.name || owner.id);
         if (t.repo === undefined && typeof i.project?.id === "string")
           t.repo = await claims().then(
             (c) => projectRepo(c, l.team, i.project, io.log),
@@ -163,7 +168,7 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
       return st?.type === "canceled" || st?.type === "duplicate" ? "canceled" : l.done.includes(st?.name) ? "done" : undefined;
     },
     async claim(t) {
-      await move(t.ref, l.inProgress, { assigneeId: await viewer() });
+      await move(t.ref, l.inProgress, { [app ? "delegateId" : "assigneeId"]: await viewer() });
       // Best-effort: once the ticket is in progress the claim has succeeded; a throw would only report it as failed.
       await comment(t, `picked up on ${host}`).catch((e) => io.log(`${t.id}: picked-up comment failed: ${e.message}`));
     },

@@ -7,6 +7,7 @@ import { parseConfig } from "./src/config/config";
 import { dashboard, watch } from "./src/ui/dash";
 import { events } from "./src/db";
 import { appTokenFile, githubApp, withApp } from "./src/github-app";
+import { linearApp } from "./src/linear-app";
 import { handoff, shellLine, ticketClone, type Tool, TOOLS } from "./src/session/handoff";
 import { intake } from "./src/intake";
 import { prs } from "./src/prs";
@@ -157,7 +158,8 @@ async function main(argv: string[]) {
   const log = (m: string) => console.log(`${new Date().toISOString()} ${m}`);
   // Dry runs leave the token file alone; only real runs start sessions that read it.
   const app = cfg.githubApp && githubApp(cfg.githubApp, Object.keys(cfg.repos), fetch, dry ? undefined : appTokenFile(cfg.workspaceRoot));
-  const io: Io = { run: app ? withApp(spawnRun, app) : spawnRun, fetch, dry, log, home: homedir(), event: events(cfg, dry, log), ...(app && { appLogin: app.login }) };
+  const lapp = cfg.linearApp && linearApp(cfg.linearApp, fetch);
+  const io: Io = { run: app ? withApp(spawnRun, app) : spawnRun, fetch, dry, log, home: homedir(), event: events(cfg, dry, log), ...(app && { appLogin: app.login }), ...(lapp && { linearApp: lapp }) };
   if (cmd === "stats") {
     const r = await stats(cfg, { ...io, log: (m) => console.error(m) }, { days });
     return console.log(argv.includes("--json") ? JSON.stringify(r, null, 2) : statsTable(r));
@@ -191,7 +193,7 @@ async function main(argv: string[]) {
     console.error(`${h.key}/${h.id} is handed off; \`tender resume ${h.key}/${h.id}\` gives it back`);
     if (!h.argv.length) return console.log(h.wt);
     if (!argv.includes("--exec")) return console.log(shellLine(h.wt, h.argv));
-    const { LINEAR_API_KEY: _, ...rest } = env;
+    const { LINEAR_API_KEY: _, LINEAR_CLIENT_SECRET: __, ...rest } = env;
     process.exit(await Bun.spawn(h.argv, { cwd: h.wt, env: rest, stdio: ["inherit", "inherit", "inherit"] }).exited);
   }
   if (cmd === "resume")
@@ -232,6 +234,11 @@ async function main(argv: string[]) {
   if (app)
     await app.token().catch((e) => {
       console.error(`github app: ${e.message}`);
+      process.exit(1);
+    });
+  if (lapp)
+    await lapp.token().catch((e) => {
+      console.error(`linear app: ${e.message}`);
       process.exit(1);
     });
   await cloneAll(cfg, io);

@@ -66,7 +66,7 @@ What a session leaves in `.tender/run/` and the merge decision.
 - `prompts/default.md`: the ticket prompt used when a repo's `.tender/` names none.
 - `nono/`: sandbox profiles for Claude and Codex sessions, intake scripts, the intake judge and checks.
 - `systemd/`: user units for `tender run`, the intake timer and the weekly PR sweep timer, installed by `scripts/run.sh`.
-- `skills/tender-setup/SKILL.md`: the setup skill for a repo's `.tender/`; `skills/tender-maintain/SKILL.md` proposes repairs and intake rules.
+- `skills/tender-setup/SKILL.md`: the setup skill for a repo's `.tender/`; `skills/tender-maintain/SKILL.md` proposes repairs and intake rules. Installed copies for this repo live in `.agents/skills/` (and `.claude/skills/` symlinks), pinned by `skills-lock.json`; edit `skills/`, not the copies.
 - `scripts/setup.sh`: idempotent host setup and tracker labels; `scripts/run.sh`: preflight, then poll, or install the systemd units.
 - `scripts/codex-hooks.sh`: installs or refreshes tender's Codex state hooks in a `config.toml`.
 - `tests/`: one file per module (launcher tests are in `pass.test.ts`, the Ready to merge pass in `ready.test.ts`, `intake/sentry.ts` in `sentry.test.ts`, `intake/posthog-errors.ts` in `posthog-errors.test.ts`, the `intake/pg*.ts` scripts in `pg.test.ts`, `intake/contract.ts` in `contract.test.ts`); shared fakes in `tests/helpers.ts`.

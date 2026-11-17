@@ -147,7 +147,7 @@ trust:
 escapeHatches: ["pragma: no cover"]
 prompt:
   steps:
-    plan: Load the `orchestration` skill and use it to plan and implement the ticket.
+    plan: Plan and implement the ticket. List the files you will change before editing.
     verify: { file: verify.md }
     review: ""
   append: Never edit generated files under src/gen/.

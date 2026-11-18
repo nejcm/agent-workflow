@@ -74,6 +74,15 @@ export GH_CONFIG_DIR='/ws/it'\''s'.gh XDG_CACHE_HOME='/ws/it'\''s.tmpdir/cache' 
   expect(s("codex", "none")).toBe(`${head}${codexEnv}exec ${scope}${codex("")}`);
 });
 
+test("a failed window listing skips the pass: no start, no ended notice", async () => {
+  const { tr, calls } = fakeTracker({ ready: [ticket(1)], inProgress: [ticket(2)] });
+  const { io, cmds } = fakeIo((a) => (a[1] === "list-windows" ? { code: 1, err: "timeout" } : noPr(a)));
+  await pass(config(), io, () => tr, "/tender");
+  expect(calls).toEqual([]);
+  expect(cmds.some((x) => x.includes("new-window"))).toBe(false);
+  expect(existsSync(join(root, "acme/web/gh-2.ended"))).toBe(false);
+});
+
 test("starts ready tickets up to maxConcurrent", async () => {
   const c = config({ maxConcurrent: 2 });
   const { tr, calls } = fakeTracker({ ready: [ticket(1), ticket(2), ticket(3)] });
@@ -423,13 +432,15 @@ test("seedClaude: a fresh dir with template links, account keys and trust only; 
 
 test("reuses an existing session dir; a branch a legacy worktree left in the base clone carries over", async () => {
   const c = config();
-  mkdirSync(join(root, "acme/web/gh-1"), { recursive: true });
+  mkdirSync(join(root, "acme/web/gh-1/.tender/run"), { recursive: true });
+  for (const f of ["gh-1.question", "gh-1/.tender/run/question.md", "gh-1/.tender/run/answer.md"]) writeFileSync(join(root, "acme/web", f), "{}");
   const { tr } = fakeTracker({ ready: [ticket(1), ticket(2)] });
   const { io, cmds, logs } = fakeIo((a) => (a[5] === "--quiet" ? { out: "abc123\n" } : noPr(a)));
   await pass(c, io, () => tr, "/tender");
   expect(logs.some((l) => l.includes(`reuse ${root}/acme/web/gh-1`))).toBe(true);
   expect(cmds.filter((x) => x.includes(`${root}/acme/web/gh-1 `) || x.endsWith(`${root}/acme/web/gh-1`)).filter((x) => x.startsWith("git"))).toEqual([]);
   expect(cmds).toContain(`git -C ${root}/acme/web/gh-2.tmp switch -q -c agent/gh-2 abc123`);
+  for (const f of ["gh-1.question", "gh-1/.tender/run/question.md", "gh-1/.tender/run/answer.md"]) expect(existsSync(join(root, "acme/web", f))).toBe(false);
 });
 
 test("in-progress: PR moves to review; missing window comments once", async () => {
@@ -834,8 +845,8 @@ test("after a restart cleanup and findPr use the repo and source recorded next t
   expect(cmds.filter((x) => /^rm |kill-window/.test(x))).toEqual(["tmux kill-window -t @1", `rm -rf --one-file-system -- ${root}/acme/api/gh-5`]);
   expect(existsSync(join(root, "acme/web/gh-5.source"))).toBe(true);
   expect(logs.some((l) => l.includes(`acme/web/gh-6: source "gone" in gh-6.source is not configured; left alone`))).toBe(true);
-  expect(cmds).toContain("gh pr list --repo acme/api --head agent/gh-5 --state all --json url,state");
-  expect(cmds).toContain("gh pr list --repo acme/api --head agent/ENG-7 --state all --json url,state");
+  expect(cmds).toContain("gh pr list --repo acme/api --head agent/gh-5 --state all --json url,state,mergedAt,isCrossRepository");
+  expect(cmds).toContain("gh pr list --repo acme/api --head agent/ENG-7 --state all --json url,state,mergedAt,isCrossRepository");
   expect(cmds.some((x) => x.includes("--repo acme/web --head agent/ENG-7"))).toBe(false);
   expect(lin.calls).toEqual([]);
   // Closed but still listed in progress, after the worktree is gone too.
@@ -1227,7 +1238,7 @@ test("a session clone that fails half-way is removed, not reused next poll", asy
   await pass(config(), io, () => tr, "/tender");
   expect(calls).toEqual([]);
   expect(logs.some((l) => l.includes("start gh-1 failed"))).toBe(true);
-  expect([existsSync(join(root, "acme/web/gh-1")), existsSync(join(root, "acme/web/gh-1.tmp"))]).toEqual([false, false]);
+  expect(["gh-1", "gh-1.tmp", "gh-1.source", "gh-1.agent"].map((f) => existsSync(join(root, "acme/web", f)))).toEqual([false, false, false, false]);
 });
 
 test("sandbox profiles deny host Unix sockets", () => {

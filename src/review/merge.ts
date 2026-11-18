@@ -37,13 +37,16 @@ export const CRITICAL_PATHS = [
   "AGENTS.md", "CLAUDE.md", "**/.claude/**", "**/.codex/**", ".mcp.json", "CLAUDE.local.md", "GEMINI.md", "**/.gemini/**", "**/.cursor/**", ".cursorrules", "uv.lock", "poetry.lock", "Gemfile", "Gemfile.lock", "**/*.tf", "**/k8s/**", "**/helm/**",
   ".npmrc", "bunfig.toml", ".gitmodules", "**/.husky/**", ".pre-commit-config.yaml", "Makefile",
   "conftest.py", "pytest.ini", "jest.config.*", "vitest.config.*", "playwright.config.*",
+  "tsconfig*.json", "eslint.config.*", ".eslintrc*", "biome.json*", "ruff.toml", ".ruff.toml", "mypy.ini", "setup.cfg", "tox.ini", ".golangci.*",
 ];
 
 export const TEST_PATHS = ["**/*.test.*", "**/*.spec.*", "**/tests/**", "**/test/**", "**/__tests__/**", "**/e2e/**", "**/spec/**", "**/test_*.py", "**/*_test.go", "**/*_test.py"];
 
-// gitignore-style: a pattern without "/" matches the file name at any depth.
-export const globRe = (g: string) =>
-  new RegExp(`^${g.includes("/") ? "" : "(?:.*/)?"}${g.replace(/\*\*\/|\*\*|\*|\?|[.+^${}()|[\]\\]/g, (m) => ({ "**/": "(?:.*/)?", "**": ".*", "*": "[^/]*", "?": "[^/]" })[m] ?? `\\${m}`)}$`, "is");
+// gitignore-style: a pattern without "/" matches at any depth, a leading "/" anchors, a literal last segment also covers everything under it.
+export const globRe = (glob: string) => {
+  const g = glob.replace(/\/+$/, "");
+  return new RegExp(`^${g.includes("/") ? "" : "(?:.*/)?"}${g.replace(/^\//, "").replace(/\*\*\/|\*\*|\*|\?|[.+^${}()|[\]\\]/g, (m) => ({ "**/": "(?:.*/)?", "**": ".*", "*": "[^/]*", "?": "[^/]" })[m] ?? `\\${m}`)}${/[*?][^/]*$/.test(g) ? "" : "(?:/.*)?"}$`, "is");
+};
 export const isCritical = (path: string, extra: string[] = []) => [...CRITICAL_PATHS, ...extra].some((g) => globRe(g).test(path));
 export const isTest = (path: string, extra: string[] = []) => [...TEST_PATHS, ...extra].some((g) => globRe(g).test(path));
 
@@ -87,7 +90,7 @@ export const checkState = (c: any) =>
     : c?.status !== "COMPLETED" ? "pending" : c.conclusion === "SUCCESS" ? "success" : ["NEUTRAL", "SKIPPED"].includes(c.conclusion) ? "neutral" : "failed";
 
 /** Whether tender may merge the PR now. The assessment is agent-written and untrusted: it can only hold a merge back. */
-export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Session, "autoMerge" | "ceiling" | "trust" | "criticalPaths" | "testPaths" | "baseBranch">, ticketLabels: string[] = []): { merge: boolean | "wait"; reason: string } {
+export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Session, "autoMerge" | "ceiling" | "trust" | "criticalPaths" | "testPaths" | "baseBranch" | "intake">, ticketLabels: string[] = []): { merge: boolean | "wait"; reason: string } {
   const no = (reason: string) => ({ merge: false, reason });
   const mode = prMode(s, pr.files);
   const offAt = pr.files?.flatMap(paths).find((p) => trustRule(s, p)?.autoMerge === "off");
@@ -106,7 +109,9 @@ export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Se
   const tier = lines <= 150 && pr.changedFiles <= 5 ? "small" : lines <= 500 && pr.changedFiles <= 15 ? "medium" : "large";
   if (pr.files) {
     if (pr.files.length !== pr.changedFiles) return no(`file list has ${pr.files.length} of ${pr.changedFiles} files`);
-    const hit = pr.files.flatMap(paths).find((p) => isCritical(p, s.criticalPaths));
+    // Intake scripts run on the base branch with the rule's secrets; their dir covers sibling imports.
+    const intakeDirs = s.intake.map((i) => `/${i.run.includes("/") ? i.run.slice(0, i.run.lastIndexOf("/")) : i.run}`);
+    const hit = pr.files.flatMap(paths).find((p) => isCritical(p, [...s.criticalPaths, ...intakeDirs]));
     if (hit) return no(`touches critical path ${hit}`);
   }
   if (pr.files && mode !== "all") {

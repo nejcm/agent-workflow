@@ -15,6 +15,8 @@ export const validRepo = (s: unknown) => typeof s === "string" && REPO.test(s) &
 export const allowedRepo = (cfg: Config, raw: unknown) => (validRepo(raw) ? Object.keys(cfg.repos).find((k) => k.toLowerCase() === (raw as string).toLowerCase()) : undefined);
 const LANE_KEYS = ["repo", "repoPath", "baseBranch", "agent", "sandbox", "maxConcurrent", "testCmd", "prompt"];
 const MOVED_KEYS = ["agent", "testCmd", "planStep", "prompt", "testPaths"];
+const TOP_KEYS = ["host", "defaultHost", "pollIntervalMs", "workspaceRoot", "reposRoot", "tmuxSession", "maxConcurrent", "maxInReview", "stallMinutes", "lanes", "defaults", "repos", "sources", "intake", "judge", "prs"];
+const REPO_KEYS = ["path", "baseBranch", "sandbox", "maxConcurrent", "maxInReview", "autoMerge", "criticalPaths", "feedbackAuthors", "stallMinutes", "feedback", ...MOVED_KEYS];
 export const AUTO_MERGE = ["off", "shadow", "intelligent", "all"] as const;
 
 const expand = (p: string, base: string) => resolve(base, p.replace(/^~(?=$|\/)/, homedir()));
@@ -28,6 +30,7 @@ export function parseConfig(raw: any, base: string): Config {
   const rounds = (v: unknown) => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 10;
   check(obj(raw), "config must be a JSON object");
   raw = obj(raw) ? raw : {};
+  for (const k of Object.keys(raw)) check(TOP_KEYS.includes(k), `${k}: unknown key`);
   check(str(raw.host) && /^[A-Za-z0-9._-]+$/.test(raw.host), "host: required, [A-Za-z0-9._-]");
   const defaultHost = raw.defaultHost ?? false;
   check(typeof defaultHost === "boolean", "defaultHost: boolean");
@@ -45,6 +48,7 @@ export function parseConfig(raw: any, base: string): Config {
   const defaults = raw.defaults ?? {};
   check(obj(defaults) && defaults.path === undefined, "defaults: object without path");
   if (obj(defaults)) for (const k of MOVED_KEYS) check(defaults[k] === undefined, `defaults.${k}: moved to .tender/config.yaml in the repo`);
+  if (obj(defaults)) for (const k of Object.keys(defaults)) check(k === "path" || REPO_KEYS.includes(k), `defaults.${k}: unknown key`);
 
   const shape = `array of "owner/name" or { "name": "owner/name", …overrides }`;
   check(!obj(raw.repos), `repos: now an ${shape}; move each "owner/name": {…} entry to { "name": "owner/name", … } (see docs/upgrading.md)`);
@@ -59,6 +63,7 @@ export function parseConfig(raw: any, base: string): Config {
     const at = `repos[${i}] (${key})`;
     const v = { ...(obj(defaults) ? defaults : {}), ...o };
     for (const k of MOVED_KEYS) check(o[k] === undefined, `${at}.${k}: moved to .tender/config.yaml in the repo`);
+    for (const k of Object.keys(o)) check(REPO_KEYS.includes(k), `${at}.${k}: unknown key`);
     for (const k of ["path", "baseBranch"]) check(v[k] === undefined || str(v[k]), `${at}.${k}: non-empty string`);
     const r: Repo = {
       key,

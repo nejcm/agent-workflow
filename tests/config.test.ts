@@ -82,6 +82,13 @@ test("config: work keys moved to the repo's .tender/config.yaml are rejected", (
     expect(msg).toContain(`defaults.${k}: moved to .tender/config.yaml in the repo`);
     expect(msg).toContain(`repos[0] (acme/web).${k}: moved to .tender/config.yaml in the repo`);
   }
+  expect(msg).not.toContain("unknown key");
+});
+
+test("config: unknown keys at the top level, in defaults and in repos entries are rejected", () => {
+  expect(() => config({ pollIntervalMS: 5000 })).toThrow("pollIntervalMS: unknown key");
+  expect(() => config({ defaults: { sandbox: "nono", feedbackAuthor: ["x"] } })).toThrow("defaults.feedbackAuthor: unknown key");
+  expect(() => config({ repos: [{ name: "acme/web", criticalpaths: ["x/**"] }] })).toThrow("repos[0] (acme/web).criticalpaths: unknown key");
 });
 
 test("config: host criticalPaths from defaults or per repo, validated", () => {

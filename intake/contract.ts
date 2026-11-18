@@ -14,9 +14,11 @@ const KEY = /^contract:(config:check|(criticalPaths|trust):[A-Za-z0-9./-]{0,60}-
 // tender's collect cap (LIMITS.lines in src/intake.ts); more lines and the whole run files nothing.
 const MAX_LINES = 100;
 
-// Same as globRe in tender's src/review/merge.ts (a test keeps them equal): gitignore-style, a pattern without "/" matches at any depth.
-export const globRe = (g: string) =>
-  new RegExp(`^${g.includes("/") ? "" : "(?:.*/)?"}${g.replace(/\*\*\/|\*\*|\*|\?|[.+^${}()|[\]\\]/g, (m) => ({ "**/": "(?:.*/)?", "**": ".*", "*": "[^/]*", "?": "[^/]" })[m] ?? `\\${m}`)}$`, "is");
+// Same as globRe in tender's src/review/merge.ts (a test keeps them equal): gitignore-style, a pattern without "/" matches at any depth, a literal last segment also covers everything under it.
+export const globRe = (glob: string) => {
+  const g = glob.replace(/\/+$/, "");
+  return new RegExp(`^${g.includes("/") ? "" : "(?:.*/)?"}${g.replace(/^\//, "").replace(/\*\*\/|\*\*|\*|\?|[.+^${}()|[\]\\]/g, (m) => ({ "**/": "(?:.*/)?", "**": ".*", "*": "[^/]*", "?": "[^/]" })[m] ?? `\\${m}`)}${/[*?][^/]*$/.test(g) ? "" : "(?:/.*)?"}$`, "is");
+};
 
 export const globKey = (field: string, glob: string) => `contract:${field}:${glob.replace(/[^A-Za-z0-9./-]/g, "-").slice(0, 60)}-${createHash("sha256").update(glob).digest("hex").slice(0, 8)}`;
 

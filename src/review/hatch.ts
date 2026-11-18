@@ -1,5 +1,5 @@
-export const ESCAPE_HATCHES = ["eslint-disable", "@ts-ignore", "@ts-expect-error", "as any", "# type: ignore", "# noqa", "//nolint", "#[allow(", "@SuppressWarnings"];
-const literal = (p: string) => new RegExp(p === "as any" ? "\\bas any\\b" : p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+export const ESCAPE_HATCHES = ["eslint-disable", "@ts-ignore", "@ts-expect-error", "as any", "# type: ignore", "# noqa", "//nolint", "#[allow(", "@SuppressWarnings", "@ts-nocheck", "biome-ignore", "oxlint-disable", "deno-lint-ignore", "# pyright: ignore", "# pylint: disable", "# rubocop:disable", "#![allow(", "#[expect(", "ruff: noqa", "flake8: noqa", "# mypy: ignore-errors"];
+const literal = (p: string) => new RegExp(p === "as any" ? "\\bas\\s+any\\b" : p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/ /g, "\\s*"));
 const HATCH_MS = 5000;
 
 /** Added lines of a unified diff with their file; hunk counts decide what is content, so an added "+++ x" line is not a header. */

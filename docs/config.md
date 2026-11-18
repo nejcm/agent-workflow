@@ -10,7 +10,7 @@ Unknown keys are errors in both files. Upgrading from older layouts is in [upgra
 
 ## Host config
 
-`tender.json`, read from the working directory or `--config <path>`. Relative paths resolve against the file's directory, and `~` is your home. A full example is [`tender.example.json`](../tender.example.json).
+`tender.json`, read from the working directory or `--config <path>`. Relative paths resolve against the file's directory, and `~` is your home. A full example is [`tender.example.json`](../tender.example.json). Unknown keys are errors.
 
 ```json
 {

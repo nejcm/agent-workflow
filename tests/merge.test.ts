@@ -20,7 +20,7 @@ const prFacts = (over: Partial<PrFacts> = {}): PrFacts => {
   };
 };
 const assess = (over: object = {}) => ({ tested: true, confidence: "high" as const, critical: false, reviewed: true, reviewer: "gpt-5", reason: "small fix, tests pass", ...over });
-const smart = { autoMerge: "intelligent" as const, ceiling: "all" as const, trust: [], escapeHatches: [], criticalPaths: [], testPaths: [], baseBranch: "main" };
+const smart = { autoMerge: "intelligent" as const, ceiling: "all" as const, trust: [], escapeHatches: [], criticalPaths: [], testPaths: [], baseBranch: "main", intake: [] };
 const medium = { additions: 200, deletions: 100, changedFiles: 8 };
 const filesOut = (pr: PrFacts) => ({ out: pr.files!.map((f) => JSON.stringify(f)).join("\n") });
 
@@ -83,6 +83,13 @@ test("critical paths: built-ins, case-insensitive, any depth without a slash, co
   expect(isCritical("lib/x.proto", ["*.proto"])).toBe(true);
   expect(isCritical("a.b", ["a?b"])).toBe(true);
   expect(isCritical("ab", ["a.b"])).toBe(false);
+  for (const [g, p] of [["/infra/**", "infra/main.tf"], ["infra/", "infra/main.tf"], ["infra/", "ops/infra/x"], ["payments", "src/payments/x.ts"], ["/Makefile2", "Makefile2"]]) expect([g, p, isCritical(p, [g])]).toEqual([g, p, true]);
+  expect(isCritical("ops/Makefile2", ["/Makefile2"])).toBe(false);
+  expect([isCritical("notes.md/evil.ts", ["*.md"]), isCritical("docs/a.md/x.ts", ["docs/*.md"])]).toEqual([false, false]);
+  const intake = (run: string, path: string) => mergeDecision(prFacts({ files: [file(path)] }), undefined, { ...smart, intake: [{ run }] } as any).reason;
+  expect(intake("scripts/intake/sentry.ts", "scripts/intake/pg.ts")).toBe("touches critical path scripts/intake/pg.ts");
+  expect(intake("sentry.ts", "sentry.ts")).toBe("touches critical path sentry.ts");
+  expect(intake("sentry.ts", "src/sentry.ts")).toBe("small change");
   expect(mergeDecision(prFacts({ files: [file("src/billing/pay.ts")] }), undefined, { ...smart, criticalPaths: ["src/billing/**"] }).reason).toBe("touches critical path src/billing/pay.ts");
 });
 
@@ -265,6 +272,8 @@ test("merge decision: a file list that disagrees with changedFiles holds back; a
   expect(mergeDecision(prFacts({ changedFiles: 1, files: [] }), undefined, smart).reason).toBe("file list has 0 of 1 files");
   expect(mergeDecision({ ...prFacts({ files: [file("package.json")] }), files: undefined }, undefined, smart).merge).toBe(true);
   for (const p of ["CLAUDE.local.md", "GEMINI.md", ".cursor/rules/x.mdc", "bunfig.toml", "sub/vitest.config.ts", "conftest.py", ".husky/pre-commit"]) expect(isCritical(p)).toBe(true);
+  for (const p of ["tsconfig.json", "web/tsconfig.build.json", "eslint.config.js", ".eslintrc.json", "biome.jsonc", "ruff.toml", "setup.cfg", "tox.ini", "mypy.ini", ".golangci.yml"]) expect(isCritical(p)).toBe(true);
+  expect(isCritical("src/eslint-rules.ts")).toBe(false);
   expect(isTest("spec/models/user_spec.rb")).toBe(true);
 });
 
@@ -356,7 +365,7 @@ test("in review: gh calls per ticket per poll; feedback reuses auto-merge's view
     await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge, feedbackAuthors }] }), x.io, () => fakeTracker({ inReview: [ticket(1)] }).tr, "/tender", async () => "idle");
     return x.cmds.filter((c) => c.startsWith("gh "));
   };
-  const list = "gh pr list --repo acme/web --head agent/gh-1 --state all --json url,state";
+  const list = "gh pr list --repo acme/web --head agent/gh-1 --state all --json url,state,mergedAt,isCrossRepository";
   const merge = "gh pr view 7 --repo acme/web --json number,url,state,isDraft,isCrossRepository,baseRefName,baseRefOid,mergeable,additions,deletions,changedFiles,statusCheckRollup,labels,headRefOid,reviewDecision,mergeStateStatus";
   worktree("gh-1");
   // The first poll comments "not auto-merged" and so shares nothing; count the held polls after it.
@@ -430,10 +439,11 @@ const hunk = (path: string, ...lines: string[]) => {
 };
 
 test("escape hatches: each built-in pattern and a repo pattern on an added line, named with its file", () => {
-  const added = ["// eslint-disable-next-line no-console", "// @ts-ignore", "// @ts-expect-error", "const x = y as any;", "x = 1  # type: ignore[attr]", "import os  # noqa: F401", "f() //nolint:errcheck", "#[allow(dead_code)]", '@SuppressWarnings("unchecked")'];
+  const added = ["// eslint-disable-next-line no-console", "// @ts-ignore", "// @ts-expect-error", "const x = y as any;", "x = 1  # type: ignore[attr]", "import os  # noqa: F401", "f() //nolint:errcheck", "#[allow(dead_code)]", '@SuppressWarnings("unchecked")', "// @ts-nocheck", "// biome-ignore lint/style: x", "// oxlint-disable", "// deno-lint-ignore-file", "x = 1  # pyright: ignore[reportX]", "#pylint:disable=foo", "# rubocop:disable Style/X", "#![allow(clippy::all)]", "#[expect(dead_code)]", "# ruff: noqa: E501", "# flake8: noqa", "# mypy: ignore-errors"];
   expect(added).toHaveLength(ESCAPE_HATCHES.length);
   ESCAPE_HATCHES.forEach((p, i) => expect(escapeHatch(hunk("src/a.ts", " ctx", `+${added[i]}`), [])).toBe(`adds escape hatch ${JSON.stringify(p)} in src/a.ts`));
-  for (const line of ["it has anything", "as anyOf(x)", "eslint-config", "@ts-check"]) expect(escapeHatch(hunk("src/a.ts", `+${line}`), [])).toBeUndefined();
+  for (const line of ["it has anything", "as anyOf(x)", "eslint-config", "@ts-check", "Array<any>", "x as anyOf"]) expect(escapeHatch(hunk("src/a.ts", `+${line}`), [])).toBeUndefined();
+  for (const line of ["x as \tany", "x = 1  #type:ignore"]) expect(escapeHatch(hunk("src/a.ts", `+${line}`), [])).toMatch(/^adds escape hatch/);
   expect(escapeHatch(hunk("lib/a.py", "+x = 1  # pragma: no cover"), ["pragma: no ?cover"])).toBe('adds escape hatch "pragma: no ?cover" in lib/a.py');
 });
 

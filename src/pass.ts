@@ -381,6 +381,8 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
     }),
   );
   const wins = await windows(cfg, io);
+  // Every start, count and ended notice reads `wins`; an empty map from a failed listing would read as no live sessions.
+  if (!wins.listed && !io.dry) return io.log("tmux windows unknown, so this pass is skipped");
   await step(io, "sweep scopes", () => sweepScopes(cfg, io));
 
   const lists = new Map<string, Promise<Ticket[]>>();

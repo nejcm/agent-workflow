@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Io, Repo } from "./types";
-import { put, read, validBranch } from "./util";
+import { mtime, put, read, validBranch } from "./util";
 
 export const PR_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/;
 
@@ -37,8 +37,10 @@ export const sameRepo = (a: string, b: string) => a.toLowerCase() === b.toLowerC
 
 /** The ticket's open or merged PR, recorded in `<dir>/<ID>.pr` for status. */
 export async function findPr(repo: string, id: string, io: Io, dir: string): Promise<string | undefined> {
-  const prs: any[] = JSON.parse(await read(io, ["gh", "pr", "list", "--repo", repo, "--head", `agent/${id}`, "--state", "all", "--json", "url,state"]));
-  const url: string | undefined = prs.find((p) => p.state !== "CLOSED")?.url;
+  const prs: any[] = JSON.parse(await read(io, ["gh", "pr", "list", "--repo", repo, "--head", `agent/${id}`, "--state", "all", "--json", "url,state,mergedAt,isCrossRepository"]));
+  // `--head` also matches fork branches; a merge before this run's start (`<ID>.source`) is a reopened ticket's earlier run.
+  const since = mtime(join(dir, `${id}.source`));
+  const url: string | undefined = prs.find((p) => !p.isCrossRepository && (p.state === "OPEN" || (p.state === "MERGED" && !(since && Date.parse(p.mergedAt) < since))))?.url;
   const f = join(dir, `${id}.pr`);
   if (url && (!existsSync(f) || readFileSync(f, "utf8") !== url)) put(io, f, url);
   return url;

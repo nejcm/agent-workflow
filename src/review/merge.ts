@@ -38,6 +38,10 @@ export const CRITICAL_PATHS = [
   ".npmrc", "bunfig.toml", ".gitmodules", "**/.husky/**", ".pre-commit-config.yaml", "Makefile",
   "conftest.py", "pytest.ini", "jest.config.*", "vitest.config.*", "playwright.config.*",
   "tsconfig*.json", "eslint.config.*", ".eslintrc*", "biome.json*", "ruff.toml", ".ruff.toml", "mypy.ini", "setup.cfg", "tox.ini", ".golangci.*",
+  ".eslintignore", "jsconfig.json", "deno.json*", ".flake8", "pylintrc", ".pylintrc", "pyrightconfig.json", ".mypy.ini", "clippy.toml", ".clippy.toml", "**/.cargo/**", "go.work*",
+  "vite.config.*", "vitest.workspace.*", "karma.conf.*", ".mocharc*", "cypress.config.*", "noxfile.py", ".coveragerc", ".nycrc*", "codecov.y*ml", ".codecov.y*ml", ".c8rc*", "nyc.config.*", "jest.setup.*", "vitest.setup.*", "phpunit.xml*", "justfile", "Taskfile*.y*ml", "Rakefile", "turbo.json", "nx.json", "lefthook*.yml", ".oxlintrc*",
+  ".circleci/**", ".buildkite/**", "azure-pipelines*.yml", "Jenkinsfile", ".travis.yml", ".drone.yml", "appveyor.yml", ".appveyor.yml", ".gitattributes",
+  "node_modules",
 ];
 
 export const TEST_PATHS = ["**/*.test.*", "**/*.spec.*", "**/tests/**", "**/test/**", "**/__tests__/**", "**/e2e/**", "**/spec/**", "**/test_*.py", "**/*_test.go", "**/*_test.py"];

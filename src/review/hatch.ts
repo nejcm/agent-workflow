@@ -1,5 +1,27 @@
-export const ESCAPE_HATCHES = ["eslint-disable", "@ts-ignore", "@ts-expect-error", "as any", "# type: ignore", "# noqa", "//nolint", "#[allow(", "@SuppressWarnings", "@ts-nocheck", "biome-ignore", "oxlint-disable", "deno-lint-ignore", "# pyright: ignore", "# pylint: disable", "# rubocop:disable", "#![allow(", "#[expect(", "ruff: noqa", "flake8: noqa", "# mypy: ignore-errors"];
-const literal = (p: string) => new RegExp(p === "as any" ? "\\bas\\s+any\\b" : p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/ /g, "\\s*"));
+const SUPPRESSIONS = ["eslint-disable", "@ts-ignore", "@ts-expect-error", "@ts-nocheck", "# type: ignore", "# noqa", "ruff: noqa", "flake8: noqa", "# mypy: ignore-errors", "# pyright: ignore", "# pylint: disable", "# rubocop:disable", "//nolint", "lint:ignore", "lint:file-ignore", "biome-ignore", "oxlint-disable", "deno-lint-ignore", "shellcheck disable", "#[allow(", "#![allow(", "#[expect(", "@SuppressWarnings", "@Suppress", "@file:Suppress", "SuppressMessage(", "# pragma: no cover", "# pragma: no branch", "istanbul ignore", "c8 ignore", "v8 ignore"];
+const escaped = (p: string) => p.replace(/[^\w ]/g, (c) => ` ${c.replace(/[.*+?^${}()|[\]\\]/, "\\$&")} `).trim().replace(/ +/g, "\\s*");
+const literal = (p: string, flags: string) => [p, new RegExp((/^\w/.test(p) ? "\\b" : "") + escaped(p), flags)] as const;
+// Comment directives ignore case like their tools do; test skips stay case-sensitive so `t.skip(1)` or `@disabled` in a template do not hold a merge.
+const BUILTIN: (readonly [string, RegExp])[] = [
+  ...SUPPRESSIONS.map((p) => literal(p, "i")),
+  ["as any", /\bas\s+any\b/i],
+  ["as unknown as", /\bas\s+unknown\s+as\b/i],
+  ["cfg_attr(..., allow(", /#\s*!?\s*\[\s*cfg_attr\s*\(.*\ballow\s*\(/i],
+  ["#pragma warning disable", /#\s*pragma\s+warning\s*\(?\s*disable/i],
+  ["NOSONAR", /\bNOSONAR\b/],
+  ["pytest.mark.skip/xfail", /\bpytest\s*\.\s*mark\s*\.\s*(?:skip|skipif|xfail)\b/],
+  ["pytest.skip(", /\bpytest\s*\.\s*(?:skip|xfail|importorskip)\s*\(/],
+  ["unittest.skip", /\bunittest\s*\.\s*(?:skip|skipIf|skipUnless|expectedFailure)\b/],
+  ["skipTest(", /\.\s*skipTest\s*\(/],
+  ["it/test/describe .skip or .only", /(?<![\w.$])(?:it|test|describe|context|suite)(?:\s*\.\s*\w+)*?\s*\.\s*(?:skip|only|skipIf|fails|failing|fixme)\s*[(.`]/],
+  ["xit/fit/xdescribe/fdescribe", /(?<![\w.$])[fx](?:it|test|describe|context)\s*\(/],
+  ["t.Skip", /(?:(?<![\w.])(?:t|b|tb|tt)|\bT\(\))\s*\.\s*Skip(?:f|Now)?\s*\(/],
+  ["#[ignore]", /#\s*\[\s*ignore\s*[\]=(]/],
+  ["@Disabled", /@Disabled\b/],
+  ["@Ignore", /@Ignore\b/],
+  ["[Ignore]", /^\s*\[(?:[^\]]*,\s*)?Ignore\b/],
+];
+export const ESCAPE_HATCHES = BUILTIN.map(([p]) => p);
 const HATCH_MS = 5000;
 
 /** Added lines of a unified diff with their file; hunk counts decide what is content, so an added "+++ x" line is not a header. */
@@ -24,7 +46,7 @@ export function addedLines(diff: string) {
 
 /** The first added line matching a built-in escape hatch or one of the repo's regexes, as a reason. */
 export function escapeHatch(diff: string, extra: string[]) {
-  const pats = [...ESCAPE_HATCHES.map((p) => [p, literal(p)] as const), ...extra.map((p) => [p, new RegExp(p)] as const)];
+  const pats = [...BUILTIN, ...extra.map((p) => [p, new RegExp(p)] as const)];
   for (const { file, line } of addedLines(diff)) {
     const hit = pats.find(([, re]) => re.test(line));
     if (hit) return `adds escape hatch ${JSON.stringify(hit[0])} in ${file}`;

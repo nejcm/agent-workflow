@@ -77,6 +77,7 @@ test("critical paths: built-ins, case-insensitive, any depth without a slash, co
   for (const p of [".github/workflows/ci.yml", "Dockerfile", "svc/Dockerfile.dev", "docker-compose.yml", "db/migrations/001.sql", "q.SQL", "package.json", "web/package.json", "bun.lockb", "go.sum",
     "requirements-dev.txt", "src/auth/login.ts", "config/client_secret.json", ".env", "app/.env.local", "certs/x.pem", "id.key", "nono/tender-claude.json", "tender.json", "infra/main.tf", "ops/terraform/x", "deploy/run.sh", "SRC/Auth/x.ts"])
     expect([p, isCritical(p)]).toEqual([p, true]);
+  for (const p of [".oxlintrc.json", ".c8rc.json", "nyc.config.js", "codecov.yaml", "Taskfile.dist.yml", "lefthook.yml", "turbo.json", "nx.json", "Rakefile", "phpunit.xml.dist", "jest.setup.ts", ".drone.yml", "appveyor.yml"]) expect([p, isCritical(p)]).toEqual([p, true]);
   for (const p of ["src/a.ts", "README.md", "docs/github.md", "src/authors.ts", "nono.md", "src/nono/x.ts", "keys.ts"]) expect([p, isCritical(p)]).toEqual([p, false]);
   expect(isCritical("src/billing/pay.ts")).toBe(false);
   expect(isCritical("src/billing/pay.ts", ["src/billing/**"])).toBe(true);
@@ -85,6 +86,8 @@ test("critical paths: built-ins, case-insensitive, any depth without a slash, co
   expect(isCritical("ab", ["a.b"])).toBe(false);
   for (const [g, p] of [["/infra/**", "infra/main.tf"], ["infra/", "infra/main.tf"], ["infra/", "ops/infra/x"], ["payments", "src/payments/x.ts"], ["/Makefile2", "Makefile2"]]) expect([g, p, isCritical(p, [g])]).toEqual([g, p, true]);
   expect(isCritical("ops/Makefile2", ["/Makefile2"])).toBe(false);
+  for (const [g, p] of [["app/[id]/**", "app/[id]/page.tsx"], ["docs/**", "Docs/x.ts"]]) expect([g, p, isCritical(p, [g])]).toEqual([g, p, true]);
+  expect(isCritical("app/i/page.tsx", ["app/[id]/**"])).toBe(false);
   expect([isCritical("notes.md/evil.ts", ["*.md"]), isCritical("docs/a.md/x.ts", ["docs/*.md"])]).toEqual([false, false]);
   const intake = (run: string, path: string) => mergeDecision(prFacts({ files: [file(path)] }), undefined, { ...smart, intake: [{ run }] } as any).reason;
   expect(intake("scripts/intake/sentry.ts", "scripts/intake/pg.ts")).toBe("touches critical path scripts/intake/pg.ts");
@@ -273,7 +276,8 @@ test("merge decision: a file list that disagrees with changedFiles holds back; a
   expect(mergeDecision({ ...prFacts({ files: [file("package.json")] }), files: undefined }, undefined, smart).merge).toBe(true);
   for (const p of ["CLAUDE.local.md", "GEMINI.md", ".cursor/rules/x.mdc", "bunfig.toml", "sub/vitest.config.ts", "conftest.py", ".husky/pre-commit"]) expect(isCritical(p)).toBe(true);
   for (const p of ["tsconfig.json", "web/tsconfig.build.json", "eslint.config.js", ".eslintrc.json", "biome.jsonc", "ruff.toml", "setup.cfg", "tox.ini", "mypy.ini", ".golangci.yml"]) expect(isCritical(p)).toBe(true);
-  expect(isCritical("src/eslint-rules.ts")).toBe(false);
+  for (const p of [".eslintignore", "jsconfig.json", "deno.jsonc", ".flake8", ".pylintrc", "pyrightconfig.json", ".mypy.ini", "clippy.toml", "crates/x/.cargo/config.toml", "go.work", "vite.config.ts", "vitest.workspace.ts", "karma.conf.js", ".mocharc.yml", "cypress.config.ts", "noxfile.py", ".coveragerc", ".nycrc.json", "codecov.yml", "Justfile", "Taskfile.yaml", ".circleci/config.yml", ".buildkite/pipeline.yml", "azure-pipelines.yml", "Jenkinsfile", ".travis.yml", ".gitattributes", "node_modules/zod/index.js", "web/node_modules/x/package.json"]) expect([p, isCritical(p)]).toEqual([p, true]);
+  for (const p of ["src/eslint-rules.ts", ".prettierignore", ".editorconfig", "rustfmt.toml", ".nvmrc", "src/vite.ts", "docs/justfile.md"]) expect([p, isCritical(p)]).toEqual([p, false]);
   expect(isTest("spec/models/user_spec.rb")).toBe(true);
 });
 
@@ -439,12 +443,12 @@ const hunk = (path: string, ...lines: string[]) => {
 };
 
 test("escape hatches: each built-in pattern and a repo pattern on an added line, named with its file", () => {
-  const added = ["// eslint-disable-next-line no-console", "// @ts-ignore", "// @ts-expect-error", "const x = y as any;", "x = 1  # type: ignore[attr]", "import os  # noqa: F401", "f() //nolint:errcheck", "#[allow(dead_code)]", '@SuppressWarnings("unchecked")', "// @ts-nocheck", "// biome-ignore lint/style: x", "// oxlint-disable", "// deno-lint-ignore-file", "x = 1  # pyright: ignore[reportX]", "#pylint:disable=foo", "# rubocop:disable Style/X", "#![allow(clippy::all)]", "#[expect(dead_code)]", "# ruff: noqa: E501", "# flake8: noqa", "# mypy: ignore-errors"];
+  const added = ["// eslint-disable-next-line no-console", "// @ts-ignore", "// @ts-expect-error", "// @ts-nocheck", "x = 1  # type: ignore[attr]", "import os  # noqa: F401", "# ruff: noqa: E501", "# flake8: noqa", "# mypy: ignore-errors", "x = 1  # pyright: ignore[reportX]", "#pylint:disable=foo", "# rubocop:disable Style/X", "f() //nolint:errcheck", "//lint:ignore SA1000 x", "//lint:file-ignore SA1000 x", "// biome-ignore lint/style: x", "// oxlint-disable", "// deno-lint-ignore-file", "# shellcheck disable=SC2086", "#[allow(dead_code)]", "#![allow(clippy::all)]", "#[expect(dead_code)]", "@SuppressWarnings(\"unchecked\")", "@Suppress(\"UNCHECKED_CAST\")", "@file:Suppress(\"X\")", "[SuppressMessage(\"a\", \"b\")]", "x = 1  # pragma: no cover", "x = 1  # pragma: no branch", "/* istanbul ignore next */", "/* c8 ignore next */", "/* v8 ignore start */", "const x = y as any;", "const x = y as unknown as Z;", "#[cfg_attr(test, allow(dead_code))]", "#pragma warning(disable: 4996)", "f(); // NOSONAR", "pytestmark = pytest.mark.skip", "pytest.skip(\"x\")", "@unittest.skip(\"x\")", "self.skipTest(\"x\")", "test.skip.each([1])(\"x\", f)", "xit(\"x\", f)", "t.Skipf(\"x\")", "#[ignore = \"slow\"]", "@Disabled", "@Ignore", "[Ignore(\"x\")]"];
   expect(added).toHaveLength(ESCAPE_HATCHES.length);
   ESCAPE_HATCHES.forEach((p, i) => expect(escapeHatch(hunk("src/a.ts", " ctx", `+${added[i]}`), [])).toBe(`adds escape hatch ${JSON.stringify(p)} in src/a.ts`));
-  for (const line of ["it has anything", "as anyOf(x)", "eslint-config", "@ts-check", "Array<any>", "x as anyOf"]) expect(escapeHatch(hunk("src/a.ts", `+${line}`), [])).toBeUndefined();
-  for (const line of ["x as \tany", "x = 1  #type:ignore"]) expect(escapeHatch(hunk("src/a.ts", `+${line}`), [])).toMatch(/^adds escape hatch/);
-  expect(escapeHatch(hunk("lib/a.py", "+x = 1  # pragma: no cover"), ["pragma: no ?cover"])).toBe('adds escape hatch "pragma: no ?cover" in lib/a.py');
+  for (const line of ["it has anything", "as anyOf(x)", "eslint-config", "@ts-check", "Array<any>", "x as anyOf", "it.iter().skip(1)", "list.skip(2)", "process.exit(1)", "unittest.main()", "// don't. Skip it", '#[cfg_attr(feature = "serde", derive(Serialize))]', "SELECT a AS any_col", "roles.push(deny(a), allow(b))", "user@disabled.com", "this.skip(n)", "stream.skipIf(x)", "t.skip(1)", "treat as unknown asset", "noSonarCount", "#[ignored]", "model.fit(X, y)", "profit(x)", "contest.only(x)", "@IgnoreExtraProperties", "pytest.mark.skipped_reason", "items[Ignore]", "Use test.only to run a single test.", "items.Skip(5)", "x.t.Skip(1)", "test.skipped = true"]) expect(escapeHatch(hunk("src/a.ts", `+${line}`), [])).toBeUndefined();
+  for (const line of ["x as \tany", "x = 1  #type:ignore", "// ESLINT-DISABLE", "import os  # NOQA", "// @TS-IGNORE", "# [ allow(dead_code)]", "// nolint", "// NOLINT", '@SuppressLint("X")', "it . only('x', f)", "it.concurrent.skip('x', f)", "test.describe.only('x', f)", "fdescribe('x', f)", "t.SkipNow()", "#[ignore]", "@pytest.mark.xfail", "@unittest.expectedFailure", "pytest.mark.skipif(x)", "pytest.importorskip('x')", "s.T().Skip('x')", "tt.Skip('x')", "[Test, Ignore('x')]"]) expect(escapeHatch(hunk("src/a.ts", `+${line}`), [])).toMatch(/^adds escape hatch/);
+  expect(escapeHatch(hunk("lib/a.py", "+x = 1  # HACK: skip check"), ["HACK: ?skip"])).toBe('adds escape hatch "HACK: ?skip" in lib/a.py');
 });
 
 test("escape hatches: only added lines count, by hunk counts rather than by prefix", () => {
@@ -465,7 +469,7 @@ test("escape hatches: only added lines count, by hunk counts rather than by pref
 });
 
 test("escape hatches: repo regexes run in a worker cut off after its time limit, which holds the merge back", async () => {
-  expect(await hatchInWorker(hunk("lib/a.py", "+x = 1 # pragma: no cover"), ["pragma: no ?cover"])).toBe('adds escape hatch "pragma: no ?cover" in lib/a.py');
+  expect(await hatchInWorker(hunk("lib/a.py", "+x = 1 # HACK: skip check"), ["HACK: ?skip"])).toBe('adds escape hatch "HACK: ?skip" in lib/a.py');
   expect(await hatchInWorker(hunk("lib/a.py", "+ok()"), [])).toBe("");
   const start = performance.now();
   expect(await hatchInWorker(hunk("src/a.ts", `+${"a".repeat(40)}!`), ["(a+)+$"], 200)).toBe("escape-hatch check timed out after 0.2s");

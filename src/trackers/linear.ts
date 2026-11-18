@@ -6,7 +6,7 @@ export function parseLinear(r: Record<string, any>, at: string, check: Check) {
   for (const k of ["todo", "inProgress", "inReview"] as const) check(nonEmpty(s[k]), `${at}.${k}: non-empty string`);
   check(s.readyToMerge === undefined || nonEmpty(s.readyToMerge), `${at}.readyToMerge: non-empty string`);
   check(Array.isArray(s.done) && s.done.length > 0 && s.done.every(nonEmpty), `${at}.done: non-empty string array`);
-  check(/^[A-Z0-9]+$/.test(s.team ?? ""), `${at}.team: Linear team key, e.g. ENG`);
+  check(typeof s.team === "string" && /^[A-Z0-9]+$/.test(s.team), `${at}.team: Linear team key, e.g. ENG`);
   return s;
 }
 

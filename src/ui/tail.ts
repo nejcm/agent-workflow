@@ -215,7 +215,7 @@ export async function tail(cfg: Config, target: string, n: number, follow: boole
     const p = transcript(wt, recordedAgent(repoDir(cfg, key), id), home);
     return p ? [{ key, wt, p }] : [];
   });
-  if (found.length > 1) throw new Error(`${id} is in several repos (${found.map((f) => clean(f.key)).sort().join(", ")}); use tender tail <owner/repo>/${id}`);
+  if (found.length > 1) throw new Error(`${id} is in several repos (${found.map((f) => clean(f.key)).sort().join(", ")}); use bun tender.ts tail <owner/repo>/${id}`);
   if (!found[0]) throw new Error(`no transcript found for ${clean(target)}`);
   const { key, wt } = found[0];
   let path = found[0].p;

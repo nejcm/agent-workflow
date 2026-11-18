@@ -1,9 +1,8 @@
 [Unit]
 Description=tender: run the intake rules enabled for this host
-After=network-online.target
 
 [Service]
 Type=oneshot
 WorkingDirectory=%h/Work/agent-workflow
 ExecStart=%h/.bun/bin/bun tender.ts intake --config tender.json
-Environment=PATH=%h/.local/share/mise/shims:%h/.bun/bin:%h/.local/bin:/usr/local/bin:/usr/bin
+Environment=PATH=%h/.bun/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin

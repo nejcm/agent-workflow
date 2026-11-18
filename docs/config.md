@@ -254,17 +254,20 @@ bun tender.ts <command> [--config tender.json]
   open <ID | owner/repo/ID> [--tool claude|codex|t3|editor] [--exec]
   resume <ID | owner/repo/ID>
   intake [owner/repo:rule | rule] [--dry-run]
+  prs [--dry-run]
+  stats [--days 90] [--json]
   check [path]
 ```
 
 | flag | | |
 |---|---|---|
-| `--config` | path | host config, default `./tender.json` |
-| `--dry-run` | `run`, `once`, `intake` | log what would happen; files, comments and writes nothing to trackers or `tender.db` |
-| `--json` | `status` | machine-readable output |
+| `--config` | every command but `check`, path | host config, default `./tender.json` |
+| `--dry-run` | `run`, `once`, `intake`, `prs` | log what would happen; files, comments and writes nothing to trackers or `tender.db` |
+| `--json` | `status`, `stats` | machine-readable output |
 | `--interval` | `watch`, seconds ≥ 1 | refresh interval, default `2` |
 | `--plain` | `watch` | plain text instead of the TUI |
 | `-n` | `tail`, 1–10000 | lines of history, default `20` |
 | `--no-follow` | `tail` | print and exit |
 | `--tool` | `open` | where to open the session, see [Hand-off](hand-off.md) |
 | `--exec` | `open` | run the command instead of printing it |
+| `--days` | `stats`, 1–3650 | how many days back to look, default `90`, see [Trust signals](stats.md) |

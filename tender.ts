@@ -88,7 +88,20 @@ const USAGE = `usage: bun tender.ts <command> [--config tender.json]
   stats [--days 90] [--json]
   check [path]`;
 const VALUED = ["--config", "--interval", "-n", "--tool", "--days"];
-const FLAGS = [...VALUED, "--dry-run", "--json", "--no-follow", "--plain", "--exec"];
+const CMD_FLAGS: Record<string, string[]> = {
+  run: ["--dry-run"],
+  once: ["--dry-run"],
+  status: ["--json"],
+  watch: ["--interval", "--plain"],
+  tail: ["-n", "--no-follow"],
+  open: ["--tool", "--exec"],
+  resume: [],
+  intake: ["--dry-run"],
+  prs: ["--dry-run"],
+  stats: ["--days", "--json"],
+  check: [],
+};
+const FLAGS = ["--config", ...Object.values(CMD_FLAGS).flat()];
 const TARGETED = ["tail", "open", "resume"];
 
 /** Validates `<dir>/.tender/` from the working tree and prints the repo's settings with defaults filled in; false if invalid. */
@@ -109,39 +122,44 @@ export function check(dir: string, print = console.log, fail = console.error) {
   return true;
 }
 
-/** Command, ticket target and option values, or undefined for unknown flags, stray args or out-of-range numbers. */
+/** Command, ticket target and option values, or the reason the arguments are invalid. */
 export function parseArgs(argv: string[]) {
-  const isValue = (i: number) => VALUED.includes(argv[i - 1] ?? "");
-  const opt = (name: string) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] ?? "" : undefined);
-  const [cmd, id, ...extra] = argv.filter((a, i) => !a.startsWith("-") && !isValue(i));
-  const interval = Number(opt("--interval") ?? 2);
-  const n = Number(opt("-n") ?? 20);
-  const tool = opt("--tool");
-  const days = Number(opt("--days") ?? DEFAULT_DAYS);
-  const ok =
-    argv.every((a, i) => !a.startsWith("-") || isValue(i) || FLAGS.includes(a)) &&
-    ["run", "once", "status", "watch", "check", "intake", "prs", "stats", ...TARGETED].includes(cmd ?? "") &&
-    !extra.length &&
-    (cmd === "check" || cmd === "intake" || TARGETED.includes(cmd!) === (id !== undefined)) &&
-    (tool === undefined || (cmd === "open" && TOOLS.includes(tool as Tool))) &&
-    !(argv.includes("--dry-run") && ["open", "resume", "stats"].includes(cmd!)) &&
-    (opt("--days") === undefined || cmd === "stats") &&
-    Number.isInteger(days) &&
-    days >= 1 &&
-    days <= 3650 &&
-    Number.isFinite(interval) &&
-    interval >= 1 &&
-    Number.isInteger(n) &&
-    n >= 1 &&
-    n <= 10_000 &&
-    opt("--config") !== "";
-  return ok ? { cmd: cmd!, id, interval, n, days, tool: tool as Tool | undefined, path: resolve(opt("--config") ?? "tender.json") } : undefined;
+  const fail = (error: string) => ({ error });
+  const pos: string[] = [];
+  const vals = new Map<string, string>();
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    if (!a.startsWith("-")) pos.push(a);
+    else if (!FLAGS.includes(a)) return fail(`unknown flag ${a}`);
+    else if (!VALUED.includes(a)) vals.set(a, "");
+    else if (!argv[i + 1]) return fail(`${a} needs a value`);
+    else vals.set(a, argv[++i]!);
+  }
+  const [cmd, id, ...extra] = pos;
+  if (!cmd) return fail("missing <command>");
+  const allowed = CMD_FLAGS[cmd];
+  if (!allowed) return fail(`unknown command ${cmd}`);
+  const wrong = [...vals.keys()].find((f) => !allowed.includes(f) && (f !== "--config" || cmd === "check"));
+  if (wrong) return fail(`${cmd} does not take ${wrong}`);
+  if (TARGETED.includes(cmd) && id === undefined) return fail(`${cmd} needs an <ID>`);
+  const stray = cmd === "check" || cmd === "intake" || TARGETED.includes(cmd) ? extra[0] : id;
+  if (stray !== undefined) return fail(`unexpected argument ${stray}`);
+  const tool = vals.get("--tool");
+  if (tool !== undefined && !TOOLS.includes(tool as Tool)) return fail(`--tool must be one of ${TOOLS.join(", ")}`);
+  const interval = Number(vals.get("--interval") ?? 2);
+  if (!Number.isFinite(interval) || interval < 1) return fail("--interval must be a number of seconds, at least 1");
+  const n = Number(vals.get("-n") ?? 20);
+  if (!Number.isInteger(n) || n < 1 || n > 10_000) return fail("-n must be an integer from 1 to 10000");
+  const days = Number(vals.get("--days") ?? DEFAULT_DAYS);
+  if (!Number.isInteger(days) || days < 1 || days > 3650) return fail("--days must be an integer from 1 to 3650");
+  return { cmd, id, interval, n, days, tool: tool as Tool | undefined, path: resolve(vals.get("--config") ?? "tender.json") };
 }
 
 async function main(argv: string[]) {
+  if (argv[0] === "help" || argv.includes("--help") || argv.includes("-h")) return console.log(USAGE);
   const args = parseArgs(argv);
-  if (!args) {
-    console.error(USAGE);
+  if ("error" in args) {
+    console.error(`${args.error}\n${USAGE}`);
     process.exit(2);
   }
   const { cmd, id, interval, n, days, tool, path } = args;
@@ -150,7 +168,8 @@ async function main(argv: string[]) {
   try {
     cfg = parseConfig(JSON.parse(readFileSync(path, "utf8")), dirname(path));
   } catch (e) {
-    console.error(`${path}: ${(e as Error).message}`);
+    const missing = (e as NodeJS.ErrnoException).code === "ENOENT";
+    console.error(missing ? `${path}: not found; run from the directory with tender.json or pass --config <path>` : `${path}: ${(e as Error).message}`);
     process.exit(1);
   }
   const dry = argv.includes("--dry-run");
@@ -186,7 +205,7 @@ async function main(argv: string[]) {
       console.error(e.message);
       process.exit(1);
     });
-    console.error(`${h.key}/${h.id} is handed off; \`tender resume ${h.key}/${h.id}\` gives it back`);
+    console.error(`${h.key}/${h.id} is handed off; \`bun tender.ts resume ${h.key}/${h.id}\` gives it back`);
     if (!h.argv.length) return console.log(h.wt);
     if (!argv.includes("--exec")) return console.log(shellLine(h.wt, h.argv));
     const { LINEAR_API_KEY: _, ...rest } = env;

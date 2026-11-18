@@ -18,9 +18,7 @@ test("parseArgs accepts known commands and flags", () => {
   expect(parseArgs(["resume", "PER-1"])).toMatchObject({ cmd: "resume", id: "PER-1" });
   expect(parseArgs(["intake"])).toMatchObject({ cmd: "intake", id: undefined });
   expect(parseArgs(["intake", "acme/web:errs", "--dry-run"])).toMatchObject({ cmd: "intake", id: "acme/web:errs" });
-  expect(parseArgs(["intake", "a", "b"])).toBeUndefined();
   expect(parseArgs(["prs", "--dry-run"])).toMatchObject({ cmd: "prs", id: undefined });
-  expect(parseArgs(["prs", "acme/web"])).toBeUndefined();
   expect(parseArgs(["stats", "--json"])).toMatchObject({ cmd: "stats", days: 90 });
   expect(parseArgs(["stats", "--days", "30"])).toMatchObject({ cmd: "stats", days: 30 });
 });
@@ -61,8 +59,39 @@ test("parseArgs rejects unknown flags, stray args and out-of-range numbers", () 
     ["stats", "--dry-run"],
     ["stats", "acme/web"],
     ["prs", "--days", "7"],
+    ["intake", "a", "b"],
+    ["prs", "acme/web"],
+    ["watch", "--json"],
+    ["status", "-n", "5"],
+    ["status", "--interval", "5"],
+    ["status", "--plain"],
+    ["tail", "PER-1", "--exec"],
+    ["run", "--no-follow"],
+    ["check", "--config", "x.json"],
   ])
-    expect(parseArgs(argv)).toBeUndefined();
+    expect(parseArgs(argv)).toHaveProperty("error");
+});
+
+test("parseArgs says why the arguments are invalid", () => {
+  expect(parseArgs(["status", "--bogus"])).toEqual({ error: "unknown flag --bogus" });
+  expect(parseArgs(["tail"])).toEqual({ error: "tail needs an <ID>" });
+  expect(parseArgs(["stats", "--days", "0"])).toEqual({ error: "--days must be an integer from 1 to 3650" });
+  expect(parseArgs(["watch", "--json"])).toEqual({ error: "watch does not take --json" });
+  expect(parseArgs(["status", "PER-1"])).toEqual({ error: "unexpected argument PER-1" });
+  expect(parseArgs(["nope"])).toEqual({ error: "unknown command nope" });
+  expect(parseArgs(["open", "PER-1", "--tool"])).toEqual({ error: "--tool needs a value" });
+});
+
+test("help prints usage to stdout and exits 0; bad arguments print a reason and exit 2", () => {
+  const tender = resolve(import.meta.dir, "../tender.ts");
+  for (const argv of [["--help"], ["-h"], ["help"], ["status", "--help"]]) {
+    const r = Bun.spawnSync(["bun", tender, ...argv]);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.toString()).toStartWith("usage: bun tender.ts");
+  }
+  const bad = Bun.spawnSync(["bun", tender, "status", "--bogus"]);
+  expect(bad.exitCode).toBe(2);
+  expect(bad.stderr.toString()).toStartWith("unknown flag --bogus\nusage: bun tender.ts");
 });
 
 test("spawnRun kills the whole process group at the deadline and keeps output", async () => {

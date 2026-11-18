@@ -281,7 +281,7 @@ export async function start(cfg: Config, s: Source, host: Repo, t: Ticket, tr: T
     // Marked before posting: a crash loses the comment rather than repeating it; a failed post is retried.
     put(io, marker, sha);
     try {
-      await tr.comment(t, `not started: ${host.key}'s .tender/ at ${sha.slice(0, 12)} is invalid; run \`tender check\` in the repo for details`);
+      await tr.comment(t, `not started: ${host.key}'s .tender/ at ${sha.slice(0, 12)} is invalid; run \`bun tender.ts check <repo>\` for details`);
     } catch (e) {
       remove(io, marker);
       throw e;
@@ -311,7 +311,7 @@ async function resumeLocked(cfg: Config, io: Io, { key, id }: { key: string; id:
   if (!wins.listed) throw new Error("tmux windows unknown; not resumed");
   if (wins.has(winName(key, id))) throw new Error(`${key}/${id} already has a tmux window`);
   const r = await loadSession(io, host, SLOW_SECS);
-  if (!r) throw new Error(`${key}'s .tender/ on its base branch is invalid; run \`tender check\` in the repo for details`);
+  if (!r) throw new Error(`${key}'s .tender/ on its base branch is invalid; run \`bun tender.ts check <repo>\` for details`);
   const old = readFileSync(join(dir, `${id}.prompt.md`), "utf8");
   await launch(cfg, io, withAgent(r, recordedAgentConfig(dir, id)), id, (vars) => {
     const head = render(CONTINUE, vars);

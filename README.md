@@ -86,12 +86,13 @@ Every poll (default 60 s), `tender` looks for ready tickets (the `agent` label p
 - [PR sweep](docs/prs.md): `tender prs`, orphan agent PRs and the weekly report
 - [Trust signals](docs/stats.md): `tender stats`, per-path merge, revert and shadow numbers and recommendations
 - [Upgrading](docs/upgrading.md), [Code layout](docs/code-layout.md)
-- Design notes: [agent questions](docs/agent-questions.md), [known issues](docs/issues.md), [improvements](docs/improvements.md)
+- Design notes: [agent questions](docs/agent-questions.md)
 
 ## Quick start
 
 ```bash
-scripts/setup.sh owner/repo   # config dirs, nono, labels, .env and tender.json from the examples, login check
+bun install
+scripts/setup.sh owner/repo   # config dirs, labels, .env, tender.json for these repos, nono if a repo needs it, login check
 scripts/run.sh                # preflight (dry run), then poll in the foreground
 ```
 

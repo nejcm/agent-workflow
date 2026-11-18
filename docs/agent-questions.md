@@ -25,7 +25,7 @@ Each phase is one commit with its tests passing (`bun test`, `bun run typecheck`
 
 ### 1. Groundwork
 
-- `src/github.ts`, `src/linear.ts`: `comment()` prefixes `tender: `. `src/pass.ts:42` drops its own `tender: `.
+- `src/github.ts`, `src/trackers/linear.ts`: `comment()` prefixes `tender: `. `src/pass.ts` drops its own `tender: `.
 - `src/util.ts`: `readRun(wt, file, max)` takes the full file name; callers in `phases.ts`, `merge.ts`, `agents.ts` pass `phases.json` etc. Add `writeRun(wt, file, text)` and `removeRun(wt, file)` through `inRun` (`O_NOFOLLOW`; the agent controls `.tender/run/`).
 - `src/types.ts`, `src/config/config.ts`: `Repo.feedbackAuthors: string[]`, default `[]`, validated as strings. `tender.example.json` shows it.
 - Tests: comment prefix in `github.test.ts` / `linear.test.ts`; config default and validation; `writeRun` refuses a symlinked `.tender/run` / target.

@@ -250,7 +250,7 @@ test("an invalid repo config starts nothing: logged once and commented once per 
   await pass(c, io, () => tr, "/tender");
   const invalid = (sha: string) => `[web] acme/web: .tender/ on main at ${sha.slice(0, 12)} is invalid, so no tickets start:\n  agent: "claude" | "codex" or { name, model, effort }`;
   expect(logs.filter((l) => l.includes("is invalid"))).toEqual([invalid("a".repeat(40))]);
-  expect(calls).toEqual([`comment gh-1 not started: acme/web's .tender/ at ${"a".repeat(12)} is invalid; run \`tender check\` in the repo for details`]);
+  expect(calls).toEqual([`comment gh-1 not started: acme/web's .tender/ at ${"a".repeat(12)} is invalid; run \`bun tender.ts check <repo>\` for details`]);
   expect(cmds.some((x) => / clone -q | new-window /.test(x))).toBe(false);
   setBaseSha("c".repeat(40));
   await pass(c, io, () => tr, "/tender");
@@ -265,7 +265,7 @@ test("an invalid repo config starts nothing: logged once and commented once per 
   expect(logs.some((l) => l.includes("rate limited"))).toBe(true);
   tr.comment = async (t, b) => void calls.push(`comment ${t.id} ${b}`);
   await pass(c, io, () => tr, "/tender");
-  expect(calls.at(-1)).toBe(`comment gh-1 not started: acme/web's .tender/ at ${"f".repeat(12)} is invalid; run \`tender check\` in the repo for details`);
+  expect(calls.at(-1)).toBe(`comment gh-1 not started: acme/web's .tender/ at ${"f".repeat(12)} is invalid; run \`bun tender.ts check <repo>\` for details`);
   repoFiles["config.yaml"] = "agent: claude\n";
   setBaseSha("d".repeat(40));
   await pass(c, fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : a[5] === "--quiet" ? { code: 1 } : noPr(a))).io, () => tr, "/tender");
@@ -339,7 +339,7 @@ test("in review with an invalid .tender/ or a failed fetch: no merge or comment,
 test("tender check validates a working tree's .tender/ and prints the effective settings", () => {
   expect(parseArgs(["check"])).toMatchObject({ cmd: "check", id: undefined });
   expect(parseArgs(["check", "../repo"])).toMatchObject({ cmd: "check", id: "../repo" });
-  expect(parseArgs(["check", "a", "b"])).toBeUndefined();
+  expect(parseArgs(["check", "a", "b"])).toEqual({ error: "unexpected argument b" });
   expect(check(join(root, "nope"), () => {}, () => {})).toBe(false);
   const out: string[] = [];
   expect(check(root, (s) => out.push(s), (s) => out.push(s))).toBe(true);

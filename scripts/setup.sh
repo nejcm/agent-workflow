@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: scripts/setup.sh [owner/repo ...]   Idempotent; never overwrites real files. Creates labels for the repos given.
+# Usage: scripts/setup.sh [--linear] [--sandbox=none] [owner/repo ...]   Idempotent; never overwrites real files. Writes tender.json for the repos given (GitHub source; --linear adds the example Linear one) and creates their labels.
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0")")/.."
 
@@ -34,32 +34,52 @@ scripts/codex-hooks.sh ~/.codex-tender/config.toml
 
 host=$(hostname -s)
 export PATH="$HOME/.local/bin:$PATH"
-
-if ! command -v nono >/dev/null; then
-  echo "install nono -> ~/.local/bin"
-  curl -fsSL https://nono.sh/install.sh | NONO_INSTALL_DIR="$HOME/.local/bin" sh
-fi
+linear=0 sandbox=nono repos=()
+for a in "$@"; do
+  case $a in
+    --linear) linear=1 ;;
+    --sandbox=none) sandbox=none ;;
+    -*) echo "usage: $0 [--linear] [--sandbox=none] [owner/repo ...]"; exit 1 ;;
+    *) repos+=("$a") ;;
+  esac
+done
 
 for c in bun git gh tmux timeout systemd-run systemctl pgrep; do command -v "$c" >/dev/null || { echo "MISSING: $c"; exit 1; }; done
 gh auth status >/dev/null 2>&1 || { echo "MISSING: gh login (gh auth login)"; exit 1; }
 
-for f in nono/tender-claude.json nono/tender-codex.json nono/tender-check.json; do nono profile validate "$f" >/dev/null && echo "ok   $f"; done
-
 [ -e .env ] || { cp .env.example .env && echo "write .env (set LINEAR_API_KEY if you use Linear)"; }
-[ -e tender.json ] || { cp tender.example.json tender.json && sed -i "s/\"host\": \"laptop\"/\"host\": \"$host\"/" tender.json && echo "write tender.json (edit repos and sources)"; }
+if [ ! -e tender.json ]; then
+  bun -e '
+    const [host, sandbox, linear, ...repos] = process.argv.slice(1);
+    const c = await Bun.file("tender.example.json").json();
+    Object.assign(c, { host, defaults: { ...c.defaults, sandbox } }, repos.length && { repos });
+    if (linear !== "1") c.sources = c.sources.filter((s) => s.tracker !== "linear");
+    await Bun.write("tender.json", JSON.stringify(c, null, 2) + "\n");
+  ' "$host" "$sandbox" "$linear" "${repos[@]}"
+  echo "write tender.json (check repos and sources)"
+fi
 
-for repo in "$@"; do
+sandboxes=" $(bun -e 'import { parseConfig } from "./src/config/config"; const c = parseConfig(await Bun.file("tender.json").json(), process.cwd()); console.log([...Object.values(c.repos).map((r) => r.sandbox), c.intake?.host === c.host && "intake"].filter(Boolean).join(" "))' 2>/dev/null || echo nono none) "
+case $sandboxes in
+  *" nono "* | *" intake "*)
+    if ! command -v nono >/dev/null; then
+      echo "install nono -> ~/.local/bin"
+      curl -fsSL https://nono.sh/install.sh | NONO_INSTALL_DIR="$HOME/.local/bin" sh
+    fi
+    for f in nono/tender-*.json; do nono profile validate "$f" >/dev/null && echo "ok   $f"; done ;;
+esac
+
+for repo in "${repos[@]}"; do
   for l in agent in-progress in-review ready-to-merge needs-human "host:$host"; do
     gh label create "$l" --repo "$repo" --force >/dev/null && echo "label $repo $l"
   done
 done
 
 todo=0
-sandboxes=" $(bun -e 'const c = await Bun.file("tender.json").json(); console.log([c.defaults?.sandbox, ...(c.repos ?? []).map((r) => r?.sandbox)].join(" "))' 2>/dev/null || echo nono none) "
 # nono sessions use your own login in ~/.claude through nono's proxy; this is tender's own startup check of it.
 case $sandboxes in *" nono "*) bun -e 'import { checkLogin, readLogin } from "./src/session/claude-auth"; try { const w = checkLogin(readLogin(process.env.HOME), Date.now()); if (w) console.log(`WARN: ${w}`) } catch (e) { console.log(`TODO: ${e.message}`); process.exit(1) }' || todo=1 ;; esac
 case $sandboxes in *" none "*) [ -s ~/.claude-tender/oauth-token ] || { todo=1; echo "TODO: claude setup-token, then save the token to ~/.claude-tender/oauth-token (chmod 600); needed by sandbox: \"none\" repos"; } ;; esac
 CODEX_HOME=~/.codex-tender codex login status >/dev/null 2>&1 || { todo=1; echo "TODO: CODEX_HOME=~/.codex-tender codex login"; }
-echo "Linear sources: create labels agent, needs-human and host:$host in the team."
+grep -Eq '"tracker": *"linear"' tender.json && echo "Linear sources: create labels agent, needs-human and host:$host in the team, and set LINEAR_API_KEY in .env."
 [ "$todo" = 0 ] && echo "Setup done. Next: scripts/run.sh"
 exit 0

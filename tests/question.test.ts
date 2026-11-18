@@ -331,7 +331,7 @@ test("answer: the last round's answer never counts for a new question, even with
   expect(existsSync(question())).toBe(true);
 });
 
-test("answer: a window started this pass (no @id yet) gets nothing until the next pass", async () => {
+test("answer: a fresh start drops the last run's open question, and its window (no @id yet) gets nothing", async () => {
   worktree("gh-1");
   const f = fakeTracker({ ready: [ticket(1)], inProgress: [ticket(1)] });
   const { io, cmds } = fakeIo((a) => noPr(a));
@@ -341,7 +341,7 @@ test("answer: a window started this pass (no @id yet) gets nothing until the nex
   await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), feedbackAuthors: ["op"] }] }), io, () => f.tr, "/tender", async () => "idle");
   expect(cmds.some((c) => c.startsWith("tmux new-window"))).toBe(true);
   expect(cmds.some((c) => c.startsWith("tmux send-keys"))).toBe(false);
-  expect(JSON.parse(readFileSync(sidecar(), "utf8")).answerId).toBeUndefined();
+  expect(existsSync(sidecar())).toBe(false);
 });
 
 test("answer: a pane in copy mode is skipped before answerId is recorded, then delivered", async () => {

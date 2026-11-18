@@ -3,7 +3,10 @@ import { github } from "../src/trackers/github";
 import { LINEAR_ISSUES, linear, linearTicket } from "../src/trackers/linear";
 import { byPriority, labelPriority } from "../src/util";
 import { makeTracker, pass } from "../src/pass";
-import { config, fakeIo, gh, lin, phase, src, ticket, useTempRoot, web, windowsOut, withLinearKey, writePhases } from "./helpers";
+import { findPr } from "../src/github";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { config, fakeIo, root, gh, lin, phase, src, ticket, useTempRoot, web, windowsOut, withLinearKey, writePhases } from "./helpers";
 
 useTempRoot();
 
@@ -238,4 +241,15 @@ test("github adapter: intake files with labels, finds a marker only in a body th
   expect(failing.cmds.some((c) => c.includes("reopen"))).toBe(false);
   const many = fakeIo((a) => (a[2] === "list" ? { out: JSON.stringify(Array.from({ length: 100 }, (_, i) => ({ url: `u${i}`, body: `${m}${i}` }))) } : undefined));
   await expect(github(gh(), "box", many.io, false, ["acme/web"]).findMarker({ repo: "acme/web" }, m)).rejects.toThrow("cannot rule out a duplicate");
+});
+
+test("findPr skips fork PRs and PRs merged before the run started", async () => {
+  const pr = (n: number, state: string, o: object = {}) => ({ url: `https://github.com/acme/web/pull/${n}`, state, ...o });
+  const prs = [pr(3, "OPEN", { isCrossRepository: true }), pr(2, "MERGED", { mergedAt: new Date(Date.now() - 86_400_000).toISOString() }), pr(1, "MERGED", { mergedAt: new Date(Date.now() - 86_400_000).toISOString() })];
+  const { io } = fakeIo(() => ({ out: JSON.stringify(prs) }));
+  expect(await findPr("acme/web", "gh-1", io, root)).toBe(pr(2, "MERGED").url);
+  writeFileSync(join(root, "gh-1.source"), "github");
+  expect(await findPr("acme/web", "gh-1", io, root)).toBeUndefined();
+  const later = fakeIo(() => ({ out: JSON.stringify([pr(4, "MERGED", { mergedAt: new Date(Date.now() + 60_000).toISOString() })]) }));
+  expect(await findPr("acme/web", "gh-1", later.io, root)).toBe(pr(4, "MERGED").url);
 });

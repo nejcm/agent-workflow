@@ -307,7 +307,9 @@ async function resumeLocked(cfg: Config, io: Io, { key, id }: { key: string; id:
   if (!host) throw new Error(`${key} is not in tender.json`);
   if (!handedOff(dir, id)) throw new Error(`${key}/${id} is not handed off`);
   if (existsSync(join(dir, `${id}.ended`))) throw new Error(`${key}/${id} ended (canceled or reassigned) while handed off; not resumed`);
-  if ((await windows(cfg, io)).has(winName(key, id))) throw new Error(`${key}/${id} already has a tmux window`);
+  const wins = await windows(cfg, io);
+  if (!wins.listed) throw new Error("tmux windows unknown; not resumed");
+  if (wins.has(winName(key, id))) throw new Error(`${key}/${id} already has a tmux window`);
   const r = await loadSession(io, host, SLOW_SECS);
   if (!r) throw new Error(`${key}'s .tender/ on its base branch is invalid; run \`tender check\` in the repo for details`);
   const old = readFileSync(join(dir, `${id}.prompt.md`), "utf8");
@@ -320,7 +322,7 @@ async function resumeLocked(cfg: Config, io: Io, { key, id }: { key: string; id:
 
 export const handedOff = (dir: string, id: string) => existsSync(join(dir, `${id}.handoff`));
 
-// `source` marks a fresh start: it records the owner, clears the end markers and writes `<ID>.claim` for the caller's claim.
+// `source` marks a fresh start: it records the owner, clears the end markers and the last question, and writes `<ID>.claim` for the caller's claim.
 async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars: Record<string, string>) => string, tenderDir: string, source?: string) {
   const dir = repoDir(cfg, r.key);
   const wt = join(dir, id);
@@ -348,14 +350,16 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
     rmSync(tmpHome(wt), { recursive: true, force: true });
     mkdirSync(join(tmpHome(wt), "cache"), { recursive: true, mode: 0o700 });
   }
+  if (existsSync(wt)) io.log(`reuse ${wt}`);
+  else await cloneSession(io, r, wt, branch);
+  // After the clone: a lone `<ID>.source` would route a Linear ticket to this repo with nothing to clean it up.
   if (source !== undefined) {
     put(io, join(dir, `${id}.source`), source);
     remove(io, join(dir, `${id}.ended`));
     remove(io, join(dir, `${id}.reassigned`));
+    remove(io, join(dir, `${id}.question`));
   }
   put(io, join(dir, `${id}.agent`), r.model || r.effort ? JSON.stringify({ name: r.agent, model: r.model, effort: r.effort }) : r.agent);
-  if (existsSync(wt)) io.log(`reuse ${wt}`);
-  else await cloneSession(io, r, wt, branch);
   const root = existsSync(wt) ? realpathSync(wt) : wt;
   seedCodex(io, codexHome(wt), login, root);
   if (r.agent === "claude" || nono) seedClaude(io, claudeHome(wt), root);
@@ -365,6 +369,8 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
     inDir(join(wt, ".tender"), (d) => mkdirSync(`${d}/run`, { recursive: true }));
     // Unlink + exclusive create: never write through a symlink or hardlink the agent left there.
     inRun(wt, (d) => (rmSync(`${d}/.gitignore`, { force: true }), writeFileSync(`${d}/.gitignore`, "*\n", { flag: "wx" })));
+    // The last run's question was never asked by this session; its answer would be delivered to it.
+    if (source !== undefined) inRun(wt, (d) => ["question.md", "answer.md"].forEach((f) => rmSync(`${d}/${f}`, { recursive: true, force: true })));
   }
   put(io, promptFile, text);
   put(io, script, launcher(r, wt, promptFile, scopeUnit(cfg, r.key, id), tenderDir, bun), 0o755);

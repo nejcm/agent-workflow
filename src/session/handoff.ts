@@ -79,7 +79,9 @@ async function handoffLocked(cfg: Config, io: Io, target: string, tool: Tool | u
   if (use === "editor") toolArgv(use, undefined, "", editor);
   put(io, join(dir, `${id}.handoff`), `${use}\n`);
   io.event?.("handoff", key, id, { tool: use });
-  await stopSession(cfg, io, key, id, await windows(cfg, io));
+  const wins = await windows(cfg, io);
+  if (!wins.listed) throw new Error("tmux windows unknown; not handed off");
+  await stopSession(cfg, io, key, id, wins);
   const session = use === agent ? adopt(agent, wt, stores[agent]) : undefined;
   if (session) io.log("this history was written inside the sandbox; resuming it runs with your own login, settings and permissions");
   const tx = transcript(wt, agent, "");

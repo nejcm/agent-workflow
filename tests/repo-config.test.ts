@@ -91,6 +91,11 @@ test("repo config: trust rules and escapeHatches regexes, capped in count and le
   expect(c.escapeHatches).toEqual(["pragma: no cover", "^\\s*debugger"]);
   for (const y of ["trust: docs\n", "trust:\n  - { paths: [], autoMerge: all }\n", "trust:\n  - { paths: [docs/**], autoMerge: yes }\n", "trust:\n  - { paths: [docs/**], autoMerge: all, why: x }\n", "trust:\n  - docs/**\n"])
     expect(errors([file("config.yaml", y)])).toStartWith("trust: list of { paths: [glob, …], autoMerge:");
+  for (const g of ["./docs/**", "docs/../src/**", "src//x", "/", " docs/** ", "!docs/**", "*.{ts,tsx}", "docs\\**", "src/./x", ".."]) {
+    expect(errors([file("config.yaml", `trust:\n  - { paths: [${JSON.stringify(g)}], autoMerge: all }\n`)])).toStartWith("trust: list of");
+    expect(errors([file("config.yaml", `criticalPaths: [${JSON.stringify(g)}]\n`)])).toStartWith("criticalPaths: list of non-empty glob strings (no surrounding spaces");
+  }
+  expect(parseRepoConfig([file("config.yaml", 'testPaths: ["**", ".github/", "/app/[id]/**", "my docs/*.md", "a.b/c..d"]\n')]).testPaths).toHaveLength(5);
   const many = Array.from({ length: 21 }, (_, i) => `x${i}`);
   for (const v of [many, ["("], [""], ["x".repeat(201)], "x", [1]]) expect(errors([file("config.yaml", `escapeHatches: ${JSON.stringify(v)}\n`)])).toBe("escapeHatches: at most 20 valid regexes of at most 200 chars");
   expect(parseRepoConfig([file("config.yaml", `escapeHatches: ${JSON.stringify(many.slice(2).concat("x".repeat(200)))}\n`)]).escapeHatches).toHaveLength(20);

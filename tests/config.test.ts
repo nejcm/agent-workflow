@@ -91,9 +91,16 @@ test("config: unknown keys at the top level, in defaults and in repos entries ar
   expect(() => config({ repos: [{ name: "acme/web", criticalpaths: ["x/**"] }] })).toThrow("repos[0] (acme/web).criticalpaths: unknown key");
 });
 
+test("config: values the name regexes would coerce from a non-string are rejected", () => {
+  for (const v of [3, ["tender"]]) expect(() => config({ tmuxSession: v })).toThrow("tmuxSession: [a-z0-9-]");
+  expect(() => config({ sources: [src({ name: ["web"] })] })).toThrow("sources[0].name: required");
+  expect(() => config({ sources: [src({ tracker: "linear", team: 42 })] })).toThrow("team: Linear team key");
+  for (const k of ["workspaceRoot", "reposRoot"]) expect(() => config({ [k]: 5 })).toThrow(`${k}: non-empty string`);
+});
+
 test("config: host criticalPaths from defaults or per repo, validated", () => {
   expect(web(config({ defaults: { sandbox: "nono", criticalPaths: ["x/**"] } })).criticalPaths).toEqual(["x/**"]);
-  for (const v of ["x", [""], null]) expect(() => config({ repos: [{ name: "acme/web", criticalPaths: v }] })).toThrow("repos[0] (acme/web).criticalPaths: array of non-empty glob strings");
+  for (const v of ["x", [""], null, ["./x/**"], ["{a,b}"]]) expect(() => config({ repos: [{ name: "acme/web", criticalPaths: v }] })).toThrow("repos[0] (acme/web).criticalPaths: array of non-empty glob strings");
 });
 
 test("config: autoMerge ceiling from defaults or per repo, validated", () => {

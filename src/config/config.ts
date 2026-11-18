@@ -18,6 +18,8 @@ const MOVED_KEYS = ["agent", "testCmd", "planStep", "prompt", "testPaths"];
 const TOP_KEYS = ["host", "defaultHost", "pollIntervalMs", "workspaceRoot", "reposRoot", "tmuxSession", "maxConcurrent", "maxInReview", "stallMinutes", "lanes", "defaults", "repos", "sources", "intake", "judge", "prs"];
 const REPO_KEYS = ["path", "baseBranch", "sandbox", "maxConcurrent", "maxInReview", "autoMerge", "criticalPaths", "feedbackAuthors", "stallMinutes", "feedback", ...MOVED_KEYS];
 export const AUTO_MERGE = ["off", "shadow", "intelligent", "all"] as const;
+export const validGlob = (v: unknown): v is string => typeof v === "string" && v.trim() === v && /[^/]/.test(v) && !/^!|[{}\\]|\/\/|(^|\/)\.\.?(\/|$)/.test(v);
+export const GLOB_RULES = 'no surrounding spaces, "!", "{}", "\\", "." or ".." segments, or "//"';
 
 const expand = (p: string, base: string) => resolve(base, p.replace(/^~(?=$|\/)/, homedir()));
 
@@ -37,13 +39,14 @@ export function parseConfig(raw: any, base: string): Config {
   const pollIntervalMs = raw.pollIntervalMs ?? 60000;
   check(Number.isInteger(pollIntervalMs) && pollIntervalMs >= 5000, "pollIntervalMs: integer >= 5000");
   const tmuxSession = raw.tmuxSession ?? "tender";
-  check(NAME.test(tmuxSession), "tmuxSession: [a-z0-9-]");
+  check(typeof tmuxSession === "string" && NAME.test(tmuxSession), "tmuxSession: [a-z0-9-]");
   const maxConcurrent = raw.maxConcurrent ?? 2;
   check(posInt(maxConcurrent), "maxConcurrent: positive integer");
   check(raw.maxInReview === undefined || posInt(raw.maxInReview), "maxInReview: positive integer");
   const stallMinutes = raw.stallMinutes ?? 30;
   check(posInt(stallMinutes), "stallMinutes: positive integer");
-  const reposRoot = expand(raw.reposRoot ?? "~/agent-repos", base);
+  for (const k of ["workspaceRoot", "reposRoot"]) check(raw[k] === undefined || str(raw[k]), `${k}: non-empty string`);
+  const reposRoot = expand(str(raw.reposRoot) ? raw.reposRoot : "~/agent-repos", base);
   check(raw.lanes === undefined, "lanes: replaced by sources + repos + defaults (see docs/upgrading.md)");
   const defaults = raw.defaults ?? {};
   check(obj(defaults) && defaults.path === undefined, "defaults: object without path");
@@ -83,7 +86,7 @@ export function parseConfig(raw: any, base: string): Config {
     check(r.maxConcurrent === undefined || posInt(r.maxConcurrent), `${at}.maxConcurrent: positive integer`);
     check(r.maxInReview === undefined || posInt(r.maxInReview), `${at}.maxInReview: positive integer`);
     check(AUTO_MERGE.includes(r.autoMerge), `${at}.autoMerge: ${AUTO_MERGE.map((m) => `"${m}"`).join(" | ")}`);
-    check(Array.isArray(r.criticalPaths) && r.criticalPaths.every(str), `${at}.criticalPaths: array of non-empty glob strings`);
+    check(Array.isArray(r.criticalPaths) && r.criticalPaths.every(validGlob), `${at}.criticalPaths: array of non-empty glob strings (${GLOB_RULES})`);
     check(Array.isArray(r.feedbackAuthors) && r.feedbackAuthors.every(str), `${at}.feedbackAuthors: array of non-empty strings (GitHub logins / Linear emails)`);
     check(v.stallMinutes === undefined || posInt(r.stallMinutes), `${at}.stallMinutes: positive integer`);
     check(v.feedback === undefined || (obj(v.feedback) && Object.keys(v.feedback).every((k) => k === "maxRounds") && rounds(r.feedbackRounds)), `${at}.feedback: { maxRounds: integer 1-10 }`);
@@ -100,7 +103,7 @@ export function parseConfig(raw: any, base: string): Config {
     for (const k of LANE_KEYS) check(r[k] === undefined, `${at}.${k}: moved to repos / defaults`);
     check(r.repos === undefined, `${at}.repos: removed; a GitHub source polls every repo in repos`);
     const common = { name: r.name, tracker: r.tracker, readyLabel: r.readyLabel ?? "agent", needsHumanLabel: r.needsHumanLabel ?? "needs-human" };
-    check(NAME.test(common.name ?? ""), `${at}.name: required, [a-z0-9-]`);
+    check(typeof common.name === "string" && NAME.test(common.name), `${at}.name: required, [a-z0-9-]`);
     for (const k of ["readyLabel", "needsHumanLabel"] as const) check(str(common[k]), `${at}.${k}: non-empty string`);
     const adapter = typeof common.tracker === "string" && Object.hasOwn(TRACKERS, common.tracker) ? TRACKERS[common.tracker as Source["tracker"]] : undefined;
     check(adapter, `${at}.tracker: ${Object.keys(TRACKERS).map((k) => `"${k}"`).join(" | ")}`);

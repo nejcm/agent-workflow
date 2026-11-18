@@ -1,5 +1,9 @@
 # Upgrading
 
+## To stricter config checks
+
+`tender.json` now rejects unknown keys at the top level, in `defaults` and in `repos[]`, and string settings given as another type (`tmuxSession`, a source `name`, a Linear `team`, `workspaceRoot`, `reposRoot`). Path globs in `criticalPaths`, `testPaths` and `trust` fail to load with surrounding spaces, a leading `!`, `{` or `}`, a backslash, a `.` or `..` segment, or `//`. Each of these was silently ignored or matched nothing before, so fix the key or glob the error names: write `src/**` for `./src/**`, and one glob per extension for `*.{ts,tsx}`. `[` and `]` still match themselves, so `*.[jt]s` matches no file. Escape hatches and critical paths grew, so some PRs that auto-merged before are now held; see [Auto-merge](auto-merge.md).
+
 ## To ticket types
 
 A ticket labelled `type:bug` or `type:docs`, or a GitHub issue with that issue type, now gets tender's steps for that type, see [Prompt](config.md#prompt); the bug reproduce-first guidance moved out of the base plan step into the `bug` type. A GitHub issue type counts as the label `type:<name>`, so a repo's `byLabel` entry for `type:<name>` now also matches issues of that type, its `agent` included. Listing reads the `issueType` field, so update `gh` to 2.94.0 or later first.

@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { AUTO_MERGE, INTAKE_NAME } from "./config";
+import { AUTO_MERGE, GLOB_RULES, INTAKE_NAME, validGlob } from "./config";
 import { baseBranch } from "../github";
 import { EFFORTS, MODEL } from "../session/agents";
 import type { AgentConfig, AgentName, AutoMerge, Check, IntakeRule, Io, PromptSet, PromptText, Repo, RepoConfig, Session } from "../types";
@@ -100,8 +100,8 @@ export function parseRepoConfig(entries: Entry[]): RepoConfig {
   check(c.testCmd === undefined || str(c.testCmd), "testCmd: non-empty string");
   const modes = AUTO_MERGE.map((m) => `"${m}"`).join(" | ");
   check(c.autoMerge === undefined || AUTO_MERGE.includes(c.autoMerge), `autoMerge: ${modes}`);
-  for (const k of ["criticalPaths", "testPaths"] as const) check(Array.isArray(c[k]) && c[k].every(str), `${k}: list of non-empty glob strings`);
-  check(Array.isArray(c.trust) && c.trust.every((t) => obj(t) && Object.keys(t).every((k) => ["paths", "autoMerge"].includes(k)) && Array.isArray(t.paths) && t.paths.length > 0 && t.paths.every(str) && AUTO_MERGE.includes(t.autoMerge)), `trust: list of { paths: [glob, …], autoMerge: ${modes} }`);
+  for (const k of ["criticalPaths", "testPaths"] as const) check(Array.isArray(c[k]) && c[k].every(validGlob), `${k}: list of non-empty glob strings (${GLOB_RULES})`);
+  check(Array.isArray(c.trust) && c.trust.every((t) => obj(t) && Object.keys(t).every((k) => ["paths", "autoMerge"].includes(k)) && Array.isArray(t.paths) && t.paths.length > 0 && t.paths.every(validGlob) && AUTO_MERGE.includes(t.autoMerge)), `trust: list of { paths: [glob, …], autoMerge: ${modes} } (${GLOB_RULES})`);
   const regex = (p: unknown) => {
     try {
       return str(p) && p.length <= MAX_HATCH_CHARS && !!new RegExp(p);

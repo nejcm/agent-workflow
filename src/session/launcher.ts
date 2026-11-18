@@ -156,20 +156,18 @@ const REFRESH_MARGIN = 24 * 3600_000;
 const LOGIN = ["auth_mode", "last_refresh"];
 const TOKENS = ["id_token", "access_token", "account_id", "login_owner_id"];
 // app-server's `account/read` with `refreshToken` forces a refresh. flock: two concurrent refreshes of a rotating token invalidate the login.
-// A login changed while waiting ($2 is the stamp tender read) was already refreshed; app-server never holds the lock.
+// A login changed while waiting ($2 is the content hash tender read) was already refreshed; app-server never holds the lock.
 const REFRESH = [
   'export CODEX_HOME="$1"',
   'exec {L}<"$CODEX_HOME" && flock -w 30 "$L" || exit 1',
-  `[[ $(stat -c '%i %.9Y' "$CODEX_HOME/auth.json") == "$2" ]] || exit 0`,
+  'h=$(sha256sum <"$CODEX_HOME/auth.json" 2>/dev/null); [[ ${h%% *} == "$2" ]] || exit 0',
   'coproc APP { exec {L}<&- codex app-server 2>/dev/null; }',
   `printf '%s\\n' '{"method":"initialize","id":0,"params":{"clientInfo":{"name":"tender","version":"1"}}}' '{"method":"initialized"}' '{"method":"account/read","id":1,"params":{"refreshToken":true}}' >&"\${APP[1]}"`,
   `while IFS= read -r l <&"\${APP[0]}"; do [[ $l == '{"id":1,'* ]] && { exec {APP[1]}>&-; wait; exit 0; }; done`,
   "exit 1",
 ].join("\n");
-export const authStamp = (file: string) => {
-  const s = statSync(file, { bigint: true, throwIfNoEntry: false });
-  return s ? `${s.ino} ${s.mtimeNs / 1_000_000_000n}.${String(s.mtimeNs % 1_000_000_000n).padStart(9, "0")}` : "";
-};
+// A content hash, not mtime: uutils `stat` rounds `%.9Y`, so a time stamp never matched there.
+export const authStamp = (file: string) => (existsSync(file) ? new Bun.CryptoHasher("sha256").update(readFileSync(file)).digest("hex") : "");
 export const codexRefresh = (home: string, seen: string) => ["bash", "-c", REFRESH, "tender-codex-refresh", join(home, ".codex-tender"), seen];
 
 const expiresAt = (o: any) => {

@@ -1,5 +1,4 @@
 const SUPPRESSIONS = ["eslint-disable", "@ts-ignore", "@ts-expect-error", "@ts-nocheck", "# type: ignore", "# noqa", "ruff: noqa", "flake8: noqa", "# mypy: ignore-errors", "# pyright: ignore", "# pylint: disable", "# rubocop:disable", "//nolint", "lint:ignore", "lint:file-ignore", "biome-ignore", "oxlint-disable", "deno-lint-ignore", "shellcheck disable", "#[allow(", "#![allow(", "#[expect(", "@SuppressWarnings", "@Suppress", "@file:Suppress", "SuppressMessage(", "# pragma: no cover", "# pragma: no branch", "istanbul ignore", "c8 ignore", "v8 ignore"];
-const PY_SKIPS = ["pytest.mark.skip", "pytest.skip(", "pytest.mark.xfail", "unittest.skip", "unittest.expectedFailure", "skipTest("];
 const escaped = (p: string) => p.replace(/[^\w ]/g, (c) => ` ${c.replace(/[.*+?^${}()|[\]\\]/, "\\$&")} `).trim().replace(/ +/g, "\\s*");
 const literal = (p: string, flags: string) => [p, new RegExp((/^\w/.test(p) ? "\\b" : "") + escaped(p), flags)] as const;
 // Comment directives ignore case like their tools do; test skips stay case-sensitive so `t.skip(1)` or `@disabled` in a template do not hold a merge.
@@ -10,14 +9,17 @@ const BUILTIN: (readonly [string, RegExp])[] = [
   ["cfg_attr(..., allow(", /#\s*!?\s*\[\s*cfg_attr\s*\(.*\ballow\s*\(/i],
   ["#pragma warning disable", /#\s*pragma\s+warning\s*\(?\s*disable/i],
   ["NOSONAR", /\bNOSONAR\b/],
-  ...PY_SKIPS.map((p) => literal(p, "")),
-  ["it/test/describe .skip or .only", /(?<![\w.$])(?:it|test|describe|context|suite)(?:\s*\.\s*\w+)*?\s*\.\s*(?:skip|only|skipIf|fails|failing|fixme)\b/],
+  ["pytest.mark.skip/xfail", /\bpytest\s*\.\s*mark\s*\.\s*(?:skip|skipif|xfail)\b/],
+  ["pytest.skip(", /\bpytest\s*\.\s*(?:skip|xfail|importorskip)\s*\(/],
+  ["unittest.skip", /\bunittest\s*\.\s*(?:skip|skipIf|skipUnless|expectedFailure)\b/],
+  ["skipTest(", /\.\s*skipTest\s*\(/],
+  ["it/test/describe .skip or .only", /(?<![\w.$])(?:it|test|describe|context|suite)(?:\s*\.\s*\w+)*?\s*\.\s*(?:skip|only|skipIf|fails|failing|fixme)\s*[(.`]/],
   ["xit/fit/xdescribe/fdescribe", /(?<![\w.$])[fx](?:it|test|describe|context)\s*\(/],
-  ["t.Skip", /\b[tb]\.Skip(?:f|Now)?\(/],
+  ["t.Skip", /(?:(?<![\w.])(?:t|b|tb|tt)|\bT\(\))\s*\.\s*Skip(?:f|Now)?\s*\(/],
   ["#[ignore]", /#\s*\[\s*ignore\s*[\]=(]/],
   ["@Disabled", /@Disabled\b/],
   ["@Ignore", /@Ignore\b/],
-  ["[Ignore]", /\[\s*Ignore\b/],
+  ["[Ignore]", /^\s*\[(?:[^\]]*,\s*)?Ignore\b/],
 ];
 export const ESCAPE_HATCHES = BUILTIN.map(([p]) => p);
 const HATCH_MS = 5000;

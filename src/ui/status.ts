@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { AGENTS, agentOf, type Lookup } from "../session/agents";
@@ -48,7 +48,7 @@ function progress(dir: string, id: string) {
   return p && { ...p, items: p.items.map((x) => ({ key: clean(x.key, 40), title: clean(x.title, 120), status: x.status })) };
 }
 
-const mergeMark = (f: string) => (existsSync(f) ? (readFileSync(f, "utf8").split("\n").at(-1)!.startsWith(WOULD) ? "would" : "held") : null);
+const mergeMark = (f: string) => withFile(f, (fd) => (readFileSync(fd, "utf8").split("\n").at(-1)!.startsWith(WOULD) ? "would" : "held")) ?? null;
 
 const MAX_PR_BYTES = 512;
 

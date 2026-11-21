@@ -558,9 +558,10 @@ test("auto-merge pass: shadow comments again when the verdict flips on a held he
   worktree("gh-1");
   const calls: string[] = [];
   const merge: (string | null)[] = [];
+  const gates: boolean[] = [];
   const run = async () => {
     const f = fakeTracker({ inReview: [ticket(1)] });
-    await pass(c, fakeIo(respond).io, () => f.tr, "/tender");
+    await pass(c, { ...fakeIo(respond).io, event: (kind, _r, _i, d: any) => void (kind === "gate" && gates.push(d.merge)) }, () => f.tr, "/tender");
     calls.push(...f.calls);
     merge.push(rows(c, new Map(), root)[0]!.merge);
   };
@@ -573,10 +574,16 @@ test("auto-merge pass: shadow comments again when the verdict flips on a held he
   await run();
   expect(calls).toEqual(["comment gh-1 would auto-merge: small change", "comment gh-1 not auto-merged: PR is a draft"]);
   expect(merge).toEqual(["would", "would", "held", "held", "would"]);
+  expect(gates).toEqual([true, false, true]);
   // A marker written before verdicts were tagged is not commented again.
   writeFileSync(join(root, "acme/web/gh-1.merge"), ["a".repeat(40), JSON.stringify("small change")].join("\n"));
   await run();
   expect(calls).toHaveLength(2);
+  expect(merge.at(-1)).toBe("would");
+  facts = { ...facts, files: [file("would fix/package.json")] };
+  await run();
+  await run();
+  expect(calls.slice(2)).toEqual(["comment gh-1 not auto-merged: touches critical path would fix/package.json"]);
 });
 
 test("merge decision: zero checks wait until the head is old enough for CI to register; branch protection holds with a reason", () => {

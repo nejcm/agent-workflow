@@ -206,9 +206,12 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
   }
   const mode = prMode(r, pr.files);
   const line = `${d.merge === true && mode === "shadow" ? WOULD : ""}${JSON.stringify(d.reason)}`;
-  const seen = held && marker.slice(1).some((l) => l.replace(WOULD, "") === JSON.stringify(d.reason));
+  const other = (l: string, i: number) => !i || (l.startsWith(WOULD) ? l.slice(WOULD.length) : l) !== JSON.stringify(d.reason);
+  const seen = held && !marker.every(other);
+  const gate = () => io.event?.("gate", r.key, t.id, { pr: pr.url, head: pr.headRefOid, mode, merge: d.merge, reason: d.reason });
   if (d.merge === "wait" || (held && (mode === "shadow" ? seen : !d.merge && (pr.state !== "OPEN" || seen)))) {
-    if (seen && marker.at(-1) !== line) put(io, f, [...marker.filter((l, i) => !i || l.replace(WOULD, "") !== JSON.stringify(d.reason)), line].join("\n"));
+    // A verdict already commented on that comes back is not commented again, but status and stats follow it.
+    if (seen && marker.at(-1) !== line) put(io, f, [...marker.filter(other), line].join("\n")), gate();
     // Shared only when nothing was awaited since the view, so feedback never reads a stale one.
     if (share && !fetch) share.pr = pr;
     return pr;
@@ -243,7 +246,7 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
     else remove(io, f);
     throw e;
   }
-  io.event?.("gate", r.key, t.id, { pr: pr.url, head: pr.headRefOid, mode, merge: d.merge, reason: d.reason });
+  gate();
   return pr;
 }
 

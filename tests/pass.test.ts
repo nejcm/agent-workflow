@@ -576,6 +576,31 @@ test("canceled: kills the window once, keeps the clone and files, posts nothing;
   expect(existsSync(join(root, "acme/web/gh-2"))).toBe(true);
 });
 
+test("deleted: stops the session and removes the clone through the done checks, keeping one with unpushed work; records no done", async () => {
+  const c = config();
+  for (const id of ["gh-1", "gh-2"]) {
+    worktree(id);
+    writeFileSync(join(root, "acme/web", `${id}.sh`), "");
+  }
+  const { tr, calls } = fakeTracker({ deleted: ["gh-1", "gh-2"] });
+  const { io: plain, cmds, logs } = fakeIo((a) => {
+    if (a[1] === "list-windows") return windowsOut(["acme/web/gh-1"]);
+    if (a.includes("rev-list") && a.some((x) => x.endsWith("gh-2/.git"))) return { out: `${"a".repeat(40)}\n` };
+  });
+  const io = { ...plain, event: recorder(join(root, "tender.db"), "box", (m) => logs.push(m)) };
+  await pass(c, io, () => tr, "/tender");
+  expect(cmds).toContain("tmux kill-window -t @0");
+  for (const id of ["gh-1", "gh-2"]) expect(cmds).toContain(`systemctl --user kill --signal=KILL ${unit(id)}`);
+  expect(cmds.filter((x) => x.startsWith("rm "))).toEqual([`rm -rf --one-file-system -- ${join(root, "acme/web/gh-1")}`]);
+  for (const f of ["gh-1.sh", "gh-1.source"]) expect(existsSync(join(root, "acme/web", f))).toBe(false);
+  for (const f of ["gh-2", "gh-2.sh", "gh-2.source"]) expect(existsSync(join(root, "acme/web", f))).toBe(true);
+  expect(logs.some((l) => l.includes("acme/web/gh-2 has uncommitted, untracked or unpushed work; left in place"))).toBe(true);
+  expect(calls).toEqual([]);
+  const db = openDb(join(root, "tender.db"));
+  expect(db.query("SELECT COUNT(*) AS n FROM events WHERE kind = 'done'").get()).toEqual({ n: 0 });
+  db.close();
+});
+
 test("canceled then reopened while in progress: no session, no comment, one log line saying how to restart", async () => {
   const c = config();
   worktree("gh-1");

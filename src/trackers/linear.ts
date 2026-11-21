@@ -177,7 +177,9 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
     ],
     async closed(id) {
       const i = (await gql(`query($id: String!) { issue(id: $id) { trashed state { name type } } }`, { id })).issue;
-      if (!i || i.trashed) return "canceled";
+      if (i?.trashed) return "deleted";
+      // The schema makes `issue` non-null, so a response without one is malformed, never proof of deletion.
+      if (!i) return "canceled";
       const st = i.state;
       return st?.type === "canceled" || st?.type === "duplicate" ? "canceled" : l.done.includes(st?.name) ? "done" : undefined;
     },

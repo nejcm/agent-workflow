@@ -255,7 +255,7 @@ async function sweep(io: Io, db: Database, save: Save, tr: Tracker, repo: string
       }
       continue;
     }
-    if (st === "canceled" || !rule.recheck || row.state === "reopened") {
+    if (st !== "done" || !rule.recheck || row.state === "reopened") {
       set(row.key, "closed");
       continue;
     }

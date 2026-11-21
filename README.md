@@ -42,7 +42,7 @@ Move a GitHub issue or Linear ticket to **ready**, and `tender` starts a Claude 
   - After `feedback.maxRounds` rounds (default 3) the ticket is parked with `needs-human`.
 - **[Auto-merge](docs/auto-merge.md#auto-merge):** modes `off`, `all`, `shadow` and `intelligent`, set per path by the repo's `trust` rules. Critical paths and escape hatches (`@ts-ignore`, `eslint-disable`, …) on added lines hold back any mode; `intelligent` adds gates for deleted tests, PR size and the agent's own confidence.
 - **Cleanup:**
-  - A done ticket ends its session, and its clone is deleted once nothing is unpushed.
+  - A done or deleted ticket ends its session, and its clone is deleted once nothing is unpushed.
   - A canceled ticket ends its session and keeps its clone.
   - A ticket reassigned to someone else is stopped the same way, with one comment.
 

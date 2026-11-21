@@ -24,11 +24,17 @@ const hasTrace = (cfg: Config, key: string, id: string) => existsSync(join(repoD
 // Linear only: ids are unique per workspace (one LINEAR_API_KEY), so the marker is shared by all Linear sources.
 const rejectFile = (cfg: Config, id: string) => join(cfg.workspaceRoot, ".rejected", id);
 
+// A kept session dir is retried every poll but logged once per dir and reason.
+class Kept extends Error {}
+
 async function step(io: Io, what: string, fn: () => Promise<unknown>) {
   try {
     await fn();
   } catch (e) {
-    io.log(`${what} failed: ${(e as Error).message}`);
+    const msg = `${what} failed: ${(e as Error).message}`;
+    if (e instanceof Kept && warned.has(msg)) return;
+    if (e instanceof Kept) warned.add(msg);
+    io.log(msg);
   }
 }
 
@@ -423,7 +429,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
           return x.io.log(`stopped ${r.key}/${id}: ticket canceled; clone and files kept`);
         }
         const wt = join(dir, id);
-        if (!lstatSync(join(wt, ".git"), { throwIfNoEntry: false })?.isDirectory()) throw new Error(`${wt}/.git is not a directory; left in place`);
+        if (!lstatSync(join(wt, ".git"), { throwIfNoEntry: false })?.isDirectory()) throw new Kept(`${wt}/.git is not a directory; left in place`);
         // The session controls its .git (config, filters, commondir), so git checks it sandboxed: read-only, no network, no credentials; tender then deletes without git.
         // A planted filter can block git; the runner's deadline kills its whole process group.
         const box = r.sandbox === "nono" ? nonoRun("tender-check", tenderDir, [["--read", wt], ["--read", join(r.path, ".git", "objects")]]) : [];
@@ -440,10 +446,10 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
         const tracking = (await git("for-each-ref", "--format=%(objectname) %(refname)", "refs/remotes")).split("\n").filter(Boolean).map((l) => l.split(" "));
         const unverified = tracking.filter(([sha, ref]) => remote.get(ref.replace(/^refs\/remotes\/origin\//, "refs/heads/")) !== sha).map(([, ref]) => `--exclude=${ref}`);
         // Grafts survive --no-replace-objects, commondir could move them out of reach, and linked worktrees and submodules are not checked.
-        if (["info/grafts", "commondir", "worktrees", "modules"].some((f) => existsSync(join(wt, ".git", f)))) throw new Error(`${wt} has a graft file, commondir, linked worktree or submodule; left in place`);
+        if (["info/grafts", "commondir", "worktrees", "modules"].some((f) => existsSync(join(wt, ".git", f)))) throw new Kept(`${wt} has a graft file, commondir, linked worktree or submodule; left in place`);
         // A fresh clone has no tags (--revision, tagOpt=--no-tags), so any tag, stash or note is the session's own.
         const checks = [["status", "--porcelain", "--ignore-submodules=none"], ["rev-list", "--ignore-missing", "--all", "--not", ...pushed, ...unverified, "--glob=refs/remotes/*"], ["for-each-ref", "--format=%(refname)", "refs/tags", "refs/stash", "refs/notes"], ["refs", "verify"]];
-        for (const c of checks) if ((await git(...c)).trim()) throw new Error(`${wt} has uncommitted, untracked or unpushed work; left in place`);
+        for (const c of checks) if ((await git(...c)).trim()) throw new Kept(`${wt} has uncommitted, untracked or unpushed work; left in place`);
         // rm never follows symlinks.
         await write(x.io, ["rm", "-rf", "--one-file-system", "--", wt], undefined, SLOW_SECS);
         // After the clone, so a delete that fails keeps the transcripts too.

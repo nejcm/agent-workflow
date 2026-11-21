@@ -214,15 +214,39 @@ export async function codexLogin(io: Io, now = Date.now()) {
 }
 
 
-/** Host-owned record, beside the session-writable dir, of the account `dir`'s login was seeded from. */
+/** Host-owned record, beside the session-writable dir, of the account, user and token hash `dir`'s login was last written with. */
 export const codexAccount = (dir: string) => `${dir}-account`;
 const MAX_AUTH = 64 * 1024;
+const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 
-/** Rewrites a live session's existing Codex `auth.json` with `login` when its access token differs and the account matches its record, keeping its `agent_identity`; true when written. */
-export function refreshCodexCopy(io: Io, dir: string, login: string) {
+/** A login's ChatGPT account and user (its id_token `sub`), or undefined without both: account_id alone is a shared workspace. */
+export function codexIdentity(o: any) {
+  let user: unknown;
+  try {
+    user = JSON.parse(Buffer.from(String(o.tokens.id_token).split(".")[1]!, "base64url").toString()).sub;
+  } catch {}
+  const account = o?.tokens?.account_id;
+  return typeof account === "string" && account && typeof user === "string" && user ? { account, user } : undefined;
+}
+
+/** `dir`'s record when it is for `id`'s account and user. */
+export function codexRecorded(dir: string, id: { account: string; user: string }) {
+  try {
+    const r = JSON.parse(readFileSync(codexAccount(dir), "utf8"));
+    return r.account === id.account && r.user === id.user && typeof r.token === "string" ? (r as { token: string }) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const record = (dir: string, id: { account: string; user: string }, token: string) => writeFileSync(codexAccount(dir), JSON.stringify({ ...id, token: sha(token) }), { mode: 0o600 });
+
+/** Rewrites a session's existing Codex `auth.json` with `login` when it still holds the token tender last wrote for the same account and user, keeping its `agent_identity`. */
+export function refreshCodexCopy(io: Io, dir: string, login: string): "written" | "same" | "changed" | "skipped" {
   const next = JSON.parse(login);
-  const account = existsSync(codexAccount(dir)) ? readFileSync(codexAccount(dir), "utf8") : "";
-  if (io.dry || !account || account !== next.tokens.account_id) return false;
+  const id = codexIdentity(next);
+  const rec = id && codexRecorded(dir, id);
+  if (io.dry || !rec) return "skipped";
   try {
     // Pinned no-follow: the session can write `dir`, so every path below goes through the fd.
     return inDir(dir, (d) => {
@@ -239,20 +263,23 @@ export function refreshCodexCopy(io: Io, dir: string, login: string) {
       } finally {
         closeSync(fd);
       }
-      if (old?.tokens?.access_token === next.tokens.access_token) return false;
+      const token = old?.tokens?.access_token;
+      if (token === next.tokens.access_token) return "same";
+      if (typeof token !== "string" || sha(token) !== rec.token) return "changed";
       const tmp = `${d}/auth.json.tmp`;
       rmSync(tmp, { force: true });
       const out = openSync(tmp, C.O_WRONLY | C.O_CREAT | C.O_EXCL | C.O_NOFOLLOW, 0o600);
       try {
-        writeFileSync(out, JSON.stringify({ ...next, ...(old?.agent_identity && { agent_identity: old.agent_identity }) }));
+        writeFileSync(out, JSON.stringify({ ...next, ...(old.agent_identity && { agent_identity: old.agent_identity }) }));
       } finally {
         closeSync(out);
       }
       renameSync(tmp, `${d}/auth.json`);
-      return true;
+      record(dir, id, next.tokens.access_token);
+      return "written";
     });
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return false;
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return "skipped";
     throw e;
   }
 }
@@ -278,8 +305,8 @@ export function seedCodex(io: Io, dir: string, login: string | undefined, root: 
   // Copies, not links: Codex rewrites config.toml in place, and the template stays out of the sandbox.
   for (const f of ["config.toml", "hooks.json"]) if (existsSync(join(tpl, f))) copyFileSync(join(tpl, f), join(dir, f));
   if (login) writeFileSync(join(dir, "auth.json"), login, { mode: 0o600, flag: "wx" });
-  const account = login && JSON.parse(login).tokens?.account_id;
-  if (typeof account === "string") writeFileSync(codexAccount(dir), account, { mode: 0o600 });
+  const id = login ? codexIdentity(JSON.parse(login)) : undefined;
+  if (id) record(dir, id, JSON.parse(login!).tokens.access_token);
   const cfg = join(dir, "config.toml");
   const old = existsSync(cfg) ? readFileSync(cfg, "utf8") : "";
   if (trusted(old, root)) return;

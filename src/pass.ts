@@ -5,7 +5,7 @@ import { deliverFeedback, feedbackFields } from "./session/feedback";
 import { fileFindings } from "./review/findings";
 import { agentOf, codexHome } from "./session/agents";
 import { baseBranch, canonical, findPr, sameRepo } from "./github";
-import { authStamp, claim, cloned, CODEX_AUTH, codexAccount, codexLogin, handedOff, nonoRun, refreshCodexCopy, scopeUnit, start, stopSession, sweepScopes, windows, winName } from "./session/launcher";
+import { authStamp, claim, cloned, CODEX_AUTH, codexIdentity, codexLogin, codexRecorded, handedOff, nonoRun, refreshCodexCopy, scopeUnit, start, stopSession, sweepScopes, windows, winName } from "./session/launcher";
 import { autoMerge, checkState, policyBlocked, PR_FIELDS, prMode, prReady, viewPr } from "./review/merge";
 import { syncPhases } from "./review/phases";
 import { agentPane, deliverAnswer, liveStates, syncQuestion } from "./session/question";
@@ -336,8 +336,11 @@ async function refreshCodexCopies(cfg: Config, io: Io, wins: Map<string, string>
   try {
     const tpl = join(io.home, CODEX_AUTH);
     if (io.dry || !existsSync(tpl)) return;
-    const dirs = Object.values(cfg.repos).flatMap((r) => worktreeIds(repoDir(cfg, r.key)).flatMap((id) => (wins.has(winName(r.key, id)) ? [codexHome(join(repoDir(cfg, r.key), id))] : [])));
-    if (!dirs.some((d) => existsSync(codexAccount(d)))) return;
+    const id = codexIdentity(JSON.parse(readFileSync(tpl, "utf8")));
+    if (!id) return;
+    const live = Object.values(cfg.repos).flatMap((r) => worktreeIds(repoDir(cfg, r.key)).flatMap((t) => (wins.has(winName(r.key, t)) ? [{ win: winName(r.key, t), dir: codexHome(join(repoDir(cfg, r.key), t)) }] : [])));
+    const bound = live.filter((s) => codexRecorded(s.dir, id));
+    if (!bound.length) return;
     const stamp = authStamp(tpl);
     if (stamp === codexFailed.stamp && now < codexFailed.until) return;
     let login: string;
@@ -347,11 +350,16 @@ async function refreshCodexCopies(cfg: Config, io: Io, wins: Map<string, string>
       codexFailed = { stamp, until: now + 3600_000 };
       return once(io, `Codex login copies not refreshed (${errTag(e)}): the template login is missing, not a ChatGPT login or could not be refreshed; run \`CODEX_HOME=~/.codex-tender codex login\``);
     }
-    for (const d of dirs) {
+    // The refresh can take a minute: a window closed meanwhile is an ended session.
+    const still = await windows(cfg, io);
+    for (const s of bound.filter((s) => still.listed && still.has(s.win))) {
+      const file = join(s.dir, "auth.json");
       try {
-        if (refreshCodexCopy(io, d, login)) io.log(`refreshed the Codex login in ${join(d, "auth.json")}`);
+        const r = refreshCodexCopy(io, s.dir, login);
+        if (r === "written") io.log(`refreshed the Codex login in ${file}`);
+        if (r === "changed") once(io, `${file} not refreshed: the session changed its login, so it is left as is`);
       } catch (e) {
-        once(io, `${join(d, "auth.json")} not refreshed (${errTag(e)}): it must be a regular file with one link under 64 KiB in a directory of this user`);
+        once(io, `${file} not refreshed (${errTag(e)}): it must be a regular file with one link under 64 KiB in a directory of this user`);
       }
     }
   } catch (e) {

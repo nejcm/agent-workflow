@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { validRepo } from "../src/config/config";
 import { canonCache } from "../src/github";
 import { github } from "../src/trackers/github";
-import { authStamp, CODEX_AUTH, codexHooksWarning, codexLogin, codexRefresh, launcher, render, resume, scopeUnit, sweepScopes, seedClaude, seedCodex } from "../src/session/launcher";
+import { authStamp, CODEX_AUTH, codexHooksWarning, codexLogin, codexRefresh, launcher, render, resume, scopeUnit, socketWarning, sweepScopes, seedClaude, seedCodex } from "../src/session/launcher";
 import { events, openDb, recorder } from "../src/db";
 import { endedNotice, pass } from "../src/pass";
 import { liveStates, pickAnswer } from "../src/session/question";
@@ -1338,6 +1338,12 @@ test("each pass kills this workspace's scopes that hold none of its panes, whate
   expect(cmds.find((x) => x.includes("list-units"))).toEndWith(` ${unit("gh-7").split(":")[0]}:*`);
   expect(cmds.filter((x) => x.startsWith("systemctl --user kill"))).toEqual([unit("gh-7"), unit("gh-4")].map((u) => `systemctl --user kill --signal=KILL ${u}`));
   expect(calls).toEqual([]);
+});
+
+test("socketWarning: warns once a temp dir leaves no room for tsx's socket under the 108-byte sun_path", () => {
+  expect(socketWarning(`/${"a".repeat(84)}`)).toBeUndefined();
+  expect(socketWarning(`/${"a".repeat(85)}`)).toContain("86 bytes");
+  expect(socketWarning(`/${"é".repeat(43)}`)).toContain("87 bytes");
 });
 
 test("a failed pane listing kills no scope", async () => {

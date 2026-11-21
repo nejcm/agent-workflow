@@ -29,15 +29,15 @@ async function step(io: Io, what: string, fn: () => Promise<unknown>) {
     await fn();
   } catch (e) {
     const msg = `${what} failed: ${(e as Error).message}`;
-    if (e instanceof Kept && warned.has(msg)) return;
-    if (e instanceof Kept) warned.add(msg);
+    if (e instanceof Kept && warned.has(e.key)) return;
+    if (e instanceof Kept) warned.add(e.key);
     io.log(msg);
   }
 }
 
 const SCAN_CAP = 100_000;
 
-// Old-form submodules and other nested repos hold commits no check here sees; node_modules is skipped, as a dependency's .git is reinstallable.
+// Old-form submodules, --separate-git-dir pointers and other nested repos hold commits no check here sees.
 function nestedGit(wt: string) {
   const dirs = [wt];
   let seen = 0;
@@ -45,9 +45,8 @@ function nestedGit(wt: string) {
     const d = dirs.pop()!;
     for (const e of readdirSync(d, { withFileTypes: true })) {
       if (++seen > SCAN_CAP) return `more than ${SCAN_CAP} entries`;
-      if (!e.isDirectory()) continue;
       if (e.name === ".git" && d !== wt) return join(d, e.name);
-      if (e.name !== ".git" && e.name !== "node_modules") dirs.push(join(d, e.name));
+      if (e.isDirectory() && e.name !== ".git") dirs.push(join(d, e.name));
     }
   }
 }
@@ -485,13 +484,6 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
         }
         const wt = join(dir, id);
         if (!lstatSync(join(wt, ".git"), { throwIfNoEntry: false })?.isDirectory()) throw new Kept(`${wt}/.git is not a directory; left in place`);
-        let nested: string | undefined;
-        try {
-          nested = nestedGit(wt);
-        } catch (e) {
-          nested = `an unreadable path (${(e as Error).message})`;
-        }
-        if (nested) throw new Kept(`${wt} may hold a nested repository: ${nested}; left in place`);
         // The session controls its .git (config, filters, commondir), so git checks it sandboxed: read-only, no network, no credentials; tender then deletes without git.
         // A planted filter can block git; the runner's deadline kills its whole process group.
         const box = r.sandbox === "nono" ? nonoRun("tender-check", tenderDir, [["--read", wt], ["--read", join(r.path, ".git", "objects")]]) : [];
@@ -512,6 +504,14 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
         // A fresh clone has no tags (--revision, tagOpt=--no-tags), so any tag, stash or note is the session's own.
         const checks = [["status", "--porcelain", "--ignore-submodules=none"], ["rev-list", "--ignore-missing", "--all", "--not", ...pushed, ...unverified, "--glob=refs/remotes/*"], ["for-each-ref", "--format=%(refname)", "refs/tags", "refs/stash", "refs/notes"], ["refs", "verify"]];
         for (const c of checks) if ((await git(...c)).trim()) throw new Kept(`${wt} has uncommitted, untracked or unpushed work; left in place`);
+        // Last before rm, so a repo created during the git checks is still seen.
+        let nested: string | undefined;
+        try {
+          nested = nestedGit(wt);
+        } catch (e) {
+          nested = `an unreadable path (${(e as Error).message})`;
+        }
+        if (nested) throw new Kept(`${wt} may hold a nested repository: ${nested}; left in place`);
         // rm never follows symlinks.
         await write(x.io, ["rm", "-rf", "--one-file-system", "--", wt], undefined, SLOW_SECS);
         // After the clone, so a delete that fails keeps the transcripts too.

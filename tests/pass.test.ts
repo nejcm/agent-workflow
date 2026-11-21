@@ -1493,3 +1493,17 @@ test("both nono profiles grant read on every template entry a session's config d
     expect(fs.deny).toEqual(expect.arrayContaining(["$HOME/.claude-tender/.credentials.json", "$HOME/.claude-tender/oauth-token", "$HOME/.codex-tender/auth.json", "$HOME/.codex-tender/config.toml", "$HOME/.codex-tender/hooks.json"]));
   }
 });
+
+test("cleanup logs a kept session dir once per dir and reason, not every poll", async () => {
+  worktree("gh-3");
+  rmSync(join(root, "acme/web/gh-3/.git"), { recursive: true });
+  writeFileSync(join(root, "acme/web/gh-3/f"), "x");
+  const poll = async () => {
+    const { io, logs } = fakeIo();
+    await pass(config(), io, () => fakeTracker({ done: ["gh-3"] }).tr, "/tender");
+    return logs.filter((l) => l.includes("left in place"));
+  };
+  expect(await poll()).toEqual([expect.stringContaining("gh-3/.git is not a directory")]);
+  expect(await poll()).toEqual([]);
+  expect(existsSync(join(root, "acme/web/gh-3/f"))).toBe(true);
+});

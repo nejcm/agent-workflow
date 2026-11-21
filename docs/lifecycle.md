@@ -20,7 +20,7 @@ in review, PR clean, no pane output for 5 min or window gone, nothing to deliver
 session ended, no PR     ──► one comment "tender: session ended without a PR"
 feedback rounds used up  ──► `needs-human` label + one comment; feedback, auto-merge, start and the ended comment pause until a human removes it
 `working`, quiet stallMinutes ──► `needs-human` label + one comment with the last pane lines; the session keeps running
-ticket done / deleted    ──► kill session; nothing uncommitted or unpushed ──► delete the session clone
+ticket done / deleted    ──► kill session; nothing uncommitted or unpushed ──► delete the session clone (else keep it; each keep reason is logged once per dir while tender runs, a failed command every poll)
 ticket canceled          ──► kill session, keep the session clone and its files until the ticket is done
 reassigned to someone else (in progress / in review) ──► same as canceled + one comment "tender: stopped, reassigned to <x>"
 ```

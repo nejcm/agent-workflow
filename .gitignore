@@ -3,7 +3,9 @@ tender.json
 node_modules/
 .env
 
+.plans/
+docs/improvements.md
+docs/issues.md
+docs/ideas.md
+
 TODO.md
-/docs/improvements.md
-/docs/issues.md
-/.plans/

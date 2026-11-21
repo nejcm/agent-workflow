@@ -10,7 +10,8 @@ import { reviewLimit, rows } from "../src/ui/status";
 import { github } from "../src/trackers/github";
 import { linear } from "../src/trackers/linear";
 import type { Ticket } from "../src/types";
-import { config, fakeIo, fakeTracker, gh, lin, noPr, root, src, ticket, two, useTempRoot, windowsOut, withLinearKey, worktree } from "./helpers";
+import { config, fakeIo, fakeTracker, gh, lin, noPr, repoFiles, root, src, ticket, two, useTempRoot, windowsOut, withLinearKey, worktree } from "./helpers";
+import { configCache } from "../src/config/repo-config";
 
 useTempRoot();
 
@@ -460,4 +461,27 @@ test("ready to merge: not while auto-merge holds it for a required review or bra
     await manual.run();
     expect(manual.calls).toEqual([`ready gh-1 ready to merge: ${URL}`]);
   }
+});
+
+test("back to review: a required review or branch protection on the same head while auto-merge is on; manual workflow unchanged", async () => {
+  for (const autoMerge of ["all", "intelligent", "shadow", "off"]) {
+    rmSync(join(root, "acme/web/gh-1.ready"), { force: true });
+    rmSync(join(root, "acme/web/gh-1.merge"), { force: true });
+    const d = setup({ autoMerge, file: "src/a.ts" });
+    d.t.readyToMerge = true;
+    d.pr({ reviewDecision: "REVIEW_REQUIRED", mergeStateStatus: "BLOCKED" });
+    await d.run();
+    expect(d.calls.filter((c) => c.startsWith("review"))).toEqual(autoMerge === "off" ? [] : [`review gh-1 back in review, needs review: ${URL}`]);
+  }
+});
+
+test("ready to merge: a PR whose files trust leaves at off is promoted by hand despite branch protection", async () => {
+  rmSync(join(root, "acme/web/gh-1.ready"), { force: true });
+  repoFiles["config.yaml"] = 'autoMerge: off\ntrust:\n  - { paths: ["docs/**"], autoMerge: all }\n';
+  configCache.clear();
+  const d = setup({ autoMerge: "all", file: "src/a.ts" });
+  d.pr({ mergeStateStatus: "BLOCKED" });
+  await d.run();
+  expect(d.calls).toEqual(["comment gh-1 not auto-merged: autoMerge is off", `ready gh-1 ready to merge: ${URL}`]);
+  configCache.clear();
 });

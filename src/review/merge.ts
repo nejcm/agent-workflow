@@ -189,7 +189,9 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
   pr.files = undefined;
   let d = mergeDecision(pr, a, r, t.labels);
   // File gates only refuse, so the files are fetched only when everything else would merge.
-  const fetch = d.merge === true && (prMode(r) !== "shadow" || !held);
+  // A policy hold also fetches them when trust could resolve the PR to off, so a human still gets it as Ready to merge.
+  const offPossible = rank(r.autoMerge) === 0 || r.trust.some((t) => t.autoMerge === "off");
+  const fetch = (d.merge === true || (policyBlocked(pr) && offPossible)) && (prMode(r) !== "shadow" || !held);
   if (fetch) {
     // REST, not `gh pr view --json files`: it has a rename's old path and is not capped at 100 files.
     const out = await read(io, ["gh", "api", "--paginate", `repos/${r.key}/pulls/${n}/files?per_page=100`, "--jq", ".[] | {filename, previous_filename, status, additions, deletions}"]);

@@ -222,7 +222,8 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
       // Fetched once per repo per pass, so a policy tightened on the base branch applies to PRs already in review.
       const fresh = r.autoMerge === "off" ? undefined : sessionOf(io, sessions, r);
       const ses = await fresh?.catch((e) => void io.log(`merge ${t.id} failed: ${e.message}`));
-      if (ses && prMode(ses) !== "off") await step(io, `merge ${t.id}`, async () => void (pr = await autoMerge(cfg, ses, w, tr, io, parked, share)));
+      let merging = false;
+      if (ses && prMode(ses) !== "off") await step(io, `merge ${t.id}`, async () => void ((pr = await autoMerge(cfg, ses, w, tr, io, parked, share)), (merging = !!pr && prMode(ses, pr.files) !== "off")));
       // Invalid .tender/ or a failed fetch: no decision or comment, but a PR merged by hand still moves the ticket.
       else if (fresh && !ses) await step(io, `merge ${t.id}`, async () => void (pr = await autoMerge(cfg, combine(r, await baseBranch(io, r), parseRepoConfig([])), w, tr, io, true)));
       // autoMerge looks the PR up anyway; otherwise every poll too, so a replaced PR reaches `<ID>.pr` (and feedback).
@@ -252,7 +253,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
         return now.has(name) ? Date.now() / 1000 - now.activity.get(name)! >= IDLE_SECS : now.listed;
       };
       // Auto-merge reports these as a hold; promoting too would post a second, contradicting verdict.
-      const promote = !(ses && prMode(ses) !== "off" && policyBlocked(pr ?? {}));
+      const promote = !(merging && policyBlocked(pr));
       if (pr && tr.toReadyToMerge) await step(io, `ready ${t.id}`, () => syncReady(w, tr, io, dir, pr, clear, done, promote));
     }
   });
@@ -286,6 +287,7 @@ async function syncReady(t: Ticket, tr: Tracker, io: Io, dir: string, pr: any, c
       : pr.mergeable === "CONFLICTING" ? "merge conflicts"
       : pr.statusCheckRollup.some((c: any) => checkState(c) === "failed") ? "a check failed"
       : pr.reviewDecision === "CHANGES_REQUESTED" ? "changes requested"
+      : !promote ? (pr.reviewDecision === "REVIEW_REQUIRED" ? "needs review" : "blocked by branch protection")
       : clear === false ? "new feedback"
       // A failed move back after delivered feedback: this poll finds nothing left to deliver.
       : m?.step === "demote" ? m.why

@@ -694,7 +694,7 @@ test("dry-run logs side effects and executes none", async () => {
   expect(cmds.every((x) => /has-session|list-windows|list-panes|list-units|rev-parse|ls-tree|cat-file|remote get-url|gh pr list|gh repo view/.test(x))).toBe(true);
   expect(logs.some((l) => l.includes("dry: tmux new-session -d -s tender"))).toBe(true);
   expect(logs.some((l) => l.startsWith("[web] dry: nono run --no-rollback-prompt --profile /tender/nono/tender-check.json ") && l.endsWith(`-C ${root}/acme/web/gh-5 status --porcelain --ignore-submodules=none`))).toBe(true);
-  expect(logs.some((l) => l.startsWith("[web] dry: nono run ") && l.endsWith(`-C ${root}/acme/web/gh-5 log --format=%h --branches --not --remotes`))).toBe(true);
+  expect(logs.some((l) => l.startsWith("[web] dry: nono run ") && l.endsWith(`-C ${root}/acme/web/gh-5 rev-list --ignore-missing --all --not`))).toBe(true);
   expect(logs.some((l) => l.startsWith("[web] dry: nono run ") && l.endsWith(`-C ${root}/acme/web/gh-5 for-each-ref --format=%(refname) refs/tags refs/stash refs/notes`))).toBe(true);
   expect(logs).toContain(`[web] dry: rm -rf --one-file-system -- ${root}/acme/web/gh-5`);
   expect(logs.some((l) => l.includes("dry: tmux new-window"))).toBe(true);
@@ -1230,6 +1230,51 @@ test("a session gets its own clone sharing the base's objects; cleanup deletes i
   await run(fakeTracker({ done: ["gh-2"] }));
   expect(existsSync(wt2)).toBe(false);
   expect(baseRefs()).toBe(refsBefore);
+});
+
+test("cleanup keeps work the session's own config or refs would hide: untracked files, forged remote refs, a detached HEAD, other refs, replace refs; a merged PR's head counts as pushed", async () => {
+  const origin = join(root, "origin.git");
+  const base = join(root, "src-web");
+  const sh = (...a: string[]) => Bun.spawnSync(a, { stdout: "pipe", stderr: "pipe" });
+  const git = (dir: string, ...a: string[]) => expect(sh("git", "-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", ...a).exitCode).toBe(0);
+  expect(sh("git", "init", "-q", "--bare", "-b", "main", origin).exitCode).toBe(0);
+  expect(sh("git", "clone", "-q", origin, base).exitCode).toBe(0);
+  git(base, "commit", "-q", "--allow-empty", "-m", "i");
+  git(base, "push", "-q", "origin", "HEAD:main");
+  const real = (x: string[]) => {
+    const argv = x[0] === "nono" ? x.slice(x.indexOf("--") + 1) : x[0] === "git" ? [...GIT, "-c", "protocol.file.allow=always", ...x.slice(1)] : x;
+    const r = sh(...argv);
+    return { code: r.exitCode, out: r.stdout.toString(), err: r.stderr.toString() };
+  };
+  const run = async (t: ReturnType<typeof fakeTracker>) => {
+    const { io, logs } = fakeIo((x) => (x[0] === "git" || x[0] === "nono" || x[0] === "rm" ? real(x) : noPr(x)));
+    await pass(config({ maxConcurrent: 7 }), io, () => t.tr, "/tender");
+    return logs;
+  };
+  const ids = [1, 2, 3, 4, 5, 6, 7];
+  await run(fakeTracker({ ready: ids.map((n) => ticket(n)) }));
+  const [wt1, wt2, wt3, wt4, wt5, wt6, wt7] = ids.map((n) => join(root, `acme/web/gh-${n}`));
+  git(wt1, "config", "status.showUntrackedFiles", "no");
+  writeFileSync(join(wt1, "new"), "x");
+  git(wt2, "commit", "-q", "--allow-empty", "-m", "c");
+  git(wt2, "update-ref", "refs/remotes/origin/agent/gh-2", "HEAD");
+  git(wt3, "commit", "-q", "--allow-empty", "-m", "c");
+  git(wt3, "switch", "-q", "--detach");
+  git(wt3, "branch", "-f", "agent/gh-3", "origin/main");
+  git(wt4, "commit", "-q", "--allow-empty", "-m", "c");
+  git(wt4, "update-ref", "refs/keep/x", "HEAD");
+  git(wt4, "reset", "-q", "--hard", "origin/main");
+  git(wt5, "commit", "-q", "--allow-empty", "-m", "c");
+  git(wt5, "-c", "protocol.file.allow=always", "push", "-q", "origin", "HEAD:refs/heads/agent/gh-5", "HEAD:refs/pull/7/head");
+  git(origin, "update-ref", "-d", "refs/heads/agent/gh-5");
+  writeFileSync(join(root, "acme/web/gh-5.pr"), "https://github.com/acme/web/pull/7");
+  git(wt6, "commit", "-q", "--allow-empty", "-m", "c");
+  git(wt6, "-c", "protocol.file.allow=always", "push", "-q", "-u", "origin", "HEAD:refs/heads/agent/gh-6");
+  git(wt7, "commit", "-q", "--allow-empty", "-m", "c");
+  git(wt7, "replace", "--graft", "origin/main", "HEAD");
+  const logs = await run(fakeTracker({ done: ids.map((n) => `gh-${n}`) }));
+  expect(ids.map((n) => [n, existsSync(join(root, `acme/web/gh-${n}`))])).toEqual([[1, true], [2, true], [3, true], [4, true], [5, false], [6, false], [7, true]]);
+  expect(logs.filter((l) => l.includes("left in place"))).toHaveLength(5);
 });
 
 test("a session clone that fails half-way is removed, not reused next poll", async () => {

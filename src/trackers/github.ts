@@ -78,9 +78,9 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
       if (!n) throw new Error(`not a github ticket id: ${id}`);
       const r = await io.run(["gh", "issue", "view", n, "--repo", repo, "--json", "state,stateReason"]);
       if (r.code !== 0 && r.err.includes("Could not resolve to an issue or pull request")) {
-        // GraphQL also misses a transferred issue; REST follows the transfer, so only its 404/410 in a repo GraphQL resolved means deleted.
+        // GraphQL also misses a transferred issue; REST follows it, and 404s one moved out of reach, so only gh's 410 status line means deleted.
         const a = await io.run(["gh", "api", `repos/${repo}/issues/${n}`]);
-        if (a.code !== 0 && /\(HTTP (404|410)\)/.test(a.err)) return "deleted";
+        if (a.code !== 0 && /^gh: .*\(HTTP 410\)\s*$/m.test(a.err)) return "deleted";
         if (a.code !== 0) throw new Error(`gh api: ${a.err.trim() || `exit ${a.code}`}`);
         const i = JSON.parse(a.out);
         if (i.state === "closed") return ["not_planned", "duplicate"].includes(i.state_reason) ? "canceled" : "done";

@@ -57,7 +57,7 @@ function owners(cfg: Config, key: string, id: string) {
   return cfg.sources.filter((s) => s.tracker === "linear" && s.team === id.slice(0, id.lastIndexOf("-")));
 }
 
-// Done or canceled only when every owning tracker says so; none, an open state or an error is unknown.
+// Done, canceled or deleted only when every owning tracker says so; none, an open state or an error is unknown.
 async function ticketEnd(trs: Tracker[], id: string, key: string) {
   if (!trs.length) return;
   const ends = await Promise.all(trs.map((t) => t.closed(id, key)));

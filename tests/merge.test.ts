@@ -528,3 +528,24 @@ test("auto-merge pass: a trust rule above the repo's autoMerge lets a docs-only 
   repoFiles["config.yaml"] = "autoMerge: off\n";
   expect(await run("all")).toEqual([]);
 });
+
+test("auto-merge pass: a held head comments again when its reason changes, once per reason", async () => {
+  let facts: any = { ...prFacts({ isDraft: true, files: [file("package.json")] }), number: 7, url: "https://github.com/acme/web/pull/7", baseRefOid: "f".repeat(40), headRefOid: "a".repeat(40) };
+  const respond = (a: string[]) => (a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"OPEN"}]' } : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(facts) } : a[1] === "api" ? filesOut(facts) : undefined);
+  const c = config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "intelligent" }] });
+  worktree("gh-1");
+  const calls: string[] = [];
+  const run = async () => {
+    const f = fakeTracker({ inReview: [ticket(1)] });
+    await pass(c, fakeIo(respond).io, () => f.tr, "/tender");
+    calls.push(...f.calls);
+  };
+  await run();
+  await run();
+  facts = { ...facts, isDraft: false };
+  await run();
+  await run();
+  facts = { ...facts, isDraft: true };
+  await run();
+  expect(calls).toEqual(["comment gh-1 not auto-merged: PR is a draft", "comment gh-1 not auto-merged: touches critical path package.json"]);
+});

@@ -232,7 +232,7 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
     if (await tr.parked(t)) return;
     const merge = (...del: string[]) => write(io, ["gh", "pr", "merge", n, "--repo", r.key, "--squash", ...del, "--match-head-commit", pr.headRefOid]);
     // gh refuses -d on a merge-queue branch (cli/cli pkg/cmd/pr/merge canMerge); without it, gh enqueues the PR.
-    await merge("--delete-branch").catch((e) => (/--delete-branch` when merge queue enabled/.test(e.message) ? merge() : Promise.reject(e)));
+    await merge("--delete-branch").catch((e) => (/^gh pr merge: \S+ Cannot use `-d` or `--delete-branch` when merge queue enabled$/.test(e.message) ? merge() : Promise.reject(e)));
     const state = io.dry ? "MERGED" : (await view("state")).state;
     if (state !== "MERGED") return io.log(`merge ${t.id}: ${pr.url} is ${state} after gh pr merge, rechecking next poll`);
     io.event?.("merged", r.key, t.id, { pr: pr.url, auto: true, mode, reason: d.reason }, pr.url);

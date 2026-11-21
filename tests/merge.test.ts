@@ -188,21 +188,23 @@ test("auto-merge pass: merges only when enabled, pinned to the head; not-merged 
   expect((await run("intelligent")).calls).toEqual(["done gh-1"]);
 });
 
-test("a merge queue rejecting --delete-branch is retried without it, which enqueues the PR", async () => {
+test("a merge queue rejecting --delete-branch is retried without it, which enqueues the PR; other errors are not", async () => {
   const facts: any = { ...prFacts(), number: 7, url: "https://github.com/acme/web/pull/7", baseRefOid: "f".repeat(40), headRefOid: "a".repeat(40) };
-  const { io, cmds } = fakeIo((a) =>
-    a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"OPEN"}]' }
-    : a[1] === "pr" && a[2] === "merge" && a.includes("--delete-branch") ? { code: 1, err: "X Cannot use `-d` or `--delete-branch` when merge queue enabled" }
-    : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(facts) }
-    : a[1] === "api" ? filesOut(facts) : undefined);
-  const f = fakeTracker({ inReview: [ticket(1)] });
-  worktree("gh-1");
-  await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "all" }] }), io, () => f.tr, "/tender");
-  expect(cmds.filter((x) => x.startsWith("gh pr merge"))).toEqual([
-    `gh pr merge 7 --repo acme/web --squash --delete-branch --match-head-commit ${"a".repeat(40)}`,
-    `gh pr merge 7 --repo acme/web --squash --match-head-commit ${"a".repeat(40)}`,
-  ]);
-  expect(f.calls).toEqual([]);
+  const merges = async (err: string) => {
+    const { io, cmds } = fakeIo((a) =>
+      a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"OPEN"}]' }
+      : a[1] === "pr" && a[2] === "merge" && a.includes("--delete-branch") ? { code: 1, err }
+      : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(facts) }
+      : a[1] === "api" ? filesOut(facts) : undefined);
+    const f = fakeTracker({ inReview: [ticket(1)] });
+    worktree("gh-1");
+    await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "all" }] }), io, () => f.tr, "/tender");
+    expect(f.calls).toEqual([]);
+    return cmds.filter((x) => x.startsWith("gh pr merge"));
+  };
+  const first = `gh pr merge 7 --repo acme/web --squash --delete-branch --match-head-commit ${"a".repeat(40)}`;
+  expect(await merges("X Cannot use `-d` or `--delete-branch` when merge queue enabled\n")).toEqual([first, `gh pr merge 7 --repo acme/web --squash --match-head-commit ${"a".repeat(40)}`]);
+  expect(await merges("GraphQL: invalid diagnostic about `--delete-branch` when merge queue enabled; forbidden")).toEqual([first]);
 });
 
 test("a merge whose done fails is recorded once, as tender's, when the next poll completes it", async () => {

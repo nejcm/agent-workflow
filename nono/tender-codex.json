@@ -106,6 +106,8 @@
       "/proc/version",
       "/proc/filesystems",
       "$HOME/.claude-tender/plugins",
+      "$HOME/.claude-tender/skills",
+      "$HOME/.codex-tender/skills",
       "$HOME/.claude/skills",
       "$HOME/.agents/skills",
       "/usr/share/omarchy/default/agents",
@@ -114,8 +116,18 @@
     ],
     "read_file": [
       "$HOME/.claude-tender/settings.json",
+      "$HOME/.claude-tender/CLAUDE.md",
+      "$HOME/.claude-tender/AGENTS.md",
+      "$HOME/.codex-tender/AGENTS.md",
       "$HOME/.claude/CLAUDE.md",
       "$HOME/.claude/AGENTS.md"
+    ],
+    "deny": [
+      "$HOME/.claude-tender/.credentials.json",
+      "$HOME/.claude-tender/oauth-token",
+      "$HOME/.codex-tender/auth.json",
+      "$HOME/.codex-tender/config.toml",
+      "$HOME/.codex-tender/hooks.json"
     ]
   },
   "environment": {

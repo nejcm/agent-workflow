@@ -138,7 +138,7 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
     },
     addLabels: (t, labels) => write(io, ["gh", "issue", "edit", t.ref, "--repo", t.repo!, ...labels.flatMap((x) => ["--add-label", x])]).then(() => {}),
     listPhases: async (parent) =>
-      (JSON.parse(await read(io, ["gh", "api", `repos/${parent.repo}/issues/${parent.ref}/sub_issues?per_page=100`])) as any[]).map((i) => ({ ref: String(i.number), title: i.title })),
+      (JSON.parse(await read(io, ["gh", "api", `repos/${parent.repo}/issues/${parent.ref}/sub_issues?per_page=100`])) as any[]).map((i) => ({ ref: String(i.number), title: i.title, body: String(i.body ?? "") })),
     setPhase: (parent, ref, status) =>
       write(io, status === "done" ? ["gh", "issue", "close", ref, "--repo", parent.repo!] : ["gh", "issue", "edit", ref, "--repo", parent.repo!, "--add-label", l.inProgressLabel]).then(() => {}),
   };

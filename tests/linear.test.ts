@@ -75,11 +75,11 @@ test("linear adapter: phases become child issues that are never picked up as wor
     await pass(c, io, makeTracker, "/tender");
   });
   expect(mutations).toEqual([
-    { teamId: "team-1", parentId: "u-1", stateId: "s-todo", title: "ENG-1: Do a", description: "b" },
+    { teamId: "team-1", parentId: "u-1", stateId: "s-todo", title: "ENG-1: Do a", description: "b\n\ntender-phase: a" },
     { id: "u-2", i: { stateId: "s-prog" } },
-    { teamId: "team-1", parentId: "u-1", stateId: "s-todo", title: "ENG-1: Do b", description: "b" },
+    { teamId: "team-1", parentId: "u-1", stateId: "s-todo", title: "ENG-1: Do b", description: "b\n\ntender-phase: b" },
     { id: "u-3", i: { stateId: "s-prog" } },
-    { teamId: "team-1", parentId: "u-1", stateId: "s-todo", title: "ENG-1: Do c", description: "b" },
+    { teamId: "team-1", parentId: "u-1", stateId: "s-todo", title: "ENG-1: Do c", description: "b\n\ntender-phase: c" },
     { id: "u-3", i: { stateId: "s-done" } },
   ]);
 });

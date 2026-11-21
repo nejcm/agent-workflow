@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Io, Ticket, Tracker } from "../types";
-import { put, readRun } from "../util";
+import { hasMarker, put, readRun } from "../util";
 
 export type PhaseStatus = "todo" | "in-progress" | "done";
 export interface Phase {
@@ -13,6 +13,7 @@ export interface Phase {
 const RANK: Record<PhaseStatus, number> = { todo: 0, "in-progress": 1, done: 2 };
 const MAX_PHASES = 20;
 const KEY = /^[a-z0-9][a-z0-9-]{0,39}$/;
+const MARK = "tender-phase: ";
 
 /** Validates the agent-written phases file; it is untrusted, so anything off throws. */
 export function parsePhases(raw: string): Phase[] {
@@ -78,8 +79,11 @@ export async function syncPhases(t: Ticket, tr: Tracker, io: Io, dir: string, fi
       const title = `${t.id}: ${p.title}`;
       const known = new Set(Object.values(synced).map((x) => x.ref));
       // Adopt a sub-ticket created by a run that died before saving the sidecar instead of duplicating it.
-      const orphan = (await tr.listPhases(t)).find((x) => x.title === title && !known.has(x.ref));
-      s = synced[p.key] = { ref: orphan?.ref ?? (await tr.createPhase(t, title, p.body)), status: "todo" };
+      // By key marker, so same-titled phases can't swap; by title only for one created before markers.
+      const subs = (await tr.listPhases(t)).filter((x) => !known.has(x.ref));
+      const orphan = subs.find((x) => hasMarker(x.body, MARK + p.key)) ?? subs.find((x) => x.title === title && !x.body.split("\n").some((l) => l.trim().startsWith(MARK)));
+      const body = `${p.body}\n\n${MARK}${p.key}`.trimStart();
+      s = synced[p.key] = { ref: orphan?.ref ?? (await tr.createPhase(t, title, body)), status: "todo" };
       save();
     }
     const want = !final && p.status === "done" ? "in-progress" : p.status;

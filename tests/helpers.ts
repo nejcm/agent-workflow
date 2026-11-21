@@ -59,7 +59,7 @@ export const ticket = (n: number, repo = "acme/web"): Ticket => ({ id: `gh-${n}`
 
 export function fakeTracker(s: { ready?: Ticket[]; inProgress?: Ticket[]; inReview?: Ticket[]; done?: string[]; canceled?: string[]; deleted?: string[]; globalIds?: boolean; readyToMerge?: boolean; markers?: Record<string, string>; views?: Record<string, { title?: string; body?: string; labels?: string[]; open?: boolean }> }) {
   const calls: string[] = [];
-  const subs: { ref: string; title: string }[] = [];
+  const subs: { ref: string; title: string; body?: string }[] = [];
   const tr: Tracker = {
     globalIds: s.globalIds ?? false,
     restartHint: () => "remove the in-progress label",
@@ -90,14 +90,14 @@ export function fakeTracker(s: { ready?: Ticket[]; inProgress?: Ticket[]; inRevi
     parked: async (t) => [...(s.inProgress ?? []), ...(s.inReview ?? [])].some((x) => x.id === t.id && hasLabel(x.labels, "needs-human")),
     comment: async (t, b) => void calls.push(`comment ${t.id} ${b}`),
     comments: async () => [],
-    createPhase: async (t, title) => (calls.push(`create ${t.id} ${title}`), subs.push({ ref: `sub-${calls.length}`, title }), `sub-${calls.length}`),
+    createPhase: async (t, title, body) => (calls.push(`create ${t.id} ${title}`), subs.push({ ref: `sub-${calls.length}`, title, body }), `sub-${calls.length}`),
     createTicket: async (t, title, body) => (calls.push(`file ${t.id} ${title} | ${body}`), `https://x/acme/web/issues/${calls.length}`),
     fileTicket: async (target, title, body, labels) => (calls.push(`intake ${target.repo} ${title} [${labels}] | ${body}`), `https://github.com/${target.repo}/issues/${100 + calls.length}`),
     findMarker: async (_target, m) => s.markers?.[m],
     reopen: async (t) => void calls.push(`reopen ${t.id}`),
     view: async (t) => ({ title: `Ticket ${t.id}`, body: "body", labels: [], open: true, ...s.views?.[t.id] }),
     addLabels: async (t, labels) => void calls.push(`label ${t.id} [${labels}]`),
-    listPhases: async () => subs,
+    listPhases: async () => subs.map((x) => ({ body: "", ...x })),
     setPhase: async (_t, ref, st) => void calls.push(`set ${ref} ${st}`),
   };
   return { tr, calls, subs };

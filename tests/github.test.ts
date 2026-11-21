@@ -45,13 +45,24 @@ test("github adapter: closed as not planned or duplicate is canceled, as complet
   }
 });
 
-test("github adapter: a deleted issue is deleted; any other view failure throws", async () => {
+test("github adapter: an issue is deleted only when the REST lookup confirms it is gone; a transfer reads its real state; any other failure throws", async () => {
   const l = gh();
   let err = "GraphQL: Could not resolve to an issue or pull request with the number of 7. (repository.issue)";
+  let api: { code: number; out: string; err: string } = { code: 1, out: '{"message":"Not Found","status":"404"}', err: "gh: Not Found (HTTP 404)" };
+  const calls: string[][] = [];
   const { io } = fakeIo();
-  io.run = async () => ({ code: 1, out: "", err });
+  io.run = async (a: string[]) => (calls.push(a), a[1] === "api" ? api : { code: 1, out: "", err });
   const tr = github(l, "box", io, false, ["acme/web"]);
   expect(await tr.closed("gh-7", "acme/web")).toBe("deleted");
+  expect(calls[1].slice(0, 3)).toEqual(["gh", "api", "repos/acme/web/issues/7"]);
+  api = { code: 1, out: '{"message":"This issue was deleted","status":"410"}', err: "gh: This issue was deleted (HTTP 410)" };
+  expect(await tr.closed("gh-7", "acme/web")).toBe("deleted");
+  for (const [state, state_reason, want] of [["closed", "not_planned", "canceled"], ["closed", "completed", "done"], ["open", null, undefined]]) {
+    api = { code: 0, out: JSON.stringify({ state, state_reason }), err: "" };
+    expect(await tr.closed("gh-7", "acme/web")).toBe(want as any);
+  }
+  api = { code: 1, out: "", err: "gh: Bad credentials (HTTP 401)" };
+  await expect(tr.closed("gh-7", "acme/web")).rejects.toThrow("gh api: gh: Bad credentials (HTTP 401)");
   err = "GraphQL: Could not resolve to a Repository with the name 'acme/web'. (repository)";
   await expect(tr.closed("gh-7", "acme/web")).rejects.toThrow("gh issue view: GraphQL: Could not resolve to a Repository");
 });

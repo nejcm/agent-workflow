@@ -585,7 +585,7 @@ test("deleted: stops the session and removes the clone through the done checks, 
   const { tr, calls } = fakeTracker({ deleted: ["gh-1", "gh-2"] });
   const { io: plain, cmds, logs } = fakeIo((a) => {
     if (a[1] === "list-windows") return windowsOut(["acme/web/gh-1"]);
-    if (a.includes("status") && a.some((x) => x.endsWith("gh-2"))) return { out: " M a.ts\n" };
+    if (a.includes("rev-list") && a.some((x) => x.endsWith("gh-2/.git"))) return { out: `${"a".repeat(40)}\n` };
   });
   const io = { ...plain, event: recorder(join(root, "tender.db"), "box", (m) => logs.push(m)) };
   await pass(c, io, () => tr, "/tender");

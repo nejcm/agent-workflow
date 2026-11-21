@@ -196,6 +196,19 @@ test("recheck: a Done ticket still seen after recheckAfter is commented and reop
   expect(s.calls.filter((c) => c.startsWith("intake "))).toHaveLength(1);
 });
 
+test("recheck: a Done ticket deleted before recheckAfter is closed, never rechecked or reopened", async () => {
+  const deleted: string[] = [];
+  const s = setup(STILL, { done: ["gh-101"], deleted });
+  await s.go();
+  await s.go(T0 + 2 * HOUR);
+  expect(seen()[0]!.state).toBe("done");
+  deleted.push("gh-101");
+  await s.go(T0 + 27 * HOUR);
+  expect(seen()[0]!.state).toBe("closed");
+  expect(s.runs.some((r) => r.argv.includes("--recheck"))).toBe(false);
+  expect(sideCalls(s)).toEqual([]);
+});
+
 const dropDb = () => {
   for (const f of ["tender.db", "tender.db-wal", "tender.db-shm"]) rmSync(join(root, f), { force: true });
 };

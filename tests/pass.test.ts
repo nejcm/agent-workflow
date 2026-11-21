@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { validRepo } from "../src/config/config";
 import { canonCache } from "../src/github";
 import { github } from "../src/trackers/github";
-import { authStamp, CODEX_AUTH, codexHooksWarning, codexLogin, codexRefresh, launcher, render, resume, scopeUnit, socketWarning, sweepScopes, seedClaude, seedCodex } from "../src/session/launcher";
+import { authStamp, CODEX_AUTH, codexHooksWarning, codexLogin, codexRefresh, launcher, refreshCodexCopy, render, resume, scopeUnit, socketWarning, sweepScopes, seedClaude, seedCodex } from "../src/session/launcher";
 import { events, openDb, recorder } from "../src/db";
 import { endedNotice, pass } from "../src/pass";
 import { liveStates, pickAnswer } from "../src/session/question";
@@ -187,6 +187,210 @@ const login = (exp: number) => {
   writeFileSync(join(root, CODEX_AUTH), JSON.stringify({ auth_mode: "chatgpt", OPENAI_API_KEY: "secret-k", personal_access_token: "secret-pat", tokens, last_refresh: "x" }));
 };
 const DAY = 24 * 3600_000;
+
+const codexDir = (id: string) => join(root, `acme/web/${id}.codex`);
+const idToken = (sub: string) => `h.${Buffer.from(JSON.stringify({ sub })).toString("base64url")}.s`;
+const loginAs = (exp: number, sub = "u1", account = "a") => {
+  mkdirSync(join(root, ".codex-tender"), { recursive: true });
+  writeFileSync(join(root, CODEX_AUTH), JSON.stringify({ auth_mode: "chatgpt", tokens: { id_token: idToken(sub), access_token: jwt(exp), refresh_token: "secret-rt", account_id: account }, last_refresh: "x" }));
+};
+const hash = (s: string) => new Bun.CryptoHasher("sha256").update(s).digest("hex");
+const OLD = { tokens: { access_token: "fake-old-at", refresh_token: "" } };
+const sessionAuth = (id: string, o: object = OLD, rec: object | null = { account: "a", user: "u1", token: hash("fake-old-at") }) => {
+  mkdirSync(join(root, "acme/web", id), { recursive: true });
+  mkdirSync(codexDir(id), { recursive: true });
+  if (rec) writeFileSync(`${codexDir(id)}-account`, JSON.stringify(rec));
+  const f = join(codexDir(id), "auth.json");
+  writeFileSync(f, JSON.stringify(o), { mode: 0o600 });
+  return f;
+};
+const at = (f: string) => JSON.parse(readFileSync(f, "utf8")).tokens.access_token;
+const rec = (id: string) => JSON.parse(readFileSync(`${codexDir(id)}-account`, "utf8"));
+
+test("refreshCodexCopy rewrites only a stale existing copy, keeping its agent_identity, mode 600, no refresh token, and records the new hash", async () => {
+  loginAs(Date.now() + 5 * DAY);
+  const { io } = fakeIo();
+  const fresh = await codexLogin(io);
+  const stale = sessionAuth("gh-1", { ...OLD, agent_identity: { id: "fake-agent" } });
+  expect(refreshCodexCopy(io, codexDir("gh-1"), fresh)).toBe("written");
+  const o = JSON.parse(readFileSync(stale, "utf8"));
+  expect(o).toEqual({ ...JSON.parse(fresh), agent_identity: { id: "fake-agent" } });
+  expect(o.tokens.refresh_token).toBe("");
+  expect(statSync(stale).mode & 0o777).toBe(0o600);
+  expect(existsSync(`${stale}.tmp`)).toBe(false);
+  expect(rec("gh-1")).toEqual({ account: "a", user: "u1", token: hash(o.tokens.access_token), prev: hash("fake-old-at") });
+  utimesSync(stale, 1, 1);
+  expect(refreshCodexCopy(io, codexDir("gh-1"), fresh)).toBe("same");
+  expect(statSync(stale).mtimeMs).toBe(1000);
+  mkdirSync(codexDir("gh-2"), { recursive: true });
+  writeFileSync(`${codexDir("gh-2")}-account`, JSON.stringify(rec("gh-1")));
+  expect(refreshCodexCopy(io, codexDir("gh-2"), fresh)).toBe("skipped");
+  expect(existsSync(join(codexDir("gh-2"), "auth.json"))).toBe(false);
+  expect(refreshCodexCopy(io, codexDir("gh-9"), fresh)).toBe("skipped");
+  writeFileSync(join(root, "target"), "host");
+  symlinkSync(join(root, "target"), `${stale}.tmp`);
+  writeFileSync(stale, JSON.stringify(OLD));
+  writeFileSync(`${codexDir("gh-1")}-account`, JSON.stringify({ account: "a", user: "u1", token: hash("fake-old-at") }));
+  expect(refreshCodexCopy(io, codexDir("gh-1"), fresh)).toBe("written");
+  expect(readFileSync(join(root, "target"), "utf8")).toBe("host");
+});
+
+test("refreshCodexCopy keeps a login the session changed itself, and skips another user, another account or no record", async () => {
+  loginAs(Date.now() + 5 * DAY);
+  const { io } = fakeIo();
+  const fresh = await codexLogin(io);
+  const own = sessionAuth("gh-1", { tokens: { access_token: "fake-session-own" } });
+  expect(refreshCodexCopy(io, codexDir("gh-1"), fresh)).toBe("changed");
+  expect(at(own)).toBe("fake-session-own");
+  const user = sessionAuth("gh-2", OLD, { account: "a", user: "u2", token: hash("fake-old-at") });
+  const acct = sessionAuth("gh-3", OLD, { account: "b", user: "u1", token: hash("fake-old-at") });
+  const none = sessionAuth("gh-4", OLD, null);
+  for (const id of ["gh-2", "gh-3", "gh-4"]) expect(refreshCodexCopy(io, codexDir(id), fresh)).toBe("skipped");
+  expect([at(user), at(acct), at(none)]).toEqual(["fake-old-at", "fake-old-at", "fake-old-at"]);
+  loginAs(Date.now() + 5 * DAY, "");
+  const anon = await codexLogin(io);
+  sessionAuth("gh-5", OLD, { account: "a", user: "", token: hash("fake-old-at") });
+  expect(refreshCodexCopy(io, codexDir("gh-5"), anon)).toBe("skipped");
+});
+
+test("refreshCodexCopy never reads through a symlink, hard link, FIFO or oversized file, nor a symlinked dir", async () => {
+  loginAs(Date.now() + 5 * DAY);
+  const { io } = fakeIo();
+  const fresh = await codexLogin(io);
+  const host = join(root, "host-auth.json");
+  writeFileSync(host, JSON.stringify({ ...OLD, agent_identity: { private_key: "fake-host-key" } }));
+  const f = sessionAuth("gh-1");
+  rmSync(f);
+  symlinkSync(host, f);
+  expect(() => refreshCodexCopy(io, codexDir("gh-1"), fresh)).toThrow();
+  rmSync(f);
+  linkSync(host, f);
+  expect(() => refreshCodexCopy(io, codexDir("gh-1"), fresh)).toThrow("one link");
+  rmSync(f);
+  Bun.spawnSync(["mkfifo", f]);
+  expect(() => refreshCodexCopy(io, codexDir("gh-1"), fresh)).toThrow("regular file");
+  rmSync(f);
+  writeFileSync(f, "x".repeat(70 * 1024));
+  expect(() => refreshCodexCopy(io, codexDir("gh-1"), fresh)).toThrow("64 KiB");
+  expect(readFileSync(host, "utf8")).toContain("fake-host-key");
+  sessionAuth("gh-2");
+  rmSync(codexDir("gh-2"), { recursive: true });
+  mkdirSync(join(root, "elsewhere"));
+  writeFileSync(join(root, "elsewhere/auth.json"), JSON.stringify(OLD));
+  symlinkSync(join(root, "elsewhere"), codexDir("gh-2"));
+  expect(() => refreshCodexCopy(io, codexDir("gh-2"), fresh)).toThrow();
+  expect(at(join(root, "elsewhere/auth.json"))).toBe("fake-old-at");
+});
+
+test("seedCodex records the login's account, user and token hash beside, not inside, the session's Codex dir", () => {
+  mkdirSync(join(root, ".codex-tender"), { recursive: true });
+  const dir = codexDir("gh-1");
+  seedCodex(fakeIo().io, dir, JSON.stringify({ tokens: { id_token: idToken("u1"), access_token: "fake", account_id: "acct" } }), "/r");
+  expect(rec("gh-1")).toEqual({ account: "acct", user: "u1", token: hash("fake") });
+  seedCodex(fakeIo().io, dir, JSON.stringify({ tokens: { id_token: "i", access_token: "fake", account_id: "acct" } }), "/r");
+  expect(existsSync(`${dir}-account`)).toBe(false);
+});
+
+test("a pass refreshes only live sessions' Codex copies, never logging tokens; a failed refresh writes nothing and waits an hour", async () => {
+  loginAs(Date.now() + 5 * DAY);
+  const tpl = JSON.parse(readFileSync(join(root, CODEX_AUTH), "utf8")).tokens.access_token;
+  const live = sessionAuth("gh-1");
+  const ended = sessionAuth("gh-2");
+  const run = (a: string[]) => (a[1] === "list-windows" ? windowsOut(["acme/web/gh-1"]) : noPr(a));
+  const ok = fakeIo(run);
+  await pass(config(), ok.io, () => fakeTracker({}).tr, "/tender");
+  expect(at(live)).toBe(tpl);
+  expect(at(ended)).toBe("fake-old-at");
+  expect(ok.logs).toContain(`refreshed the Codex login in ${live}`);
+  expect(ok.logs.join("\n")).not.toMatch(/fake-old-at|secret/);
+  expect(ok.logs.join("\n")).not.toContain(tpl);
+  loginAs(Date.now() + 3600_000);
+  sessionAuth("gh-1");
+  const bad = fakeIo((a) => (a[0] === "bash" ? { code: 1 } : run(a)));
+  await pass(config(), bad.io, () => fakeTracker({}).tr, "/tender");
+  await pass(config(), bad.io, () => fakeTracker({}).tr, "/tender");
+  expect(at(live)).toBe("fake-old-at");
+  expect(bad.cmds.filter((c) => c.startsWith("bash ")).length).toBe(1);
+  expect(bad.logs.filter((l) => l.startsWith("Codex login copies not refreshed")).length).toBe(1);
+  expect(bad.logs.join("\n")).not.toMatch(/fake-old-at|secret/);
+  const later = Date.now;
+  Date.now = () => later() + 3601_000;
+  try {
+    await pass(config(), bad.io, () => fakeTracker({}).tr, "/tender");
+  } finally {
+    Date.now = later;
+  }
+  expect(bad.cmds.filter((c) => c.startsWith("bash ")).length).toBe(2);
+});
+
+test("a pass writes no copy for a window that closed during the host refresh, and skips the refresh when no live record matches", async () => {
+  loginAs(Date.now() + 2 * 3600_000);
+  const live = sessionAuth("gh-1");
+  let listed = 0;
+  const { io, cmds } = fakeIo((a) => {
+    if (a[0] === "bash") loginAs(Date.now() + 10 * DAY);
+    if (a[1] === "list-windows") return windowsOut(listed++ ? [] : ["acme/web/gh-1"]);
+    return noPr(a);
+  });
+  await pass(config(), io, () => fakeTracker({}).tr, "/tender");
+  expect(cmds.filter((c) => c.startsWith("bash ")).length).toBe(1);
+  expect(at(live)).toBe("fake-old-at");
+  loginAs(Date.now() + 2 * 3600_000, "u2");
+  const other = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(["acme/web/gh-1"]) : noPr(a)));
+  await pass(config(), other.io, () => fakeTracker({}).tr, "/tender");
+  expect(other.cmds.filter((c) => c.startsWith("bash "))).toEqual([]);
+});
+
+test("a pass writes no copy when the session's window was replaced by another with the same name during the host refresh", async () => {
+  loginAs(Date.now() + 3 * 3600_000);
+  const live = sessionAuth("gh-1");
+  let listed = 0;
+  const { io } = fakeIo((a) => {
+    if (a[0] === "bash") loginAs(Date.now() + 10 * DAY);
+    if (a[1] === "list-windows") return { out: `@${listed++ ? 9 : 1} 0 acme/web/gh-1` };
+    return noPr(a);
+  });
+  await pass(config(), io, () => fakeTracker({}).tr, "/tender");
+  expect(at(live)).toBe("fake-old-at");
+});
+
+test("refreshCodexCopy records the new hash before renaming, accepts either hash after a lost rename, and heals the record on an equal copy", async () => {
+  loginAs(Date.now() + 5 * DAY);
+  const { io } = fakeIo();
+  const fresh = await codexLogin(io);
+  const tok = JSON.parse(fresh).tokens.access_token;
+  const f = sessionAuth("gh-1");
+  expect(refreshCodexCopy(io, codexDir("gh-1"), fresh)).toBe("written");
+  expect(rec("gh-1")).toEqual({ account: "a", user: "u1", token: hash(tok), prev: hash("fake-old-at") });
+  writeFileSync(f, JSON.stringify(OLD));
+  expect(refreshCodexCopy(io, codexDir("gh-1"), fresh)).toBe("written");
+  expect(at(f)).toBe(tok);
+  sessionAuth("gh-2", { tokens: { access_token: tok } });
+  expect(refreshCodexCopy(io, codexDir("gh-2"), fresh)).toBe("same");
+  expect(rec("gh-2").token).toBe(hash(tok));
+  const g = sessionAuth("gh-3");
+  chmodSync(join(root, "acme/web"), 0o500);
+  try {
+    expect(() => refreshCodexCopy(io, codexDir("gh-3"), fresh)).toThrow();
+  } finally {
+    chmodSync(join(root, "acme/web"), 0o700);
+  }
+  expect(at(g)).toBe("fake-old-at");
+});
+
+test("an unreadable template login never aborts the pass", async () => {
+  loginAs(Date.now() + 5 * DAY);
+  sessionAuth("gh-77");
+  chmodSync(join(root, CODEX_AUTH), 0);
+  const { io, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(["acme/web/gh-77"]) : noPr(a)));
+  try {
+    await pass(config(), io, () => fakeTracker({}).tr, "/tender");
+  } finally {
+    chmodSync(join(root, CODEX_AUTH), 0o600);
+  }
+  expect(logs.some((l) => l.includes("gh-77.source is not configured"))).toBe(true);
+  expect(logs.filter((l) => l.startsWith("Codex login copies not refreshed")).length).toBe(1);
+});
 
 test("a label's agent replaces the repo's whole agent config, so a switch to codex drops claude's model and effort; resume keeps the recorded one", async () => {
   login(Date.now() + 5 * DAY);

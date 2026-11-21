@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { closeSync, constants as C, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { AGENTS, CLAUDE_TOKEN, claudeHome, codexHome, recordedAgentConfig, tmpHome } from "./agents";
 import { checkLogin, findBun, readLogin } from "./claude-auth";
@@ -214,6 +214,92 @@ export async function codexLogin(io: Io, now = Date.now()) {
 }
 
 
+/** Host-owned record, beside the session-writable dir, of the account, user and token hash `dir`'s login was last written with. */
+export const codexAccount = (dir: string) => `${dir}-account`;
+const MAX_AUTH = 64 * 1024;
+const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+
+/** A login's ChatGPT account and user (its id_token `sub`), or undefined without both: account_id alone is a shared workspace. */
+export function codexIdentity(o: any) {
+  let user: unknown;
+  try {
+    user = JSON.parse(Buffer.from(String(o.tokens.id_token).split(".")[1]!, "base64url").toString()).sub;
+  } catch {}
+  const account = o?.tokens?.account_id;
+  return typeof account === "string" && account && typeof user === "string" && user ? { account, user } : undefined;
+}
+
+/** `dir`'s record when it is for `id`'s account and user. */
+export function codexRecorded(dir: string, id: { account: string; user: string }) {
+  try {
+    const r = JSON.parse(readFileSync(codexAccount(dir), "utf8"));
+    return r.account === id.account && r.user === id.user && typeof r.token === "string" ? (r as { token: string; prev?: string }) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function record(dir: string, id: { account: string; user: string }, token: string, prev?: string) {
+  writeFileSync(`${codexAccount(dir)}.tmp`, JSON.stringify({ ...id, token: sha(token), ...(prev && { prev }) }), { mode: 0o600 });
+  renameSync(`${codexAccount(dir)}.tmp`, codexAccount(dir));
+}
+
+/** Rewrites a session's existing Codex `auth.json` with `login` when it still holds the token tender last wrote for the same account and user, keeping its `agent_identity`. */
+export function refreshCodexCopy(io: Io, dir: string, login: string): "written" | "same" | "changed" | "skipped" {
+  const next = JSON.parse(login);
+  const id = codexIdentity(next);
+  const rec = id && codexRecorded(dir, id);
+  if (io.dry || !rec) return "skipped";
+  try {
+    // Pinned no-follow: the session can write `dir`, so every path below goes through the fd.
+    return inDir(dir, (d) => {
+      if (statSync(d).uid !== process.getuid!()) throw new Error("not owned by this user");
+      const read = () => {
+        const fd = openSync(`${d}/auth.json`, C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK);
+        try {
+          const st = fstatSync(fd);
+          if (!st.isFile() || st.nlink !== 1 || st.size > MAX_AUTH) throw new Error("auth.json must be a regular file with one link under 64 KiB");
+          const buf = Buffer.alloc(MAX_AUTH + 1);
+          return JSON.parse(buf.toString("utf8", 0, readSync(fd, buf, 0, buf.length, 0)));
+        } catch (e) {
+          if (e instanceof SyntaxError) return {};
+          throw e;
+        } finally {
+          closeSync(fd);
+        }
+      };
+      const old = read();
+      const token = old?.tokens?.access_token;
+      const hash = typeof token === "string" ? sha(token) : "";
+      if (token === next.tokens.access_token) {
+        if (rec.token !== hash) record(dir, id, token);
+        return "same";
+      }
+      if (hash !== rec.token && hash !== rec.prev) return "changed";
+      const tmp = `${d}/auth.json.tmp`;
+      rmSync(tmp, { force: true });
+      const out = openSync(tmp, C.O_WRONLY | C.O_CREAT | C.O_EXCL | C.O_NOFOLLOW, 0o600);
+      try {
+        writeFileSync(out, JSON.stringify({ ...next, ...(old.agent_identity && { agent_identity: old.agent_identity }) }));
+      } finally {
+        closeSync(out);
+      }
+      // First, so a crash after the rename still finds the new token recorded; prev covers a lost rename.
+      record(dir, id, next.tokens.access_token, hash);
+      // shortcut: a session `codex login` landing between this re-read and the rename is overwritten; Bun has no flock to take Codex's lock.
+      if (read()?.tokens?.access_token !== token) {
+        rmSync(tmp, { force: true });
+        return "changed";
+      }
+      renameSync(tmp, `${d}/auth.json`);
+      return "written";
+    });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return "skipped";
+    throw e;
+  }
+}
+
 /** A warning when the template config lacks tender's Codex state hooks, without which answers and PR feedback are never delivered. */
 export function codexHooksWarning(home: string) {
   const file = join(home, ".codex-tender/config.toml");
@@ -229,11 +315,14 @@ export function seedCodex(io: Io, dir: string, login: string | undefined, root: 
   io.log(`${io.dry ? "dry: " : ""}seed ${dir} from ${tpl}`);
   if (io.dry) return;
   rmSync(dir, { recursive: true, force: true });
+  rmSync(codexAccount(dir), { force: true });
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   for (const f of ["AGENTS.md", "skills"]) if (existsSync(join(tpl, f))) symlinkSync(realpathSync(join(tpl, f)), join(dir, f));
   // Copies, not links: Codex rewrites config.toml in place, and the template stays out of the sandbox.
   for (const f of ["config.toml", "hooks.json"]) if (existsSync(join(tpl, f))) copyFileSync(join(tpl, f), join(dir, f));
   if (login) writeFileSync(join(dir, "auth.json"), login, { mode: 0o600, flag: "wx" });
+  const id = login ? codexIdentity(JSON.parse(login)) : undefined;
+  if (id) record(dir, id, JSON.parse(login!).tokens.access_token);
   const cfg = join(dir, "config.toml");
   const old = existsSync(cfg) ? readFileSync(cfg, "utf8") : "";
   if (trusted(old, root)) return;

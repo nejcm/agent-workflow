@@ -3,9 +3,9 @@ import { join } from "node:path";
 import { allowedRepo, repoDir, validRepo } from "./config/config";
 import { deliverFeedback, feedbackFields } from "./session/feedback";
 import { fileFindings } from "./review/findings";
-import { agentOf } from "./session/agents";
+import { agentOf, codexHome } from "./session/agents";
 import { baseBranch, canonical, findPr, sameRepo } from "./github";
-import { claim, cloned, handedOff, nonoRun, scopeUnit, start, stopSession, sweepScopes, windows, winName } from "./session/launcher";
+import { authStamp, claim, cloned, CODEX_AUTH, codexIdentity, codexLogin, codexRecorded, handedOff, nonoRun, refreshCodexCopy, scopeUnit, start, stopSession, sweepScopes, windows, winName } from "./session/launcher";
 import { autoMerge, checkState, policyBlocked, PR_FIELDS, prMode, prReady, viewPr } from "./review/merge";
 import { syncPhases } from "./review/phases";
 import { agentPane, deliverAnswer, liveStates, syncQuestion } from "./session/question";
@@ -326,6 +326,46 @@ export function makeTracker(s: Source, host: string, io: Io, defaultHost: boolea
 const sessionOf = (io: Io, sessions: Map<string, Promise<Session | undefined>>, r: Repo) => sessions.get(r.key) ?? sessions.set(r.key, loadSession(io, r)).get(r.key)!;
 
 const warned = new Set<string>();
+let codexFailed = { stamp: "", until: 0 };
+const once = (io: Io, msg: string) => void (warned.has(msg) || io.log(msg), warned.add(msg));
+// Bun's parse errors can quote the token they choked on, so only the error's code or name is logged.
+const errTag = (e: unknown) => (e as NodeJS.ErrnoException).code ?? (e as Error).name;
+
+// A failed refresh spawns `codex app-server` each try, so the same template login waits an hour (in this process) before the next one.
+async function refreshCodexCopies(cfg: Config, io: Io, wins: Map<string, string>, now = Date.now()) {
+  try {
+    const tpl = join(io.home, CODEX_AUTH);
+    if (io.dry || !existsSync(tpl)) return;
+    const id = codexIdentity(JSON.parse(readFileSync(tpl, "utf8")));
+    if (!id) return;
+    const live = Object.values(cfg.repos).flatMap((r) => worktreeIds(repoDir(cfg, r.key)).flatMap((t) => (wins.has(winName(r.key, t)) ? [{ win: winName(r.key, t), wid: wins.get(winName(r.key, t)), dir: codexHome(join(repoDir(cfg, r.key), t)) }] : [])));
+    const bound = live.filter((s) => codexRecorded(s.dir, id));
+    if (!bound.length) return;
+    const stamp = authStamp(tpl);
+    if (stamp === codexFailed.stamp && now < codexFailed.until) return;
+    let login: string;
+    try {
+      login = await codexLogin(io, now);
+    } catch (e) {
+      codexFailed = { stamp, until: now + 3600_000 };
+      return once(io, `Codex login copies not refreshed (${errTag(e)}): the template login is missing, not a ChatGPT login or could not be refreshed; run \`CODEX_HOME=~/.codex-tender codex login\``);
+    }
+    // The refresh can take a minute: a window closed or replaced meanwhile (ids are unique per tmux server) is an ended session.
+    const still = await windows(cfg, io);
+    for (const s of bound.filter((s) => still.listed && still.get(s.win) === s.wid)) {
+      const file = join(s.dir, "auth.json");
+      try {
+        const r = refreshCodexCopy(io, s.dir, login);
+        if (r === "written") io.log(`refreshed the Codex login in ${file}`);
+        if (r === "changed") once(io, `${file} not refreshed: the session changed its login, so it is left as is`);
+      } catch (e) {
+        once(io, `${file} not refreshed (${errTag(e)}): it must be a regular file with one link under 64 KiB in a directory of this user`);
+      }
+    }
+  } catch (e) {
+    once(io, `Codex login copies not refreshed (${errTag(e)}): ${join(io.home, CODEX_AUTH)} is unreadable`);
+  }
+}
 
 function assignedElsewhere(io: Io, t: Ticket) {
   if (!t.otherAssignee) return false;
@@ -394,6 +434,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
   // Every start, count and ended notice reads `wins`; an empty map from a failed listing would read as no live sessions.
   if (!wins.listed && !io.dry) return io.log("tmux windows unknown, so this pass is skipped");
   if (wins.listed) await step(io, "sweep scopes", () => sweepScopes(cfg, io));
+  await refreshCodexCopies(cfg, io, wins);
 
   const lists = new Map<string, Promise<Ticket[]>>();
   const listReady = (x: { s: Source; io: Io; tr: Tracker }) => lists.get(x.s.name) ?? lists.set(x.s.name, x.tr.listReady().then((ts) => ts.filter((t) => !assignedElsewhere(x.io, t)))).get(x.s.name)!;
@@ -453,7 +494,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
         // rm never follows symlinks.
         await write(x.io, ["rm", "-rf", "--one-file-system", "--", wt], undefined, SLOW_SECS);
         // After the clone, so a delete that fails keeps the transcripts too.
-        for (const ext of [".claude", ".codex", ".tmpdir", ".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".stall", ".findings", ".claim", ".agent", ".source", ".reassigned", ".ready", ".handoff"]) remove(x.io, join(dir, id + ext));
+        for (const ext of [".claude", ".codex", ".codex-account", ".tmpdir", ".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".stall", ".findings", ".claim", ".agent", ".source", ".reassigned", ".ready", ".handoff"]) remove(x.io, join(dir, id + ext));
       });
     }
   }

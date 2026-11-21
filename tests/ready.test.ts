@@ -446,3 +446,18 @@ test("maxInReview: a ticket no repo claims counts toward the host limit; a faile
     expect((await tr.listInReview()).map((t) => [t.id, t.repo])).toEqual([["ENG-1", undefined]]);
   });
 });
+
+test("ready to merge: not while auto-merge holds it for a required review or branch protection; manual workflow unchanged", async () => {
+  for (const over of [{ reviewDecision: "REVIEW_REQUIRED", mergeStateStatus: "BLOCKED" }, { mergeStateStatus: "BLOCKED" }]) {
+    rmSync(join(root, "acme/web/gh-1.ready"), { force: true });
+    const held = setup({ autoMerge: "all", file: "src/a.ts" });
+    held.pr(over);
+    await held.run();
+    expect(held.calls).toEqual([`comment gh-1 not auto-merged: ${over.reviewDecision ? "needs review" : "blocked by branch protection"}`]);
+    expect(held.cmds.some((c) => c.startsWith("gh pr merge"))).toBe(false);
+    const manual = setup();
+    manual.pr({ ...over, statusCheckRollup: [] });
+    await manual.run();
+    expect(manual.calls).toEqual([`ready gh-1 ready to merge: ${URL}`]);
+  }
+});

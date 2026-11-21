@@ -114,7 +114,6 @@ export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Se
   const failed = checks.filter((x) => x === "failed").length;
   if (failed) return no(`${failed} check(s) failed`);
   if (pr.reviewDecision === "REVIEW_REQUIRED") return no("needs review");
-  if (pr.mergeStateStatus === "BLOCKED" && !checks.includes("pending")) return no("blocked by branch protection");
   const lines = pr.additions + pr.deletions;
   const tier = lines <= 150 && pr.changedFiles <= 5 ? "small" : lines <= 500 && pr.changedFiles <= 15 ? "medium" : "large";
   if (pr.files) {
@@ -140,12 +139,16 @@ export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Se
   if (pr.hatch) return no(pr.hatch);
   if (pr.mergeable !== "MERGEABLE" || checks.includes("pending")) return { merge: "wait", reason: "checks pending or mergeability unknown" };
   if (!checks.length && pr.updatedAt && Date.now() - Date.parse(pr.updatedAt) < CI_GRACE_MS) return { merge: "wait", reason: "no checks yet on a fresh head" };
+  if (pr.mergeStateStatus === "BLOCKED") return no("blocked by branch protection");
   return { merge: true, reason: mode === "all" ? "autoMerge all" : `${tier} change${a ? `; agent: ${a.reason}` : ""}` };
 }
 
 /** Whether a PR is ready for a human to merge, from GitHub's view alone; nothing the agent writes counts. */
 export const prReady = (pr: PrFacts) =>
   pr.state === "OPEN" && !pr.isDraft && pr.mergeable === "MERGEABLE" && pr.reviewDecision !== "CHANGES_REQUESTED" && pr.statusCheckRollup.every((c) => ["success", "neutral"].includes(checkState(c)));
+
+/** GitHub refuses the merge until a review or another branch rule is satisfied. */
+export const policyBlocked = (pr: PrFacts) => pr.reviewDecision === "REVIEW_REQUIRED" || pr.mergeStateStatus === "BLOCKED";
 
 export const PR_FIELDS = "number,url,state,isDraft,isCrossRepository,baseRefName,baseRefOid,mergeable,additions,deletions,changedFiles,statusCheckRollup,labels,headRefOid,reviewDecision,mergeStateStatus,updatedAt";
 

@@ -574,3 +574,9 @@ test("auto-merge pass: a PR that needs review is commented once and never sent t
   for (let i = 0; i < 2; i++) await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "all" }] }), io, () => tr, "/tender");
   expect([calls, cmds.some((x) => x.startsWith("gh pr merge"))]).toEqual([["comment gh-1 not auto-merged: needs review"], false]);
 });
+
+test("merge decision: a fresh head that branch protection blocks before its required check registers waits silently", () => {
+  const pr = prFacts({ statusCheckRollup: [], updatedAt: new Date(Date.now() - 30_000).toISOString(), mergeStateStatus: "BLOCKED" });
+  expect(mergeDecision(pr, undefined, smart).merge).toBe("wait");
+  expect(mergeDecision(pr, undefined, { ...smart, autoMerge: "shadow" }).merge).toBe("wait");
+});

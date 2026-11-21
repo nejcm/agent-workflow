@@ -233,13 +233,16 @@ export function codexIdentity(o: any) {
 export function codexRecorded(dir: string, id: { account: string; user: string }) {
   try {
     const r = JSON.parse(readFileSync(codexAccount(dir), "utf8"));
-    return r.account === id.account && r.user === id.user && typeof r.token === "string" ? (r as { token: string }) : undefined;
+    return r.account === id.account && r.user === id.user && typeof r.token === "string" ? (r as { token: string; prev?: string }) : undefined;
   } catch {
     return undefined;
   }
 }
 
-const record = (dir: string, id: { account: string; user: string }, token: string) => writeFileSync(codexAccount(dir), JSON.stringify({ ...id, token: sha(token) }), { mode: 0o600 });
+function record(dir: string, id: { account: string; user: string }, token: string, prev?: string) {
+  writeFileSync(`${codexAccount(dir)}.tmp`, JSON.stringify({ ...id, token: sha(token), ...(prev && { prev }) }), { mode: 0o600 });
+  renameSync(`${codexAccount(dir)}.tmp`, codexAccount(dir));
+}
 
 /** Rewrites a session's existing Codex `auth.json` with `login` when it still holds the token tender last wrote for the same account and user, keeping its `agent_identity`. */
 export function refreshCodexCopy(io: Io, dir: string, login: string): "written" | "same" | "changed" | "skipped" {
@@ -251,21 +254,28 @@ export function refreshCodexCopy(io: Io, dir: string, login: string): "written" 
     // Pinned no-follow: the session can write `dir`, so every path below goes through the fd.
     return inDir(dir, (d) => {
       if (statSync(d).uid !== process.getuid!()) throw new Error("not owned by this user");
-      const fd = openSync(`${d}/auth.json`, C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK);
-      let old: any = {};
-      try {
-        const st = fstatSync(fd);
-        if (!st.isFile() || st.nlink !== 1 || st.size > MAX_AUTH) throw new Error("auth.json must be a regular file with one link under 64 KiB");
-        const buf = Buffer.alloc(MAX_AUTH + 1);
-        old = JSON.parse(buf.toString("utf8", 0, readSync(fd, buf, 0, buf.length, 0)));
-      } catch (e) {
-        if (!(e instanceof SyntaxError)) throw e;
-      } finally {
-        closeSync(fd);
-      }
+      const read = () => {
+        const fd = openSync(`${d}/auth.json`, C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK);
+        try {
+          const st = fstatSync(fd);
+          if (!st.isFile() || st.nlink !== 1 || st.size > MAX_AUTH) throw new Error("auth.json must be a regular file with one link under 64 KiB");
+          const buf = Buffer.alloc(MAX_AUTH + 1);
+          return JSON.parse(buf.toString("utf8", 0, readSync(fd, buf, 0, buf.length, 0)));
+        } catch (e) {
+          if (e instanceof SyntaxError) return {};
+          throw e;
+        } finally {
+          closeSync(fd);
+        }
+      };
+      const old = read();
       const token = old?.tokens?.access_token;
-      if (token === next.tokens.access_token) return "same";
-      if (typeof token !== "string" || sha(token) !== rec.token) return "changed";
+      const hash = typeof token === "string" ? sha(token) : "";
+      if (token === next.tokens.access_token) {
+        if (rec.token !== hash) record(dir, id, token);
+        return "same";
+      }
+      if (hash !== rec.token && hash !== rec.prev) return "changed";
       const tmp = `${d}/auth.json.tmp`;
       rmSync(tmp, { force: true });
       const out = openSync(tmp, C.O_WRONLY | C.O_CREAT | C.O_EXCL | C.O_NOFOLLOW, 0o600);
@@ -274,8 +284,14 @@ export function refreshCodexCopy(io: Io, dir: string, login: string): "written" 
       } finally {
         closeSync(out);
       }
+      // First, so a crash after the rename still finds the new token recorded; prev covers a lost rename.
+      record(dir, id, next.tokens.access_token, hash);
+      // shortcut: a session `codex login` landing between this re-read and the rename is overwritten; Bun has no flock to take Codex's lock.
+      if (read()?.tokens?.access_token !== token) {
+        rmSync(tmp, { force: true });
+        return "changed";
+      }
       renameSync(tmp, `${d}/auth.json`);
-      record(dir, id, next.tokens.access_token);
       return "written";
     });
   } catch (e) {

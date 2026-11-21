@@ -338,7 +338,7 @@ async function refreshCodexCopies(cfg: Config, io: Io, wins: Map<string, string>
     if (io.dry || !existsSync(tpl)) return;
     const id = codexIdentity(JSON.parse(readFileSync(tpl, "utf8")));
     if (!id) return;
-    const live = Object.values(cfg.repos).flatMap((r) => worktreeIds(repoDir(cfg, r.key)).flatMap((t) => (wins.has(winName(r.key, t)) ? [{ win: winName(r.key, t), dir: codexHome(join(repoDir(cfg, r.key), t)) }] : [])));
+    const live = Object.values(cfg.repos).flatMap((r) => worktreeIds(repoDir(cfg, r.key)).flatMap((t) => (wins.has(winName(r.key, t)) ? [{ win: winName(r.key, t), wid: wins.get(winName(r.key, t)), dir: codexHome(join(repoDir(cfg, r.key), t)) }] : [])));
     const bound = live.filter((s) => codexRecorded(s.dir, id));
     if (!bound.length) return;
     const stamp = authStamp(tpl);
@@ -350,9 +350,9 @@ async function refreshCodexCopies(cfg: Config, io: Io, wins: Map<string, string>
       codexFailed = { stamp, until: now + 3600_000 };
       return once(io, `Codex login copies not refreshed (${errTag(e)}): the template login is missing, not a ChatGPT login or could not be refreshed; run \`CODEX_HOME=~/.codex-tender codex login\``);
     }
-    // The refresh can take a minute: a window closed meanwhile is an ended session.
+    // The refresh can take a minute: a window closed or replaced meanwhile (ids are unique per tmux server) is an ended session.
     const still = await windows(cfg, io);
-    for (const s of bound.filter((s) => still.listed && still.has(s.win))) {
+    for (const s of bound.filter((s) => still.listed && still.get(s.win) === s.wid)) {
       const file = join(s.dir, "auth.json");
       try {
         const r = refreshCodexCopy(io, s.dir, login);

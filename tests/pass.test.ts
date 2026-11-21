@@ -218,7 +218,7 @@ test("refreshCodexCopy rewrites only a stale existing copy, keeping its agent_id
   expect(o.tokens.refresh_token).toBe("");
   expect(statSync(stale).mode & 0o777).toBe(0o600);
   expect(existsSync(`${stale}.tmp`)).toBe(false);
-  expect(rec("gh-1")).toEqual({ account: "a", user: "u1", token: hash(o.tokens.access_token) });
+  expect(rec("gh-1")).toEqual({ account: "a", user: "u1", token: hash(o.tokens.access_token), prev: hash("fake-old-at") });
   utimesSync(stale, 1, 1);
   expect(refreshCodexCopy(io, codexDir("gh-1"), fresh)).toBe("same");
   expect(statSync(stale).mtimeMs).toBe(1000);
@@ -339,6 +339,43 @@ test("a pass writes no copy for a window that closed during the host refresh, an
   const other = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(["acme/web/gh-1"]) : noPr(a)));
   await pass(config(), other.io, () => fakeTracker({}).tr, "/tender");
   expect(other.cmds.filter((c) => c.startsWith("bash "))).toEqual([]);
+});
+
+test("a pass writes no copy when the session's window was replaced by another with the same name during the host refresh", async () => {
+  loginAs(Date.now() + 3 * 3600_000);
+  const live = sessionAuth("gh-1");
+  let listed = 0;
+  const { io } = fakeIo((a) => {
+    if (a[0] === "bash") loginAs(Date.now() + 10 * DAY);
+    if (a[1] === "list-windows") return { out: `@${listed++ ? 9 : 1} 0 acme/web/gh-1` };
+    return noPr(a);
+  });
+  await pass(config(), io, () => fakeTracker({}).tr, "/tender");
+  expect(at(live)).toBe("fake-old-at");
+});
+
+test("refreshCodexCopy records the new hash before renaming, accepts either hash after a lost rename, and heals the record on an equal copy", async () => {
+  loginAs(Date.now() + 5 * DAY);
+  const { io } = fakeIo();
+  const fresh = await codexLogin(io);
+  const tok = JSON.parse(fresh).tokens.access_token;
+  const f = sessionAuth("gh-1");
+  expect(refreshCodexCopy(io, codexDir("gh-1"), fresh)).toBe("written");
+  expect(rec("gh-1")).toEqual({ account: "a", user: "u1", token: hash(tok), prev: hash("fake-old-at") });
+  writeFileSync(f, JSON.stringify(OLD));
+  expect(refreshCodexCopy(io, codexDir("gh-1"), fresh)).toBe("written");
+  expect(at(f)).toBe(tok);
+  sessionAuth("gh-2", { tokens: { access_token: tok } });
+  expect(refreshCodexCopy(io, codexDir("gh-2"), fresh)).toBe("same");
+  expect(rec("gh-2").token).toBe(hash(tok));
+  const g = sessionAuth("gh-3");
+  chmodSync(join(root, "acme/web"), 0o500);
+  try {
+    expect(() => refreshCodexCopy(io, codexDir("gh-3"), fresh)).toThrow();
+  } finally {
+    chmodSync(join(root, "acme/web"), 0o700);
+  }
+  expect(at(g)).toBe("fake-old-at");
 });
 
 test("an unreadable template login never aborts the pass", async () => {

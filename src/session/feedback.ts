@@ -37,8 +37,9 @@ export function prItems(pr: any, lines: any[]): Item[] {
 /** A PR's line comments; past 10 pages it throws rather than return part of them. */
 export async function lineComments(io: Io, repo: string, n: string) {
   const all: any[] = [];
-  for (let page = 1; page <= 10; page++) {
+  for (let page = 1; page <= 11; page++) {
     const got: any[] = JSON.parse(await read(io, ["gh", "api", `repos/${repo}/pulls/${n}/comments?per_page=100${page > 1 ? `&page=${page}` : ""}`]));
+    if (page > 10 && got.length) break;
     all.push(...got);
     if (got.length < 100) return all;
   }

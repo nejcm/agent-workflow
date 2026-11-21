@@ -95,7 +95,14 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
     const all: any[] = [];
     let more = true;
     for (let page = 0, after: string | null = null; more && page < LIST_PAGES; page++) {
-      const c: any = (await gql(LINEAR_ISSUES, { f: filter, after })).issues;
+      const c: any = await gql(LINEAR_ISSUES, { f: filter, after }).then(
+        (d) => d.issues,
+        (e) => {
+          if (complete || !page) throw e;
+          io.log(`linear ${l.team} ${state}: page ${page + 1} failed, ${all.length} issues kept: ${e.message}`);
+          return { nodes: [] };
+        },
+      );
       all.push(...c.nodes);
       more = !!c.pageInfo?.hasNextPage;
       after = c.pageInfo?.endCursor;

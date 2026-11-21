@@ -519,3 +519,20 @@ test("linear adapter: defaultHost lists past 100 other-host tickets by cursor; a
     await expect(tr.listInReview(true)).rejects.toThrow("linear ENG In Review: 1000 issues listed, the rest unknown");
   });
 });
+
+test("linear adapter: a failed later page keeps the rows already listed when best-effort, throws when complete", async () => {
+  const l = lin(config({ sources: [src({ tracker: "linear", team: "ENG" })] }));
+  const { io, logs } = fakeIo();
+  io.fetch = (async (_url: string, init: any) => {
+    const { query, variables } = JSON.parse(init.body);
+    if (!query.includes("issues(")) return Response.json({ data: { viewer: { id: "me" } } });
+    if (variables.after) return Response.json({ errors: [{ message: "rate limited" }] }, { status: 429 });
+    return Response.json({ data: { issues: { nodes: [{ id: "u1", identifier: "ENG-1", labels: { nodes: [{ name: "agent" }] } }], pageInfo: { hasNextPage: true, endCursor: "p1" } } } });
+  }) as any;
+  await withLinearKey(async () => {
+    const tr = linear(l, "box", io, true);
+    expect((await tr.listReady()).map((t) => t.id)).toEqual(["ENG-1"]);
+    expect(logs[0]).toStartWith("linear ENG Todo: page 2 failed, 1 issues kept: linear 429");
+    await expect(tr.listInReview(true)).rejects.toThrow("linear 429");
+  });
+});

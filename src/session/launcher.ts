@@ -214,6 +214,23 @@ export async function codexLogin(io: Io, now = Date.now()) {
 }
 
 
+/** Rewrites a session's existing Codex `auth.json` with `login` when its access token differs, keeping the session's `agent_identity`; true when written. */
+export function refreshCodexCopy(io: Io, file: string, login: string) {
+  if (io.dry || !existsSync(file)) return false;
+  let old: any = {};
+  try {
+    old = JSON.parse(readFileSync(file, "utf8"));
+  } catch {}
+  const next = JSON.parse(login);
+  if (old?.tokens?.access_token === next.tokens.access_token) return false;
+  const tmp = `${file}.tmp`;
+  // The session can write its dir: drop any planted tmp, and wx never follows a symlink put back in its place.
+  rmSync(tmp, { force: true });
+  writeFileSync(tmp, JSON.stringify({ ...next, ...(old?.agent_identity && { agent_identity: old.agent_identity }) }), { mode: 0o600, flag: "wx" });
+  renameSync(tmp, file);
+  return true;
+}
+
 /** A warning when the template config lacks tender's Codex state hooks, without which answers and PR feedback are never delivered. */
 export function codexHooksWarning(home: string) {
   const file = join(home, ".codex-tender/config.toml");

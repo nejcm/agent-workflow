@@ -3,9 +3,9 @@ import { join } from "node:path";
 import { allowedRepo, repoDir, validRepo } from "./config/config";
 import { deliverFeedback, feedbackFields } from "./session/feedback";
 import { fileFindings } from "./review/findings";
-import { agentOf } from "./session/agents";
+import { agentOf, codexHome } from "./session/agents";
 import { baseBranch, canonical, findPr, sameRepo } from "./github";
-import { claim, cloned, handedOff, nonoRun, scopeUnit, start, stopSession, sweepScopes, windows, winName } from "./session/launcher";
+import { authStamp, claim, cloned, CODEX_AUTH, codexLogin, handedOff, nonoRun, refreshCodexCopy, scopeUnit, start, stopSession, sweepScopes, windows, winName } from "./session/launcher";
 import { autoMerge, checkState, policyBlocked, PR_FIELDS, prMode, prReady, viewPr } from "./review/merge";
 import { syncPhases } from "./review/phases";
 import { agentPane, deliverAnswer, liveStates, syncQuestion } from "./session/question";
@@ -326,6 +326,33 @@ export function makeTracker(s: Source, host: string, io: Io, defaultHost: boolea
 const sessionOf = (io: Io, sessions: Map<string, Promise<Session | undefined>>, r: Repo) => sessions.get(r.key) ?? sessions.set(r.key, loadSession(io, r)).get(r.key)!;
 
 const warned = new Set<string>();
+let codexFailed = { stamp: "", until: 0 };
+
+// A failed refresh spawns `codex app-server` each try, so the same template login waits an hour before the next one.
+async function refreshCodexCopies(cfg: Config, io: Io, now = Date.now()) {
+  const tpl = join(io.home, CODEX_AUTH);
+  if (io.dry || !existsSync(tpl) || (authStamp(tpl) === codexFailed.stamp && now < codexFailed.until)) return;
+  const files = Object.values(cfg.repos).flatMap((r) => worktreeIds(repoDir(cfg, r.key)).map((id) => join(codexHome(join(repoDir(cfg, r.key), id)), "auth.json")));
+  if (!files.some((f) => existsSync(f))) return;
+  let login: string;
+  try {
+    login = await codexLogin(io, now);
+  } catch (e) {
+    codexFailed = { stamp: authStamp(tpl), until: now + 3600_000 };
+    const msg = `Codex login copies not refreshed: ${(e as Error).message}`;
+    if (!warned.has(msg)) io.log(msg);
+    return void warned.add(msg);
+  }
+  for (const f of files) {
+    try {
+      if (refreshCodexCopy(io, f, login)) io.log(`refreshed the Codex login in ${f}`);
+    } catch (e) {
+      const msg = `refresh ${f} failed: ${(e as Error).message}`;
+      if (!warned.has(msg)) io.log(msg);
+      warned.add(msg);
+    }
+  }
+}
 
 function assignedElsewhere(io: Io, t: Ticket) {
   if (!t.otherAssignee) return false;
@@ -394,6 +421,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
   // Every start, count and ended notice reads `wins`; an empty map from a failed listing would read as no live sessions.
   if (!wins.listed && !io.dry) return io.log("tmux windows unknown, so this pass is skipped");
   if (wins.listed) await step(io, "sweep scopes", () => sweepScopes(cfg, io));
+  await refreshCodexCopies(cfg, io);
 
   const lists = new Map<string, Promise<Ticket[]>>();
   const listReady = (x: { s: Source; io: Io; tr: Tracker }) => lists.get(x.s.name) ?? lists.set(x.s.name, x.tr.listReady().then((ts) => ts.filter((t) => !assignedElsewhere(x.io, t)))).get(x.s.name)!;

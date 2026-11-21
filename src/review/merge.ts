@@ -157,7 +157,9 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
   };
   const pr = await view(PR_FIELDS + (share?.fields ?? ""));
   const f = join(dir, `${t.id}.merge`);
-  const held = existsSync(f) && readFileSync(f, "utf8") === pr.headRefOid;
+  // Head SHA, then one JSON line per reason already commented on that head.
+  const marker = existsSync(f) ? readFileSync(f, "utf8").split("\n") : [];
+  const held = marker[0] === pr.headRefOid;
   if (!held) remove(io, f);
   if (pr.state === "MERGED" && !pr.isCrossRepository && pr.baseRefName === r.baseBranch && (await ours())) {
     await tr.done(t);
@@ -189,7 +191,8 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
     }
   }
   const mode = prMode(r, pr.files);
-  if (d.merge === "wait" || (held && (!d.merge || mode === "shadow"))) {
+  if (d.merge === "wait" || (held && (mode === "shadow" || (!d.merge && (pr.state !== "OPEN" || marker.includes(JSON.stringify(d.reason))))))) {
+    // A held head is commented again only for a new reason while the PR is open.
     // Shared only when nothing was awaited since the view, so feedback never reads a stale one.
     if (share && !fetch) share.pr = pr;
     return pr;
@@ -215,11 +218,13 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
     await tr.done(t);
     return void io.event?.("done", r.key, t.id, { pr: pr.url }, pr.url);
   }
-  put(io, f, pr.headRefOid);
+  const before = held ? marker : [pr.headRefOid];
+  put(io, f, [...before, JSON.stringify(d.reason)].join("\n"));
   try {
     await tr.comment(t, `${d.merge ? "would auto-merge" : "not auto-merged"}: ${d.reason}`);
   } catch (e) {
-    remove(io, f);
+    if (held) put(io, f, before.join("\n"));
+    else remove(io, f);
     throw e;
   }
   io.event?.("gate", r.key, t.id, { pr: pr.url, head: pr.headRefOid, mode, merge: d.merge, reason: d.reason });

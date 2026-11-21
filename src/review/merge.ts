@@ -83,9 +83,13 @@ export interface PrFacts {
   statusCheckRollup: any[];
   labels: { name: string }[];
   reviewDecision?: string;
+  mergeStateStatus?: string;
+  updatedAt?: string;
 }
 
 const OPT_OUT = "no-automerge";
+// updatedAt moves on every push, so with zero checks it bounds how long CI had to register one.
+const CI_GRACE_MS = 2 * 60_000;
 
 // CheckRun has status + conclusion; StatusContext has state.
 export const checkState = (c: any) =>
@@ -109,6 +113,8 @@ export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Se
   const checks = pr.statusCheckRollup.map(checkState);
   const failed = checks.filter((x) => x === "failed").length;
   if (failed) return no(`${failed} check(s) failed`);
+  if (pr.reviewDecision === "REVIEW_REQUIRED") return no("needs review");
+  if (pr.mergeStateStatus === "BLOCKED" && !checks.includes("pending")) return no("blocked by branch protection");
   const lines = pr.additions + pr.deletions;
   const tier = lines <= 150 && pr.changedFiles <= 5 ? "small" : lines <= 500 && pr.changedFiles <= 15 ? "medium" : "large";
   if (pr.files) {
@@ -133,6 +139,7 @@ export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Se
   }
   if (pr.hatch) return no(pr.hatch);
   if (pr.mergeable !== "MERGEABLE" || checks.includes("pending")) return { merge: "wait", reason: "checks pending or mergeability unknown" };
+  if (!checks.length && pr.updatedAt && Date.now() - Date.parse(pr.updatedAt) < CI_GRACE_MS) return { merge: "wait", reason: "no checks yet on a fresh head" };
   return { merge: true, reason: mode === "all" ? "autoMerge all" : `${tier} change${a ? `; agent: ${a.reason}` : ""}` };
 }
 
@@ -140,7 +147,7 @@ export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Se
 export const prReady = (pr: PrFacts) =>
   pr.state === "OPEN" && !pr.isDraft && pr.mergeable === "MERGEABLE" && pr.reviewDecision !== "CHANGES_REQUESTED" && pr.statusCheckRollup.every((c) => ["success", "neutral"].includes(checkState(c)));
 
-export const PR_FIELDS = "number,url,state,isDraft,isCrossRepository,baseRefName,baseRefOid,mergeable,additions,deletions,changedFiles,statusCheckRollup,labels,headRefOid,reviewDecision";
+export const PR_FIELDS = "number,url,state,isDraft,isCrossRepository,baseRefName,baseRefOid,mergeable,additions,deletions,changedFiles,statusCheckRollup,labels,headRefOid,reviewDecision,mergeStateStatus,updatedAt";
 
 // tender merges, pinned to the head it judged (the agent's token could too; see docs/auto-merge.md). "Not merged" is commented once per head SHA and reason.
 // With `share`, the first view also fetches `share.fields` and lands in `share.pr`, so feedback need not view the PR again.

@@ -105,7 +105,7 @@ test("feedback: failing CI and conflicts once per head SHA, with the log tail; n
   expect(d.file()).not.toContain("line 19\n");
   expect(d.cmds).toContain('sh -c gh run view "$1" --repo "$2" --log-failed | tail -n 80 sh 42 acme/web');
   expect(d.cmds.some((c) => c.startsWith("gh api"))).toBe(false);
-  expect(d.cmds).toContain("gh pr view 7 --repo acme/web --json number,url,state,isDraft,isCrossRepository,baseRefName,baseRefOid,mergeable,additions,deletions,changedFiles,statusCheckRollup,labels,headRefOid,reviewDecision,mergeStateStatus");
+  expect(d.cmds).toContain("gh pr view 7 --repo acme/web --json number,url,state,isDraft,isCrossRepository,baseRefName,baseRefOid,mergeable,additions,deletions,changedFiles,statusCheckRollup,labels,headRefOid,reviewDecision,mergeStateStatus,updatedAt");
   await d.run();
   expect(d.keys()).toHaveLength(3);
   d.pr.mergeStateStatus = "DIRTY";

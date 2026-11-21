@@ -164,8 +164,8 @@ export interface Tracker {
   listInProgress(): Promise<Ticket[]>;
   /** In Review and Ready to merge tickets; with `complete`, a listing that failed, filled its page or could not route a ticket throws instead of being skipped. */
   listInReview(complete?: boolean): Promise<Ticket[]>;
-  /** Done (cleanup), canceled (stop, keep data) or still open. */
-  closed(id: string, repo: string): Promise<"done" | "canceled" | undefined>;
+  /** Done or deleted (cleanup), canceled (stop, keep data) or still open. */
+  closed(id: string, repo: string): Promise<"done" | "canceled" | "deleted" | undefined>;
   claim(t: Ticket): Promise<void>;
   /** Moves to In Review from In Progress or Ready to merge, then posts `note` best-effort. */
   toReview(t: Ticket, note: string): Promise<void>;

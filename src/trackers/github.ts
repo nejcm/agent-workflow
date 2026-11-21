@@ -78,7 +78,7 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
       if (!n) throw new Error(`not a github ticket id: ${id}`);
       const r = await io.run(["gh", "issue", "view", n, "--repo", repo, "--json", "state,stateReason"]);
       // A deleted issue: gh's GraphQL lookup finds no issue in a repo it can resolve.
-      if (r.code !== 0 && r.err.includes("Could not resolve to an issue or pull request")) return "canceled";
+      if (r.code !== 0 && r.err.includes("Could not resolve to an issue or pull request")) return "deleted";
       if (r.code !== 0) throw new Error(`gh issue view: ${r.err.trim() || `exit ${r.code}`}`);
       const i = JSON.parse(r.out);
       if (i.state === "CLOSED") return ["NOT_PLANNED", "DUPLICATE"].includes(i.stateReason) ? "canceled" : "done";

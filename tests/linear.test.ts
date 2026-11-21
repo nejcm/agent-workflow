@@ -403,7 +403,7 @@ test("linear adapter: claim survives a failed pickup comment; a move Linear repo
   });
 });
 
-test("linear adapter: a trashed issue, or one missing from the response, is canceled", async () => {
+test("linear adapter: a trashed issue is deleted, one missing from the response canceled", async () => {
   const l = lin(config({ sources: [src({ tracker: "linear", team: "ENG" })] }));
   let issue: object | null = null;
   const queries: string[] = [];
@@ -413,7 +413,7 @@ test("linear adapter: a trashed issue, or one missing from the response, is canc
   await withLinearKey(async () => {
     expect(await tr.closed("ENG-1", "acme/web")).toBe("canceled");
     issue = { trashed: true, state: { name: "In Progress", type: "started" } };
-    expect(await tr.closed("ENG-1", "acme/web")).toBe("canceled");
+    expect(await tr.closed("ENG-1", "acme/web")).toBe("deleted");
     issue = { trashed: false, state: { name: "In Progress", type: "started" } };
     expect(await tr.closed("ENG-1", "acme/web")).toBeUndefined();
   });

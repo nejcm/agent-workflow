@@ -45,13 +45,13 @@ test("github adapter: closed as not planned or duplicate is canceled, as complet
   }
 });
 
-test("github adapter: a deleted issue is canceled; any other view failure throws", async () => {
+test("github adapter: a deleted issue is deleted; any other view failure throws", async () => {
   const l = gh();
   let err = "GraphQL: Could not resolve to an issue or pull request with the number of 7. (repository.issue)";
   const { io } = fakeIo();
   io.run = async () => ({ code: 1, out: "", err });
   const tr = github(l, "box", io, false, ["acme/web"]);
-  expect(await tr.closed("gh-7", "acme/web")).toBe("canceled");
+  expect(await tr.closed("gh-7", "acme/web")).toBe("deleted");
   err = "GraphQL: Could not resolve to a Repository with the name 'acme/web'. (repository)";
   await expect(tr.closed("gh-7", "acme/web")).rejects.toThrow("gh issue view: GraphQL: Could not resolve to a Repository");
 });

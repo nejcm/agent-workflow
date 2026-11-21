@@ -192,7 +192,7 @@ export interface Tracker {
   /** The ticket's current title, body, labels and whether it is open, read fresh. */
   view(t: Ticket): Promise<{ title: string; body: string; labels: string[]; open: boolean }>;
   addLabels(t: Ticket, labels: string[]): Promise<void>;
-  listPhases(parent: Ticket): Promise<{ ref: string; title: string }[]>;
+  listPhases(parent: Ticket): Promise<{ ref: string; title: string; body: string }[]>;
   setPhase(parent: Ticket, ref: string, status: "in-progress" | "done"): Promise<void>;
 }
 

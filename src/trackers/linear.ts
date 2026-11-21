@@ -244,7 +244,7 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
       for (const x of labels) await addLabel(t, x);
     },
     listPhases: async (parent) =>
-      (await gql(`query($id: String!) { issue(id: $id) { children(first: 100) { nodes { id title } } } }`, { id: parent.ref })).issue.children.nodes.map((i: any) => ({ ref: i.id, title: i.title })),
+      (await gql(`query($id: String!) { issue(id: $id) { children(first: 100) { nodes { id title description } } } }`, { id: parent.ref })).issue.children.nodes.map((i: any) => ({ ref: i.id, title: i.title, body: String(i.description ?? "") })),
     setPhase: (_parent, ref, status) => move(ref, status === "done" ? l.done[0]! : l.inProgress),
   };
 }

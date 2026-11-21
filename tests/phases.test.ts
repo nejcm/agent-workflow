@@ -84,6 +84,31 @@ test("phases: a sub-ticket created before a lost sidecar write is adopted, not d
   expect(calls).toEqual(["set sub-old in-progress", "create gh-1 gh-1: Do b"]);
 });
 
+test("phases: same-titled phases adopt by key marker, never each other's sub-ticket", async () => {
+  const c = config();
+  const { tr, calls, subs } = fakeTracker({ inProgress: [ticket(1)] });
+  subs.push({ ref: "sub-b", title: "gh-1: Same", body: "b\n\ntender-phase: b" });
+  const { io } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(["acme/web/gh-1"]) : noPr(a)));
+  writePhases("gh-1", [phase("a", "in-progress", { title: "Same" }), phase("b", "todo", { title: "Same" })]);
+  await pass(c, io, () => tr, "/tender");
+  expect(calls).toEqual(["create gh-1 gh-1: Same", "set sub-1 in-progress"]);
+  expect(subs.at(-1)!.body).toBe("b\n\ntender-phase: a");
+  expect(JSON.parse(readFileSync(join(root, "acme/web/gh-1.phases.json"), "utf8"))).toEqual({ a: { ref: "sub-1", status: "in-progress" }, b: { ref: "sub-b", status: "todo" } });
+});
+
+test("phases: only the last body line is the key marker, and a key two sub-tickets claim is adopted by neither", async () => {
+  const c = config();
+  const { tr, calls, subs } = fakeTracker({ inProgress: [ticket(1)] });
+  subs.push({ ref: "sub-b", title: "gh-1: Same", body: "```\ntender-phase: a\n```\n\ntender-phase: b\n" }, { ref: "sub-c1", title: "gh-1: Do c", body: "tender-phase: c" }, { ref: "sub-c2", title: "gh-1: Do c", body: "x\ntender-phase: c" });
+  const { io, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(["acme/web/gh-1"]) : noPr(a)));
+  writePhases("gh-1", [phase("a", "todo", { title: "Same", body: "  indented" }), phase("b", "todo", { title: "Same" }), phase("c", "todo")]);
+  await pass(c, io, () => tr, "/tender");
+  expect(calls).toEqual(["create gh-1 gh-1: Same", "create gh-1 gh-1: Do c"]);
+  expect(subs[3]!.body).toBe("  indented\n\ntender-phase: a");
+  expect(JSON.parse(readFileSync(join(root, "acme/web/gh-1.phases.json"), "utf8"))).toMatchObject({ a: { ref: "sub-1" }, b: { ref: "sub-b" }, c: { ref: "sub-2" } });
+  expect(logs.some((l) => l.includes("phase gh-1/c: 2 sub-tickets claim it, adopting none"))).toBe(true);
+});
+
 test("phases: bad or symlinked file is logged and the parent still moves to review", async () => {
   const c = config();
   const { tr, calls } = fakeTracker({ inProgress: [ticket(1), ticket(2), ticket(3)] });

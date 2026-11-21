@@ -159,7 +159,7 @@ test("github adapter: phases become sub-issues that are never picked up as work"
   });
   writePhases("gh-1", [phase("a", "in-progress"), phase("b", "done")]);
   await pass(c, io, makeTracker, "/tender");
-  expect(cmds).toContain("gh issue create --repo acme/web --parent 1 --title gh-1: Do a --body b");
+  expect(cmds).toContain("gh issue create --repo acme/web --parent 1 --title gh-1: Do a --body b\n\ntender-phase: a");
   expect(cmds).toContain("gh issue edit 2 --repo acme/web --add-label in-progress");
   expect(cmds).toContain("gh issue edit 3 --repo acme/web --add-label in-progress");
   expect(issues[1]!.labels).toEqual(["in-progress"]);

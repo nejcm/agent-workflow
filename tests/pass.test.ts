@@ -64,7 +64,7 @@ export CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CODEX_HOME
 export GH_CONFIG_DIR='/ws/it'\''s'.gh XDG_CACHE_HOME='/ws/it'\''s.tmpdir/cache' TENDER_BUN='/b/it'\''s/bun'
 `;
   const own = String.raw`--allow '/ws/it'\''s.claude' --allow '/ws/it'\''s.codex' `;
-  const probe = "expand=$(systemd-run --help 2>/dev/null | grep -qe --expand-environment= && echo --expand-environment=no)\n";
+  const probe = "expand=--expand-environment=no; help=$(systemd-run --help 2>/dev/null) && [[ $help != *--expand-environment=* ]] && expand=\n";
   expect(s("claude", "nono")).toBe(`${head}${box}${claudeNonoEnv}${probe}exec ${scope}${nono("claude", own)}${claude}`);
   expect(s("claude", "none")).toBe(`${head}${claudeEnv}${probe}exec ${scope}${claude}`);
   const codexEnv = String.raw`export CODEX_HOME='/ws/it'\''s'.codex
@@ -79,13 +79,16 @@ test("launcher: systemd-run gets --expand-environment=no only where it knows the
   const bin = join(root, "bin");
   mkdirSync(bin, { recursive: true });
   writeFileSync(join(root, "p.md"), "a$$b ${HOME}");
-  writeFileSync(join(bin, "systemd-run"), `#!/bin/sh\n[ "$1" = --help ] && { [ -n "$NEW" ] && echo "  --expand-environment=BOOL"; exit 0; }\nprintf '%s\\n' "$@"\n`, { mode: 0o755 });
+  writeFileSync(join(bin, "systemd-run"), `#!/bin/sh\n[ "$1" = --help ] && { [ -n "$FAIL" ] && exit 1; [ -n "$NEW" ] && echo "  --expand-environment=BOOL"; exit 0; }\nprintf '%s\\n' "$@"\n`, { mode: 0o755 });
   const script = launcher(ses(config({ repos: [{ name: "acme/web", sandbox: "none" }] }), "codex"), root, join(root, "p.md"), "u.scope", "/tender", "");
   const run = (env: Record<string, string>) => Bun.spawnSync(["bash", "-c", script], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, ...env } }).stdout.toString().split("\n");
   const now = run({ NEW: "1" });
   expect(now.slice(0, 6)).toEqual(["--user", "--scope", "--quiet", "--collect", "--expand-environment=no", "--unit"]);
   expect(now).toContain("a$$b ${HOME}");
-  expect(run({}).slice(0, 5)).toEqual(["--user", "--scope", "--quiet", "--collect", "--unit"]);
+  expect(run({ NEW: "" }).slice(0, 5)).toEqual(["--user", "--scope", "--quiet", "--collect", "--unit"]);
+  expect(run({ NEW: "", FAIL: "1" })[4]).toBe("--expand-environment=no");
+  writeFileSync(join(bin, "grep"), "#!/bin/sh\nexit 2\n", { mode: 0o755 });
+  expect(run({ NEW: "1" })[4]).toBe("--expand-environment=no");
 });
 
 test("a failed window listing skips the pass: no start, no ended notice", async () => {

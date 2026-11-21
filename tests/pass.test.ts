@@ -1737,6 +1737,16 @@ test("both nono profiles grant read on every template entry a session's config d
   }
 });
 
+test("cleanup logs a ticket GitHub 404s once per run and keeps its session dir", async () => {
+  worktree("gh-3");
+  const { io, logs } = fakeIo((a) => (a[1] === "issue" && a[2] === "view" ? { code: 1, err: "GraphQL: Could not resolve to an issue or pull request with the number of 3. (repository.issue)" } : a[1] === "api" ? { code: 1, err: "gh: Not Found (HTTP 404)" } : noPr(a)));
+  const mk = (s: any, h: string, i: Io, d: boolean, r: string[]) => github(s, h, i, d, r);
+  await pass(config(), io, mk, "/tender");
+  await pass(config(), io, mk, "/tender");
+  expect(logs.filter((l) => l.includes("HTTP 404"))).toEqual([expect.stringContaining("cleanup acme/web/gh-3 failed: gh api: gh: Not Found (HTTP 404)")]);
+  expect(existsSync(join(root, "acme/web/gh-3"))).toBe(true);
+});
+
 test("cleanup logs a kept session dir once per dir and reason, not every poll", async () => {
   worktree("gh-3");
   rmSync(join(root, "acme/web/gh-3/.git"), { recursive: true });

@@ -46,6 +46,15 @@ export async function sweepScopes(cfg: Config, io: Io, cgroup = cgroupOf) {
   for (const unit of out.split("\n").map((l) => l.trim().split(/\s+/)[0])) if (unit && !live.has(unit)) await write(io, ["systemctl", "--user", "kill", "--signal=KILL", unit]);
 }
 
+// Room for tsx's `/tsx-<uid>/<pid>.pipe`, the longest socket suffix seen under a session's TMPDIR.
+const SOCKET_SUFFIX = 22;
+
+/** A warning when a socket made in `tmp` would overflow sun_path (108 bytes with its NUL). */
+export const socketWarning = (tmp: string) => {
+  const n = Buffer.byteLength(tmp);
+  if (n + SOCKET_SUFFIX > 107) return `${tmp} is ${n} bytes, so a Unix socket a tool makes there (tsx adds ~${SOCKET_SUFFIX}) can exceed the 108-byte sun_path limit: shorten workspaceRoot`;
+};
+
 export function launcher(l: Pick<Session, "agent" | "sandbox" | "path" | "model" | "effort">, wt: string, promptFile: string, unit: string, tenderDir: string, bun: string) {
   const prompt = `"$(cat ${quote(promptFile)})"`;
   const nono = l.sandbox === "nono";
@@ -344,6 +353,8 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
   const login = r.agent === "codex" ? await codexLogin(io) : await codexLogin(io).catch(() => undefined);
   const noHooks = r.agent === "codex" ? codexHooksWarning(io.home) : undefined;
   if (noHooks) io.log(noHooks);
+  const long = socketWarning(tmpHome(wt));
+  if (long) io.log(long);
   io.log(`${io.dry ? "dry: " : ""}mkdir ${tmpHome(wt)}`);
   if (!io.dry) {
     rmSync(tmpHome(wt), { recursive: true, force: true });

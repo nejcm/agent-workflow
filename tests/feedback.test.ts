@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { FEEDBACK_POINTER } from "../src/session/feedback";
+import { FEEDBACK_POINTER, lineComments } from "../src/session/feedback";
 import { pass } from "../src/pass";
 import type { State } from "../src/session/state";
 import { configCache } from "../src/config/repo-config";
@@ -241,4 +241,16 @@ test("feedback: with autoMerge off, .pr follows a replaced PR while the session 
   writeFileSync(join(root, "acme/web/gh-1.pr"), "https://github.com/acme/web/pull/6");
   await d.run();
   expect(readFileSync(join(root, "acme/web/gh-1.pr"), "utf8")).toBe(URL);
+});
+
+test("feedback: line comments past 100 are read from the next page; past 10 pages it throws", async () => {
+  let total = 150;
+  const { io, cmds } = fakeIo((a) => {
+    const page = Number(/&page=(\d+)/.exec(a[2]!)?.[1] ?? 1);
+    return { out: JSON.stringify(Array.from({ length: Math.max(0, Math.min(100, total - (page - 1) * 100)) }, (_, i) => ({ id: (page - 1) * 100 + i }))) };
+  });
+  expect((await lineComments(io, "acme/web", "7")).map((c) => c.id)).toEqual(Array.from({ length: 150 }, (_, i) => i));
+  expect(cmds).toEqual(["gh api repos/acme/web/pulls/7/comments?per_page=100", "gh api repos/acme/web/pulls/7/comments?per_page=100&page=2"]);
+  total = 5000;
+  await expect(lineComments(io, "acme/web", "7")).rejects.toThrow("acme/web#7: over 1000 line comments");
 });

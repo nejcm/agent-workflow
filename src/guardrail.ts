@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { sanitized } from "./review/findings";
 import { byOperator } from "./session/question";
-import { prItems } from "./session/feedback";
+import { lineComments, prItems } from "./session/feedback";
 import { loadSession } from "./config/repo-config";
 import { agentReply, callJudge, safeReason, type Spec } from "./judge";
 import { defang, intakeSource, ownLabels } from "./intake";
@@ -127,8 +127,7 @@ export async function guardrails(cfg: Config, io: Io, db: Database, work: string
         decide({ skipped: `merged over ${WINDOW_DAYS} days ago` });
         continue;
       }
-      // shortcut: first 100 line comments only, as feedback delivery reads them; paginate when a PR exceeds 100.
-      const lines = JSON.parse(await read(io, ["gh", "api", `repos/${c.repo}/pulls/${n}/comments?per_page=100`]));
+      const lines = await lineComments(io, c.repo, n);
       const ok = byOperator(cfg.repos[c.repo]!.feedbackAuthors);
       const feedback = prItems(pr, lines)
         // Comments by feedbackAuthors up to the last round's time, an approximation of what rounds delivered.

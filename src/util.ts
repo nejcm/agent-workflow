@@ -4,6 +4,9 @@ import type { Config, Io, Ticket } from "./types";
 
 export const TENDER_DIR = dirname(import.meta.dir);
 
+// A kept session dir is retried every poll but logged once per dir and reason.
+export class Kept extends Error {}
+
 export const validBranch = (b: string) => /^[\w.][\w./-]*$/.test(b) && !b.includes("..");
 
 /** One single-quoted shell word. */

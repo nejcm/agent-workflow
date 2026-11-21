@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { allowedRepo, repoDir, validRepo } from "./config/config";
 import { deliverFeedback, feedbackFields } from "./session/feedback";
@@ -14,7 +14,7 @@ import { lastSay, transcript } from "./ui/tail";
 import { type Adapter, TRACKERS } from "./trackers";
 import type { ProjectClaim } from "./trackers/linear";
 import type { Config, Io, Repo, Session, Source, Ticket, Tracker } from "./types";
-import { TENDER_DIR, byPriority, diskRepos, GIT, hasLabel, mtime, put, read, remove, SAFE_ID, SLOW_SECS, strip, subdirs, write } from "./util";
+import { TENDER_DIR, byPriority, Kept, diskRepos, GIT, hasLabel, mtime, put, read, remove, SAFE_ID, SLOW_SECS, strip, subdirs, write } from "./util";
 
 export const sourceOf = (dir: string, id: string) => {
   const f = join(dir, `${id}.source`);
@@ -24,9 +24,6 @@ const hasTrace = (cfg: Config, key: string, id: string) => existsSync(join(repoD
 // Linear only: ids are unique per workspace (one LINEAR_API_KEY), so the marker is shared by all Linear sources.
 const rejectFile = (cfg: Config, id: string) => join(cfg.workspaceRoot, ".rejected", id);
 
-// A kept session dir is retried every poll but logged once per dir and reason.
-class Kept extends Error {}
-
 async function step(io: Io, what: string, fn: () => Promise<unknown>) {
   try {
     await fn();
@@ -35,6 +32,23 @@ async function step(io: Io, what: string, fn: () => Promise<unknown>) {
     if (e instanceof Kept && warned.has(msg)) return;
     if (e instanceof Kept) warned.add(msg);
     io.log(msg);
+  }
+}
+
+const SCAN_CAP = 100_000;
+
+// Old-form submodules and other nested repos hold commits no check here sees; node_modules is skipped, as a dependency's .git is reinstallable.
+function nestedGit(wt: string) {
+  const dirs = [wt];
+  let seen = 0;
+  while (dirs.length) {
+    const d = dirs.pop()!;
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      if (++seen > SCAN_CAP) return `more than ${SCAN_CAP} entries`;
+      if (!e.isDirectory()) continue;
+      if (e.name === ".git" && d !== wt) return join(d, e.name);
+      if (e.name !== ".git" && e.name !== "node_modules") dirs.push(join(d, e.name));
+    }
   }
 }
 
@@ -471,6 +485,13 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
         }
         const wt = join(dir, id);
         if (!lstatSync(join(wt, ".git"), { throwIfNoEntry: false })?.isDirectory()) throw new Kept(`${wt}/.git is not a directory; left in place`);
+        let nested: string | undefined;
+        try {
+          nested = nestedGit(wt);
+        } catch (e) {
+          nested = `an unreadable path (${(e as Error).message})`;
+        }
+        if (nested) throw new Kept(`${wt} may hold a nested repository: ${nested}; left in place`);
         // The session controls its .git (config, filters, commondir), so git checks it sandboxed: read-only, no network, no credentials; tender then deletes without git.
         // A planted filter can block git; the runner's deadline kills its whole process group.
         const box = r.sandbox === "nono" ? nonoRun("tender-check", tenderDir, [["--read", wt], ["--read", join(r.path, ".git", "objects")]]) : [];

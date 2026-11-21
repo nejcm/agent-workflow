@@ -425,12 +425,15 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
         const box = r.sandbox === "nono" ? nonoRun("tender-check", tenderDir, [["--read", wt], ["--read", join(r.path, ".git", "objects")]]) : [];
         // Pushed means reachable from the real remote (its HEAD, the branch, the PR head) or the base's refs, never the clone's own refs/remotes.
         const pr = /\/pull\/(\d+)$/.exec(existsSync(join(dir, `${id}.pr`)) ? readFileSync(join(dir, `${id}.pr`), "utf8") : "")?.[1];
-        const remote = await write(x.io, [...GIT, "-C", r.path, "ls-remote", "origin", "HEAD", `refs/heads/agent/${id}`, ...(pr ? [`refs/pull/${pr}/head`] : [])]);
-        const known = await write(x.io, [...GIT, "-C", r.path, "for-each-ref", "--format=%(objectname)", "refs/remotes/origin"]);
-        const pushed = [...remote.split("\n").map((l) => l.split("\t")[0]), ...known.split("\n")].filter((h) => /^[0-9a-f]{40,64}$/.test(h));
+        const branch = await baseBranch(x.io, r);
+        const remote = await write(x.io, [...GIT, "-C", r.path, "ls-remote", "origin", "HEAD", `refs/heads/${branch}`, `refs/heads/agent/${id}`, ...(pr ? [`refs/pull/${pr}/head`] : [])]);
+        const known = await write(x.io, [...GIT, "-C", r.path, "for-each-ref", "--format=%(objectname)", `refs/remotes/origin/${branch}`]);
+        const pushed = [...new Set([...remote.split("\n").map((l) => l.split("\t")[0]), ...known.split("\n")])].filter((h) => /^[0-9a-f]{40,64}$/.test(h));
+        // Grafts survive --no-replace-objects, and commondir could move them out of reach of this check.
+        if (["info/grafts", "commondir"].some((f) => existsSync(join(wt, ".git", f)))) throw new Error(`${wt} has a graft file or commondir; left in place`);
         // A fresh clone has no tags (--revision, tagOpt=--no-tags), so any tag, stash or note is the session's own.
         const checks = [["status", "--porcelain", "--ignore-submodules=none"], ["rev-list", "--ignore-missing", "--all", "--not", ...pushed], ["for-each-ref", "--format=%(refname)", "refs/tags", "refs/stash", "refs/notes"]];
-        for (const c of checks) if ((await write(x.io, [...box, ...GIT, "-c", "status.showUntrackedFiles=all", "-C", wt, ...c])).trim()) throw new Error(`${wt} has uncommitted, untracked or unpushed work; left in place`);
+        for (const c of checks) if ((await write(x.io, [...box, ...GIT, "-c", "status.showUntrackedFiles=all", `--git-dir=${join(wt, ".git")}`, `--work-tree=${wt}`, "-C", wt, ...c])).trim()) throw new Error(`${wt} has uncommitted, untracked or unpushed work; left in place`);
         // rm never follows symlinks.
         await write(x.io, ["rm", "-rf", "--one-file-system", "--", wt], undefined, SLOW_SECS);
         // After the clone, so a delete that fails keeps the transcripts too.

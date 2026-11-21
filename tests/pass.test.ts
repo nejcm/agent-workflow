@@ -1232,7 +1232,7 @@ test("a session gets its own clone sharing the base's objects; cleanup deletes i
   expect(baseRefs()).toBe(refsBefore);
 });
 
-test("cleanup keeps work the session's own config or refs would hide: untracked files, forged remote refs, a detached HEAD, other refs, replace refs; a merged PR's head counts as pushed", async () => {
+test("cleanup keeps work the session's own config or refs would hide: untracked files, forged remote refs, a detached HEAD, other refs, replace refs, grafts, a moved core.worktree; a merged PR's head counts as pushed", async () => {
   const origin = join(root, "origin.git");
   const base = join(root, "src-web");
   const sh = (...a: string[]) => Bun.spawnSync(a, { stdout: "pipe", stderr: "pipe" });
@@ -1248,12 +1248,12 @@ test("cleanup keeps work the session's own config or refs would hide: untracked 
   };
   const run = async (t: ReturnType<typeof fakeTracker>) => {
     const { io, logs } = fakeIo((x) => (x[0] === "git" || x[0] === "nono" || x[0] === "rm" ? real(x) : noPr(x)));
-    await pass(config({ maxConcurrent: 7 }), io, () => t.tr, "/tender");
+    await pass(config({ maxConcurrent: 9 }), io, () => t.tr, "/tender");
     return logs;
   };
-  const ids = [1, 2, 3, 4, 5, 6, 7];
+  const ids = [1, 2, 3, 4, 5, 6, 7, 8, 9];
   await run(fakeTracker({ ready: ids.map((n) => ticket(n)) }));
-  const [wt1, wt2, wt3, wt4, wt5, wt6, wt7] = ids.map((n) => join(root, `acme/web/gh-${n}`));
+  const [wt1, wt2, wt3, wt4, wt5, wt6, wt7, wt8, wt9] = ids.map((n) => join(root, `acme/web/gh-${n}`));
   git(wt1, "config", "status.showUntrackedFiles", "no");
   writeFileSync(join(wt1, "new"), "x");
   git(wt2, "commit", "-q", "--allow-empty", "-m", "c");
@@ -1272,9 +1272,14 @@ test("cleanup keeps work the session's own config or refs would hide: untracked 
   git(wt6, "-c", "protocol.file.allow=always", "push", "-q", "-u", "origin", "HEAD:refs/heads/agent/gh-6");
   git(wt7, "commit", "-q", "--allow-empty", "-m", "c");
   git(wt7, "replace", "--graft", "origin/main", "HEAD");
+  mkdirSync(join(wt8, "sub"));
+  git(wt8, "config", "core.worktree", join(wt8, "sub"));
+  writeFileSync(join(wt8, "new"), "x");
+  git(wt9, "commit", "-q", "--allow-empty", "-m", "c");
+  writeFileSync(join(wt9, ".git/info/grafts"), `${Bun.spawnSync(["git", "-C", wt9, "rev-parse", "origin/main"]).stdout.toString().trim()} ${Bun.spawnSync(["git", "-C", wt9, "rev-parse", "HEAD"]).stdout.toString().trim()}\n`);
   const logs = await run(fakeTracker({ done: ids.map((n) => `gh-${n}`) }));
-  expect(ids.map((n) => [n, existsSync(join(root, `acme/web/gh-${n}`))])).toEqual([[1, true], [2, true], [3, true], [4, true], [5, false], [6, false], [7, true]]);
-  expect(logs.filter((l) => l.includes("left in place"))).toHaveLength(5);
+  expect(ids.map((n) => [n, existsSync(join(root, `acme/web/gh-${n}`))])).toEqual([[1, true], [2, true], [3, true], [4, true], [5, false], [6, false], [7, true], [8, true], [9, true]]);
+  expect(logs.filter((l) => l.includes("left in place"))).toHaveLength(7);
 });
 
 test("a session clone that fails half-way is removed, not reused next poll", async () => {

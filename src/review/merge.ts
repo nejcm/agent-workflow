@@ -142,7 +142,7 @@ export const prReady = (pr: PrFacts) =>
 
 export const PR_FIELDS = "number,url,state,isDraft,isCrossRepository,baseRefName,baseRefOid,mergeable,additions,deletions,changedFiles,statusCheckRollup,labels,headRefOid,reviewDecision";
 
-// tender merges, pinned to the head it judged (the agent's token could too; see docs/auto-merge.md). "Not merged" is commented once per head SHA.
+// tender merges, pinned to the head it judged (the agent's token could too; see docs/auto-merge.md). "Not merged" is commented once per head SHA and reason.
 // With `share`, the first view also fetches `share.fields` and lands in `share.pr`, so feedback need not view the PR again.
 // Returns that view unless tender merged, or tried to merge, the PR.
 export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker, io: Io, parked = false, share?: { fields: string; pr?: any }) {

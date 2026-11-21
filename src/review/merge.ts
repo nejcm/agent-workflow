@@ -124,7 +124,8 @@ export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Se
     if (hit) return no(`touches critical path ${hit}`);
   }
   if (pr.files && mode !== "all") {
-    const rewritten = pr.files.find((f) => (f.deletions > 0 || ["removed", "renamed"].includes(f.status)) && paths(f).some((p) => isTest(p, s.testPaths)));
+    // A modified file with 0/0 lines is binary (or mode-only), so its deletions are uncountable.
+    const rewritten = pr.files.find((f) => (f.deletions > 0 || ["removed", "renamed"].includes(f.status) || (f.status === "modified" && !f.additions)) && paths(f).some((p) => isTest(p, s.testPaths)));
     if (rewritten) return no(`changes existing test ${rewritten.filename} (${rewritten.status}, ${rewritten.deletions} deletions)`);
     if (tier === "large") return no(`too large (${lines} lines, ${pr.changedFiles} files)`);
     if (a?.critical) return no(`agent marked it critical: ${a.reason}`);
@@ -229,7 +230,9 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
     if (mergeDecision(now, a, r, t.labels).merge !== true) return;
     // The listing may predate a human parking it; a failed read throws, so no merge.
     if (await tr.parked(t)) return;
-    await write(io, ["gh", "pr", "merge", n, "--repo", r.key, "--squash", "--delete-branch", "--match-head-commit", pr.headRefOid]);
+    const merge = (...del: string[]) => write(io, ["gh", "pr", "merge", n, "--repo", r.key, "--squash", ...del, "--match-head-commit", pr.headRefOid]);
+    // gh refuses -d on a merge-queue branch (cli/cli pkg/cmd/pr/merge canMerge); without it, gh enqueues the PR.
+    await merge("--delete-branch").catch((e) => (/--delete-branch` when merge queue enabled/.test(e.message) ? merge() : Promise.reject(e)));
     const state = io.dry ? "MERGED" : (await view("state")).state;
     if (state !== "MERGED") return io.log(`merge ${t.id}: ${pr.url} is ${state} after gh pr merge, rechecking next poll`);
     io.event?.("merged", r.key, t.id, { pr: pr.url, auto: true, mode, reason: d.reason }, pr.url);

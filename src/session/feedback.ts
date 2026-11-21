@@ -23,15 +23,14 @@ export interface FeedbackCursor {
   capped?: boolean;
 }
 
-type Item = TicketComment & { on?: string };
+type Item = TicketComment & { on?: string; cursorAt?: string };
 
-/** Reviews with text (or changes requested), PR comments and line comments, as comments. */
-// A line comment keeps its draft time as created_at; updated_at moves to when its review is submitted (and on edit).
+// A line comment's created_at is its draft time; updated_at moves on review submission (and edit), so the cursor keys on it.
 export function prItems(pr: any, lines: any[]): Item[] {
   return [
     ...(pr.reviews ?? []).filter((r: any) => r.body?.trim() || r.state === "CHANGES_REQUESTED").map((r: any) => ({ id: String(r.id), body: r.body?.trim() || "(changes requested)", createdAt: r.submittedAt ?? "", author: r.author?.login })),
     ...(pr.comments ?? []).map((c: any) => ({ id: String(c.id), body: c.body ?? "", createdAt: c.createdAt ?? "", author: c.author?.login })),
-    ...lines.map((c: any) => ({ id: String(c.id), body: c.body ?? "", createdAt: c.updated_at ?? c.created_at ?? "", author: c.user?.login, on: `${c.path}:${c.line ?? c.original_line}` })),
+    ...lines.map((c: any) => ({ id: String(c.id), body: c.body ?? "", createdAt: c.created_at ?? "", cursorAt: c.updated_at, author: c.user?.login, on: `${c.path}:${c.line ?? c.original_line}` })),
   ];
 }
 
@@ -82,10 +81,11 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
   if (pr.state !== "OPEN") return;
   const lines = talk ? await lineComments(io, r.key, n) : [];
   const ok = byOperator(r.feedbackAuthors);
+  const at = (c: Item) => Date.parse(c.cursorAt ?? c.createdAt);
   const items = prItems(pr, lines)
-    .filter((c) => Date.parse(c.createdAt) > cur.seenAt && ok(c))
-    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
-  const newest = items.length ? Date.parse(items.at(-1)!.createdAt) : undefined;
+    .filter((c) => at(c) > cur.seenAt && ok(c))
+    .sort((a, b) => at(a) - at(b));
+  const newest = items.length ? at(items.at(-1)!) : undefined;
   if (newest !== undefined && Date.now() - newest < DEBOUNCE_MS) return false;
   const checks: any[] = pr.statusCheckRollup ?? [];
   const failed = !cur.ciShas?.includes(pr.headRefOid) && !checks.some((c) => checkState(c) === "pending") ? checks.filter((c) => checkState(c) === "failed") : [];

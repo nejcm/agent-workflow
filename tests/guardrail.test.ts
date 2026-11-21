@@ -28,12 +28,12 @@ const view = (o: object = {}) => ({
 });
 
 let dbs = 0;
-function setup({ source = {} as object, prs = [1], reply = (): object => proposal(), pr = (): object => view(), markers = {} as Record<string, string>, maxPerRun = 10, dry = false, guardrails: on = true } = {}) {
+function setup({ lines = [{ id: 4, body: "use the typed client", created_at: "2026-02-27T00:00:00Z", user: { login: "op" }, path: "src/save.ts", line: 3 }] as object[], source = {} as object, prs = [1], reply = (): object => proposal(), pr = (): object => view(), markers = {} as Record<string, string>, maxPerRun = 10, dry = false, guardrails: on = true } = {}) {
   const file = join(root, `tender-${++dbs}.db`);
   const db = openDb(file);
   const { io, logs, cmds } = fakeIo((argv) => {
     if (argv[1] === "pr" && argv[2] === "view") return { out: JSON.stringify({ headRefName: `agent/gh-${argv[3]}`, ...pr() }) };
-    if (argv[1] === "api" && argv[2]!.includes("/pulls/")) return { out: JSON.stringify([{ id: 4, body: "use the typed client", created_at: "2026-02-27T00:00:00Z", user: { login: "op" }, path: "src/save.ts", line: 3 }]) };
+    if (argv[1] === "api" && argv[2]!.includes("/pulls/")) return { out: JSON.stringify(lines) };
   }, dry);
   const ev = recorder(file, "box", io.log);
   for (const n of prs) {
@@ -242,4 +242,11 @@ test("runs inside tender intake after the rules, only when on and no single rule
     await intake(s.cfg, s.io, TENDER_DIR, { only, tracker: () => fakeTracker({}).tr });
     expect(s.logs.some((l) => l.startsWith("guardrail acme/web#1: failed, retried next run"))).toBe(runs);
   }
+});
+
+test("a line comment edited after the merge still counts as feedback", async () => {
+  const s = setup({ pr: () => view({ reviews: [], comments: [] }), lines: [{ id: 4, body: "use the typed client", created_at: "2026-02-27T00:00:00Z", updated_at: ago(-1), user: { login: "op" }, path: "src/save.ts", line: 3 }] });
+  await s.go();
+  expect(s.prompts).toHaveLength(1);
+  expect(s.prompts[0]).toContain("use the typed client");
 });

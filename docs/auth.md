@@ -44,3 +44,5 @@ nono profile validate nono/tender-codex.json
 ```bash
 nono profile validate nono/tender-check.json
 ```
+
+A sandboxed Claude session holds only an inference-only token (nono's phantom), so Remote Control is unavailable; `sandbox: "none"` lanes use the `claude setup-token` token instead.

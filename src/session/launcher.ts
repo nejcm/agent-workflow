@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { closeSync, constants as C, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { AGENTS, CLAUDE_TOKEN, claudeHome, codexHome, recordedAgentConfig, tmpHome } from "./agents";
 import { checkLogin, findBun, readLogin } from "./claude-auth";
@@ -214,21 +214,47 @@ export async function codexLogin(io: Io, now = Date.now()) {
 }
 
 
-/** Rewrites a session's existing Codex `auth.json` with `login` when its access token differs, keeping the session's `agent_identity`; true when written. */
-export function refreshCodexCopy(io: Io, file: string, login: string) {
-  if (io.dry || !existsSync(file)) return false;
-  let old: any = {};
-  try {
-    old = JSON.parse(readFileSync(file, "utf8"));
-  } catch {}
+/** Host-owned record, beside the session-writable dir, of the account `dir`'s login was seeded from. */
+export const codexAccount = (dir: string) => `${dir}-account`;
+const MAX_AUTH = 64 * 1024;
+
+/** Rewrites a live session's existing Codex `auth.json` with `login` when its access token differs and the account matches its record, keeping its `agent_identity`; true when written. */
+export function refreshCodexCopy(io: Io, dir: string, login: string) {
   const next = JSON.parse(login);
-  if (old?.tokens?.access_token === next.tokens.access_token) return false;
-  const tmp = `${file}.tmp`;
-  // The session can write its dir: drop any planted tmp, and wx never follows a symlink put back in its place.
-  rmSync(tmp, { force: true });
-  writeFileSync(tmp, JSON.stringify({ ...next, ...(old?.agent_identity && { agent_identity: old.agent_identity }) }), { mode: 0o600, flag: "wx" });
-  renameSync(tmp, file);
-  return true;
+  const account = existsSync(codexAccount(dir)) ? readFileSync(codexAccount(dir), "utf8") : "";
+  if (io.dry || !account || account !== next.tokens.account_id) return false;
+  try {
+    // Pinned no-follow: the session can write `dir`, so every path below goes through the fd.
+    return inDir(dir, (d) => {
+      if (statSync(d).uid !== process.getuid!()) throw new Error("not owned by this user");
+      const fd = openSync(`${d}/auth.json`, C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK);
+      let old: any = {};
+      try {
+        const st = fstatSync(fd);
+        if (!st.isFile() || st.nlink !== 1 || st.size > MAX_AUTH) throw new Error("auth.json must be a regular file with one link under 64 KiB");
+        const buf = Buffer.alloc(MAX_AUTH + 1);
+        old = JSON.parse(buf.toString("utf8", 0, readSync(fd, buf, 0, buf.length, 0)));
+      } catch (e) {
+        if (!(e instanceof SyntaxError)) throw e;
+      } finally {
+        closeSync(fd);
+      }
+      if (old?.tokens?.access_token === next.tokens.access_token) return false;
+      const tmp = `${d}/auth.json.tmp`;
+      rmSync(tmp, { force: true });
+      const out = openSync(tmp, C.O_WRONLY | C.O_CREAT | C.O_EXCL | C.O_NOFOLLOW, 0o600);
+      try {
+        writeFileSync(out, JSON.stringify({ ...next, ...(old?.agent_identity && { agent_identity: old.agent_identity }) }));
+      } finally {
+        closeSync(out);
+      }
+      renameSync(tmp, `${d}/auth.json`);
+      return true;
+    });
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw e;
+  }
 }
 
 /** A warning when the template config lacks tender's Codex state hooks, without which answers and PR feedback are never delivered. */
@@ -246,11 +272,14 @@ export function seedCodex(io: Io, dir: string, login: string | undefined, root: 
   io.log(`${io.dry ? "dry: " : ""}seed ${dir} from ${tpl}`);
   if (io.dry) return;
   rmSync(dir, { recursive: true, force: true });
+  rmSync(codexAccount(dir), { force: true });
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   for (const f of ["AGENTS.md", "skills"]) if (existsSync(join(tpl, f))) symlinkSync(realpathSync(join(tpl, f)), join(dir, f));
   // Copies, not links: Codex rewrites config.toml in place, and the template stays out of the sandbox.
   for (const f of ["config.toml", "hooks.json"]) if (existsSync(join(tpl, f))) copyFileSync(join(tpl, f), join(dir, f));
   if (login) writeFileSync(join(dir, "auth.json"), login, { mode: 0o600, flag: "wx" });
+  const account = login && JSON.parse(login).tokens?.account_id;
+  if (typeof account === "string") writeFileSync(codexAccount(dir), account, { mode: 0o600 });
   const cfg = join(dir, "config.toml");
   const old = existsSync(cfg) ? readFileSync(cfg, "utf8") : "";
   if (trusted(old, root)) return;

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { validRepo } from "../src/config/config";
 import { canonCache } from "../src/github";
@@ -188,58 +188,131 @@ const login = (exp: number) => {
 };
 const DAY = 24 * 3600_000;
 
-const sessionAuth = (id: string, o: object) => {
-  const f = join(root, `acme/web/${id}.codex/auth.json`);
+const codexDir = (id: string) => join(root, `acme/web/${id}.codex`);
+const sessionAuth = (id: string, o: object, account = "a") => {
   mkdirSync(join(root, "acme/web", id), { recursive: true });
-  mkdirSync(join(root, `acme/web/${id}.codex`), { recursive: true });
+  mkdirSync(codexDir(id), { recursive: true });
+  if (account) writeFileSync(`${codexDir(id)}-account`, account);
+  const f = join(codexDir(id), "auth.json");
   writeFileSync(f, JSON.stringify(o), { mode: 0o600 });
   return f;
 };
+const OLD = { tokens: { access_token: "fake-old-at", refresh_token: "" } };
+const at = (f: string) => JSON.parse(readFileSync(f, "utf8")).tokens.access_token;
 
 test("refreshCodexCopy rewrites only a stale existing copy, keeping its agent_identity, mode 600, no refresh token", async () => {
   login(Date.now() + 5 * DAY);
   const { io } = fakeIo();
   const fresh = await codexLogin(io);
-  const stale = sessionAuth("gh-1", { tokens: { access_token: "fake-old-at", refresh_token: "" }, agent_identity: { id: "fake-agent" } });
-  expect(refreshCodexCopy(io, stale, fresh)).toBe(true);
+  const stale = sessionAuth("gh-1", { ...OLD, agent_identity: { id: "fake-agent" } });
+  expect(refreshCodexCopy(io, codexDir("gh-1"), fresh)).toBe(true);
   const o = JSON.parse(readFileSync(stale, "utf8"));
   expect(o).toEqual({ ...JSON.parse(fresh), agent_identity: { id: "fake-agent" } });
   expect(o.tokens.refresh_token).toBe("");
   expect(statSync(stale).mode & 0o777).toBe(0o600);
   expect(existsSync(`${stale}.tmp`)).toBe(false);
   utimesSync(stale, 1, 1);
-  expect(refreshCodexCopy(io, stale, fresh)).toBe(false);
+  expect(refreshCodexCopy(io, codexDir("gh-1"), fresh)).toBe(false);
   expect(statSync(stale).mtimeMs).toBe(1000);
-  const missing = join(root, "acme/web/gh-2.codex/auth.json");
-  expect(refreshCodexCopy(io, missing, fresh)).toBe(false);
-  expect(existsSync(missing)).toBe(false);
+  mkdirSync(codexDir("gh-2"), { recursive: true });
+  writeFileSync(`${codexDir("gh-2")}-account`, "a");
+  expect(refreshCodexCopy(io, codexDir("gh-2"), fresh)).toBe(false);
+  expect(existsSync(join(codexDir("gh-2"), "auth.json"))).toBe(false);
+  expect(refreshCodexCopy(io, codexDir("gh-9"), fresh)).toBe(false);
   writeFileSync(join(root, "target"), "host");
   symlinkSync(join(root, "target"), `${stale}.tmp`);
-  writeFileSync(stale, JSON.stringify({ tokens: { access_token: "fake-old-at" } }));
-  expect(refreshCodexCopy(io, stale, fresh)).toBe(true);
+  writeFileSync(stale, JSON.stringify(OLD));
+  expect(refreshCodexCopy(io, codexDir("gh-1"), fresh)).toBe(true);
   expect(readFileSync(join(root, "target"), "utf8")).toBe("host");
 });
 
-test("a pass refreshes stale session Codex copies from the template, never logging tokens; a failed refresh writes nothing and waits", async () => {
+test("refreshCodexCopy never reads through a symlink, hard link, FIFO or oversized file, nor a symlinked dir, and skips another account or no record", async () => {
   login(Date.now() + 5 * DAY);
-  const stale = sessionAuth("gh-1", { tokens: { access_token: "fake-old-at", refresh_token: "" } });
-  const run = (a: string[]) => (a[1] === "list-windows" ? windowsOut([]) : noPr(a));
+  const { io } = fakeIo();
+  const fresh = await codexLogin(io);
+  const host = join(root, "host-auth.json");
+  writeFileSync(host, JSON.stringify({ ...OLD, agent_identity: { private_key: "fake-host-key" } }));
+  const f = sessionAuth("gh-1", OLD);
+  rmSync(f);
+  symlinkSync(host, f);
+  expect(() => refreshCodexCopy(io, codexDir("gh-1"), fresh)).toThrow();
+  rmSync(f);
+  linkSync(host, f);
+  expect(() => refreshCodexCopy(io, codexDir("gh-1"), fresh)).toThrow("one link");
+  rmSync(f);
+  Bun.spawnSync(["mkfifo", f]);
+  expect(() => refreshCodexCopy(io, codexDir("gh-1"), fresh)).toThrow("regular file");
+  rmSync(f);
+  writeFileSync(f, "x".repeat(70 * 1024));
+  expect(() => refreshCodexCopy(io, codexDir("gh-1"), fresh)).toThrow("64 KiB");
+  expect(readFileSync(host, "utf8")).toContain("fake-host-key");
+  const g = sessionAuth("gh-2", OLD);
+  rmSync(codexDir("gh-2"), { recursive: true });
+  mkdirSync(join(root, "elsewhere"));
+  writeFileSync(join(root, "elsewhere/auth.json"), JSON.stringify(OLD));
+  symlinkSync(join(root, "elsewhere"), codexDir("gh-2"));
+  expect(() => refreshCodexCopy(io, codexDir("gh-2"), fresh)).toThrow();
+  expect(at(join(root, "elsewhere/auth.json"))).toBe("fake-old-at");
+  const other = sessionAuth("gh-3", OLD, "b");
+  const none = sessionAuth("gh-4", OLD, "");
+  expect(refreshCodexCopy(io, codexDir("gh-3"), fresh)).toBe(false);
+  expect(refreshCodexCopy(io, codexDir("gh-4"), fresh)).toBe(false);
+  expect([at(other), at(none), at(g)]).toEqual(["fake-old-at", "fake-old-at", "fake-old-at"]);
+});
+
+test("seedCodex records the login's account beside, not inside, the session's Codex dir", () => {
+  mkdirSync(join(root, ".codex-tender"), { recursive: true });
+  const dir = codexDir("gh-1");
+  seedCodex(fakeIo().io, dir, JSON.stringify({ tokens: { access_token: "fake", account_id: "acct" } }), "/r");
+  expect(readFileSync(`${dir}-account`, "utf8")).toBe("acct");
+  seedCodex(fakeIo().io, dir, undefined, "/r");
+  expect(existsSync(`${dir}-account`)).toBe(false);
+});
+
+test("a pass refreshes only live sessions' Codex copies, never logging tokens; a failed refresh writes nothing and waits an hour", async () => {
+  login(Date.now() + 5 * DAY);
+  const tpl = JSON.parse(readFileSync(join(root, CODEX_AUTH), "utf8")).tokens.access_token;
+  const live = sessionAuth("gh-1", OLD);
+  const ended = sessionAuth("gh-2", OLD);
+  const run = (a: string[]) => (a[1] === "list-windows" ? windowsOut(["acme/web/gh-1"]) : noPr(a));
   const ok = fakeIo(run);
   await pass(config(), ok.io, () => fakeTracker({}).tr, "/tender");
-  const at = jwt(Date.now() + 5 * DAY);
-  expect(JSON.parse(readFileSync(stale, "utf8")).tokens.access_token).toBe(at);
-  expect(ok.logs).toContain(`refreshed the Codex login in ${stale}`);
+  expect(at(live)).toBe(tpl);
+  expect(at(ended)).toBe("fake-old-at");
+  expect(ok.logs).toContain(`refreshed the Codex login in ${live}`);
   expect(ok.logs.join("\n")).not.toMatch(/fake-old-at|secret/);
-  expect(ok.logs.join("\n")).not.toContain(at);
+  expect(ok.logs.join("\n")).not.toContain(tpl);
   login(Date.now() + 3600_000);
-  writeFileSync(stale, JSON.stringify({ tokens: { access_token: "fake-old-at", refresh_token: "" } }));
+  writeFileSync(live, JSON.stringify(OLD));
   const bad = fakeIo((a) => (a[0] === "bash" ? { code: 1 } : run(a)));
   await pass(config(), bad.io, () => fakeTracker({}).tr, "/tender");
   await pass(config(), bad.io, () => fakeTracker({}).tr, "/tender");
-  expect(JSON.parse(readFileSync(stale, "utf8")).tokens.access_token).toBe("fake-old-at");
+  expect(at(live)).toBe("fake-old-at");
   expect(bad.cmds.filter((c) => c.startsWith("bash ")).length).toBe(1);
-  expect(bad.logs.filter((l) => l.startsWith("Codex login copies not refreshed: could not refresh")).length).toBe(1);
+  expect(bad.logs.filter((l) => l.startsWith("Codex login copies not refreshed")).length).toBe(1);
   expect(bad.logs.join("\n")).not.toMatch(/fake-old-at|secret/);
+  const later = Date.now;
+  Date.now = () => later() + 3601_000;
+  try {
+    await pass(config(), bad.io, () => fakeTracker({}).tr, "/tender");
+  } finally {
+    Date.now = later;
+  }
+  expect(bad.cmds.filter((c) => c.startsWith("bash ")).length).toBe(2);
+});
+
+test("an unreadable template login never aborts the pass", async () => {
+  login(Date.now() + 5 * DAY);
+  sessionAuth("gh-77", OLD);
+  chmodSync(join(root, CODEX_AUTH), 0);
+  const { io, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(["acme/web/gh-77"]) : noPr(a)));
+  try {
+    await pass(config(), io, () => fakeTracker({}).tr, "/tender");
+  } finally {
+    chmodSync(join(root, CODEX_AUTH), 0o600);
+  }
+  expect(logs.some((l) => l.includes("gh-77.source is not configured"))).toBe(true);
+  expect(logs.filter((l) => l.startsWith("Codex login copies not refreshed")).length).toBe(1);
 });
 
 test("a label's agent replaces the repo's whole agent config, so a switch to codex drops claude's model and effort; resume keeps the recorded one", async () => {

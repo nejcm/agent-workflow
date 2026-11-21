@@ -253,3 +253,17 @@ test("findPr skips fork PRs and PRs merged before the run started", async () => 
   const later = fakeIo(() => ({ out: JSON.stringify([pr(4, "MERGED", { mergedAt: new Date(Date.now() + 60_000).toISOString() })]) }));
   expect(await findPr("acme/web", "gh-1", later.io, root)).toBe(pr(4, "MERGED").url);
 });
+
+test("github adapter: defaultHost lists past 100 other-host tickets; at the 1000 cap it logs, or throws when complete", async () => {
+  let total = 150;
+  const issue = (i: number) => ({ number: i + 1, title: "t", body: "", url: "u", labels: [{ name: "agent" }, ...(i < 100 ? [{ name: "host:other" }] : [])] });
+  const { io, cmds, logs } = fakeIo((a) => (a[2] === "list" ? { out: JSON.stringify(Array.from({ length: Math.min(total, Number(a[a.indexOf("--limit") + 1])) }, (_, i) => issue(i))) } : undefined));
+  const tr = github(gh(), "box", io, true, ["acme/web"]);
+  expect((await tr.listReady()).map((t) => t.id)).toEqual(Array.from({ length: 50 }, (_, i) => `gh-${i + 101}`));
+  expect(cmds.filter((c) => c.startsWith("gh issue list"))).toHaveLength(1);
+  expect(logs).toEqual([]);
+  total = 5000;
+  expect(await tr.listReady()).toHaveLength(900);
+  expect(logs).toEqual(["repo acme/web: 1000 issues listed, the rest unknown"]);
+  await expect(tr.listInReview(true)).rejects.toThrow("repo acme/web: 1000 issues listed, the rest unknown");
+});

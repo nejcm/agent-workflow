@@ -47,7 +47,8 @@ export function projectRepo(claims: ProjectClaim[], team: string, p: { id: strin
 // A label inside a Linear label group is named `<group>:<name>`, so a `repo` group holding `owner/name` reads `repo:owner/name`.
 const labelNames = (c: any): string[] => (c?.nodes ?? []).map((x: any) => (x.parent?.name ? `${x.parent.name}:${x.name}` : x.name));
 
-export const LINEAR_ISSUES = `query($f: IssueFilter) { issues(filter: $f, first: 100) { nodes { id identifier title description url priority labels { nodes { name parent { name } } } project { id name } assignee { id name } } } }`;
+export const LINEAR_ISSUES = `query($f: IssueFilter, $after: String) { issues(filter: $f, first: 100, after: $after) { nodes { id identifier title description url priority labels { nodes { name parent { name } } } project { id name } assignee { id name } } pageInfo { hasNextPage endCursor } } }`;
+const LIST_PAGES = 10;
 
 export function linearTicket(i: any): Ticket {
   const labels = labelNames(i.labels);
@@ -91,9 +92,20 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
   const unrouted = new WeakSet<Ticket>();
   const list = async (state: string, labels: string[], complete = false): Promise<Ticket[]> => {
     const filter = { team: { key: { eq: l.team } }, state: { name: { eq: state } }, and: labels.map((n) => ({ labels: { some: { name: { eq: n } } } })) };
-    const d = await gql(LINEAR_ISSUES, { f: filter });
-    if (complete && d.issues.nodes.length >= 100) throw new Error(`linear ${l.team} ${state}: 100 issues listed, the rest unknown`);
-    const nodes = d.issues.nodes.filter((i: any) => /^[A-Z0-9]+-\d+$/.test(i.identifier));
+    const all: any[] = [];
+    let more = true;
+    for (let page = 0, after: string | null = null; more && page < LIST_PAGES; page++) {
+      const c: any = (await gql(LINEAR_ISSUES, { f: filter, after })).issues;
+      all.push(...c.nodes);
+      more = !!c.pageInfo?.hasNextPage;
+      after = c.pageInfo?.endCursor;
+    }
+    if (more) {
+      const msg = `linear ${l.team} ${state}: ${all.length} issues listed, the rest unknown`;
+      if (complete) throw new Error(msg);
+      io.log(msg);
+    }
+    const nodes = all.filter((i: any) => /^[A-Z0-9]+-\d+$/.test(i.identifier));
     return Promise.all(
       nodes.map(async (i: any) => {
         const t = linearTicket(i);

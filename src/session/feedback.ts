@@ -60,7 +60,7 @@ async function failedLog(io: Io, repo: string, run: string) {
 }
 
 /** Fields deliverFeedback reads beyond autoMerge's view. */
-export const feedbackFields = (r: Repo) => `,mergeStateStatus${r.feedbackAuthors.length ? ",reviews,comments" : ""}`;
+export const feedbackFields = (r: Repo) => (r.feedbackAuthors.length ? ",reviews,comments" : "");
 
 // The cursor is recorded first: a crash or failure after it loses the paste, never repeats it. Text never goes through keys.
 // True when nothing is left to deliver, false when feedback is pending or was just delivered, undefined when not checked.

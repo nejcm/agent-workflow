@@ -370,7 +370,7 @@ test("in review: gh calls per ticket per poll; feedback reuses auto-merge's view
     return x.cmds.filter((c) => c.startsWith("gh "));
   };
   const list = "gh pr list --repo acme/web --head agent/gh-1 --state all --json url,state,mergedAt,isCrossRepository";
-  const merge = "gh pr view 7 --repo acme/web --json number,url,state,isDraft,isCrossRepository,baseRefName,baseRefOid,mergeable,additions,deletions,changedFiles,statusCheckRollup,labels,headRefOid,reviewDecision,mergeStateStatus";
+  const merge = "gh pr view 7 --repo acme/web --json number,url,state,isDraft,isCrossRepository,baseRefName,baseRefOid,mergeable,additions,deletions,changedFiles,statusCheckRollup,labels,headRefOid,reviewDecision,mergeStateStatus,updatedAt";
   worktree("gh-1");
   // The first poll comments "not auto-merged" and so shares nothing; count the held polls after it.
   expect(await run("intelligent", [], true)).toHaveLength(4);
@@ -548,4 +548,35 @@ test("auto-merge pass: a held head comments again when its reason changes, once 
   facts = { ...facts, isDraft: true };
   await run();
   expect(calls).toEqual(["comment gh-1 not auto-merged: PR is a draft", "comment gh-1 not auto-merged: touches critical path package.json"]);
+});
+
+test("merge decision: zero checks wait until the head is old enough for CI to register; branch protection holds with a reason", () => {
+  const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+  const m = (pr: Partial<PrFacts>, s: object = {}) => mergeDecision(prFacts(pr), undefined, { ...smart, ...s });
+  for (const autoMerge of ["intelligent", "all"]) {
+    expect(m({ statusCheckRollup: [], updatedAt: ago(30_000) }, { autoMerge }).merge).toBe("wait");
+    expect(m({ statusCheckRollup: [], updatedAt: ago(180_000) }, { autoMerge }).merge).toBe(true);
+    expect(m({ updatedAt: ago(30_000) }, { autoMerge }).merge).toBe(true);
+    expect(m({ reviewDecision: "REVIEW_REQUIRED" }, { autoMerge })).toEqual({ merge: false, reason: "needs review" });
+    expect(m({ mergeStateStatus: "BLOCKED" }, { autoMerge })).toEqual({ merge: false, reason: "blocked by branch protection" });
+    expect(m({ mergeStateStatus: "BLOCKED", statusCheckRollup: [{ state: "PENDING" }] }, { autoMerge }).merge).toBe("wait");
+  }
+});
+
+test("auto-merge pass: a PR that needs review is commented once and never sent to gh pr merge", async () => {
+  const pr = { ...prFacts(), number: 7, url: "https://github.com/acme/web/pull/7", headRefOid: "a".repeat(40), reviewDecision: "REVIEW_REQUIRED", mergeStateStatus: "BLOCKED" };
+  const { tr, calls } = fakeTracker({ inReview: [ticket(1)] });
+  const { io, cmds } = fakeIo((a) =>
+    a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"OPEN"}]' }
+    : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(pr) }
+    : a[1] === "repo" && a[2] === "view" ? { out: JSON.stringify({ nameWithOwner: "acme/web", defaultBranchRef: { name: "main" } }) } : a[1] === "api" ? filesOut(pr) : undefined);
+  worktree("gh-1");
+  for (let i = 0; i < 2; i++) await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "all" }] }), io, () => tr, "/tender");
+  expect([calls, cmds.some((x) => x.startsWith("gh pr merge"))]).toEqual([["comment gh-1 not auto-merged: needs review"], false]);
+});
+
+test("merge decision: a fresh head that branch protection blocks before its required check registers waits silently", () => {
+  const pr = prFacts({ statusCheckRollup: [], updatedAt: new Date(Date.now() - 30_000).toISOString(), mergeStateStatus: "BLOCKED" });
+  expect(mergeDecision(pr, undefined, smart).merge).toBe("wait");
+  expect(mergeDecision(pr, undefined, { ...smart, autoMerge: "shadow" }).merge).toBe("wait");
 });

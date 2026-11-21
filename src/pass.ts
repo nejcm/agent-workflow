@@ -6,7 +6,7 @@ import { fileFindings } from "./review/findings";
 import { agentOf } from "./session/agents";
 import { baseBranch, canonical, findPr, sameRepo } from "./github";
 import { claim, cloned, handedOff, nonoRun, scopeUnit, start, stopSession, sweepScopes, windows, winName } from "./session/launcher";
-import { autoMerge, checkState, PR_FIELDS, prMode, prReady, viewPr } from "./review/merge";
+import { autoMerge, checkState, policyBlocked, PR_FIELDS, prMode, prReady, viewPr } from "./review/merge";
 import { syncPhases } from "./review/phases";
 import { agentPane, deliverAnswer, liveStates, syncQuestion } from "./session/question";
 import { combine, loadSession, parseRepoConfig } from "./config/repo-config";
@@ -222,7 +222,8 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
       // Fetched once per repo per pass, so a policy tightened on the base branch applies to PRs already in review.
       const fresh = r.autoMerge === "off" ? undefined : sessionOf(io, sessions, r);
       const ses = await fresh?.catch((e) => void io.log(`merge ${t.id} failed: ${e.message}`));
-      if (ses && prMode(ses) !== "off") await step(io, `merge ${t.id}`, async () => void (pr = await autoMerge(cfg, ses, w, tr, io, parked, share)));
+      let merging = false;
+      if (ses && prMode(ses) !== "off") await step(io, `merge ${t.id}`, async () => void ((pr = await autoMerge(cfg, ses, w, tr, io, parked, share)), (merging = !!pr && prMode(ses, pr.files) !== "off")));
       // Invalid .tender/ or a failed fetch: no decision or comment, but a PR merged by hand still moves the ticket.
       else if (fresh && !ses) await step(io, `merge ${t.id}`, async () => void (pr = await autoMerge(cfg, combine(r, await baseBranch(io, r), parseRepoConfig([])), w, tr, io, true)));
       // autoMerge looks the PR up anyway; otherwise every poll too, so a replaced PR reaches `<ID>.pr` (and feedback).
@@ -251,7 +252,9 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
         const name = winName(key, t.id);
         return now.has(name) ? Date.now() / 1000 - now.activity.get(name)! >= IDLE_SECS : now.listed;
       };
-      if (pr && tr.toReadyToMerge) await step(io, `ready ${t.id}`, () => syncReady(w, tr, io, dir, pr, clear, done));
+      // Auto-merge reports these as a hold; promoting too would post a second, contradicting verdict.
+      const promote = !(merging && policyBlocked(pr));
+      if (pr && tr.toReadyToMerge) await step(io, `ready ${t.id}`, () => syncReady(w, tr, io, dir, pr, clear, done, promote));
     }
   });
 }
@@ -270,7 +273,7 @@ export function readReady(f: string): ReadyMark | undefined {
 const writeReady = (io: Io, f: string, m: ReadyMark) => put(io, f, m.step === "moved" ? m.head : m.step === "demote" ? `${m.head} demote ${m.why}` : `${m.head} ${m.step}`);
 
 // Promoted from GitHub's view and tender's own state only.
-async function syncReady(t: Ticket, tr: Tracker, io: Io, dir: string, pr: any, clear: boolean | undefined, done: () => Promise<boolean>) {
+async function syncReady(t: Ticket, tr: Tracker, io: Io, dir: string, pr: any, clear: boolean | undefined, done: () => Promise<boolean>, promote: boolean) {
   const f = join(dir, `${t.id}.ready`);
   if (pr.state === "MERGED") return;
   const m = readReady(f);
@@ -284,6 +287,7 @@ async function syncReady(t: Ticket, tr: Tracker, io: Io, dir: string, pr: any, c
       : pr.mergeable === "CONFLICTING" ? "merge conflicts"
       : pr.statusCheckRollup.some((c: any) => checkState(c) === "failed") ? "a check failed"
       : pr.reviewDecision === "CHANGES_REQUESTED" ? "changes requested"
+      : !promote ? (pr.reviewDecision === "REVIEW_REQUIRED" ? "needs review" : "blocked by branch protection")
       : clear === false ? "new feedback"
       // A failed move back after delivered feedback: this poll finds nothing left to deliver.
       : m?.step === "demote" ? m.why
@@ -297,7 +301,7 @@ async function syncReady(t: Ticket, tr: Tracker, io: Io, dir: string, pr: any, c
   // Tender's own move back is marked `demote` first, so `moved` here means a human moved it back.
   if (m?.step === "held" && m.head === pr.headRefOid) return;
   if (m?.step === "moved" && m.head === pr.headRefOid) return writeReady(io, f, { head: m.head, step: "held" });
-  if (clear !== true || !prReady(pr) || !(await done())) return remove(io, f);
+  if (!promote || clear !== true || !prReady(pr) || !(await done())) return remove(io, f);
   // Before the move, so a move that lands without its comment still has a head to demote from.
   writeReady(io, f, { head: pr.headRefOid, step: "pending" });
   await tr.toReadyToMerge!(t, `ready to merge: ${pr.url}`);

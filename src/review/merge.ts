@@ -83,9 +83,13 @@ export interface PrFacts {
   statusCheckRollup: any[];
   labels: { name: string }[];
   reviewDecision?: string;
+  mergeStateStatus?: string;
+  updatedAt?: string;
 }
 
 const OPT_OUT = "no-automerge";
+// updatedAt moves on every push, so with zero checks it bounds how long CI had to register one.
+const CI_GRACE_MS = 2 * 60_000;
 
 // CheckRun has status + conclusion; StatusContext has state.
 export const checkState = (c: any) =>
@@ -109,6 +113,7 @@ export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Se
   const checks = pr.statusCheckRollup.map(checkState);
   const failed = checks.filter((x) => x === "failed").length;
   if (failed) return no(`${failed} check(s) failed`);
+  if (pr.reviewDecision === "REVIEW_REQUIRED") return no("needs review");
   const lines = pr.additions + pr.deletions;
   const tier = lines <= 150 && pr.changedFiles <= 5 ? "small" : lines <= 500 && pr.changedFiles <= 15 ? "medium" : "large";
   if (pr.files) {
@@ -133,6 +138,8 @@ export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Se
   }
   if (pr.hatch) return no(pr.hatch);
   if (pr.mergeable !== "MERGEABLE" || checks.includes("pending")) return { merge: "wait", reason: "checks pending or mergeability unknown" };
+  if (!checks.length && pr.updatedAt && Date.now() - Date.parse(pr.updatedAt) < CI_GRACE_MS) return { merge: "wait", reason: "no checks yet on a fresh head" };
+  if (pr.mergeStateStatus === "BLOCKED") return no("blocked by branch protection");
   return { merge: true, reason: mode === "all" ? "autoMerge all" : `${tier} change${a ? `; agent: ${a.reason}` : ""}` };
 }
 
@@ -140,7 +147,10 @@ export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Se
 export const prReady = (pr: PrFacts) =>
   pr.state === "OPEN" && !pr.isDraft && pr.mergeable === "MERGEABLE" && pr.reviewDecision !== "CHANGES_REQUESTED" && pr.statusCheckRollup.every((c) => ["success", "neutral"].includes(checkState(c)));
 
-export const PR_FIELDS = "number,url,state,isDraft,isCrossRepository,baseRefName,baseRefOid,mergeable,additions,deletions,changedFiles,statusCheckRollup,labels,headRefOid,reviewDecision";
+/** GitHub refuses the merge until a review or another branch rule is satisfied. */
+export const policyBlocked = (pr: PrFacts) => pr.reviewDecision === "REVIEW_REQUIRED" || pr.mergeStateStatus === "BLOCKED";
+
+export const PR_FIELDS = "number,url,state,isDraft,isCrossRepository,baseRefName,baseRefOid,mergeable,additions,deletions,changedFiles,statusCheckRollup,labels,headRefOid,reviewDecision,mergeStateStatus,updatedAt";
 
 // tender merges, pinned to the head it judged (the agent's token could too; see docs/auto-merge.md). "Not merged" is commented once per head SHA and reason.
 // With `share`, the first view also fetches `share.fields` and lands in `share.pr`, so feedback need not view the PR again.
@@ -179,7 +189,9 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
   pr.files = undefined;
   let d = mergeDecision(pr, a, r, t.labels);
   // File gates only refuse, so the files are fetched only when everything else would merge.
-  const fetch = d.merge === true && (prMode(r) !== "shadow" || !held);
+  // A policy hold also fetches them when trust could resolve the PR to off, so a human still gets it as Ready to merge.
+  const offPossible = rank(r.autoMerge) === 0 || r.trust.some((t) => t.autoMerge === "off");
+  const fetch = (d.merge === true || (policyBlocked(pr) && offPossible)) && (prMode(r) !== "shadow" || !held);
   if (fetch) {
     // REST, not `gh pr view --json files`: it has a rename's old path and is not capped at 100 files.
     const out = await read(io, ["gh", "api", "--paginate", `repos/${r.key}/pulls/${n}/files?per_page=100`, "--jq", ".[] | {filename, previous_filename, status, additions, deletions}"]);

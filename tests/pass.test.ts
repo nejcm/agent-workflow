@@ -1484,3 +1484,11 @@ test("the base fetch gets 15 min before a start and the 60 s default in a poll's
   expect(await fetches({ ready: [ticket(1)] })).toEqual([SLOW_SECS]);
   expect(await fetches({ inReview: [ticket(2)] })).toEqual([undefined]);
 });
+
+test("both nono profiles grant read on every template entry a session's config dir links to", () => {
+  for (const a of ["claude", "codex"]) {
+    const fs = JSON.parse(readFileSync(join(import.meta.dir, `../nono/tender-${a}.json`), "utf8")).filesystem;
+    expect(fs.read).toEqual(expect.arrayContaining(["$HOME/.claude-tender/skills", "$HOME/.claude-tender/plugins", "$HOME/.codex-tender/skills"]));
+    expect(fs.read_file).toEqual(expect.arrayContaining(["$HOME/.claude-tender/settings.json", "$HOME/.claude-tender/CLAUDE.md", "$HOME/.claude-tender/AGENTS.md", "$HOME/.codex-tender/AGENTS.md"]));
+  }
+});

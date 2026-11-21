@@ -150,9 +150,11 @@ export const prReady = (pr: PrFacts) =>
 /** GitHub refuses the merge until a review or another branch rule is satisfied. */
 export const policyBlocked = (pr: PrFacts) => pr.reviewDecision === "REVIEW_REQUIRED" || pr.mergeStateStatus === "BLOCKED";
 
+export const WOULD = "would ";
+
 export const PR_FIELDS = "number,url,state,isDraft,isCrossRepository,baseRefName,baseRefOid,mergeable,additions,deletions,changedFiles,statusCheckRollup,labels,headRefOid,reviewDecision,mergeStateStatus,updatedAt";
 
-// tender merges, pinned to the head it judged (the agent's token could too; see docs/auto-merge.md). "Not merged" is commented once per head SHA and reason.
+// tender merges, pinned to the head it judged (the agent's token could too; see docs/auto-merge.md). "Not merged" and shadow's verdict are commented once per head SHA and reason.
 // With `share`, the first view also fetches `share.fields` and lands in `share.pr`, so feedback need not view the PR again.
 // Returns that view unless tender merged, or tried to merge, the PR.
 export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker, io: Io, parked = false, share?: { fields: string; pr?: any }) {
@@ -167,7 +169,7 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
   };
   const pr = await view(PR_FIELDS + (share?.fields ?? ""));
   const f = join(dir, `${t.id}.merge`);
-  // Head SHA, then one JSON line per reason already commented on that head.
+  // Head SHA, then one JSON line per reason already commented on that head, `would `-prefixed for a shadow "would auto-merge", latest last.
   const marker = existsSync(f) ? readFileSync(f, "utf8").split("\n") : [];
   const held = marker[0] === pr.headRefOid;
   if (!held) remove(io, f);
@@ -191,7 +193,7 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
   // File gates only refuse, so the files are fetched only when everything else would merge.
   // A policy hold also fetches them when trust could resolve the PR to off, so a human still gets it as Ready to merge.
   const offPossible = rank(r.autoMerge) === 0 || r.trust.some((t) => t.autoMerge === "off");
-  const fetch = (d.merge === true || (policyBlocked(pr) && offPossible)) && (prMode(r) !== "shadow" || !held);
+  const fetch = d.merge === true || (policyBlocked(pr) && offPossible);
   if (fetch) {
     // REST, not `gh pr view --json files`: it has a rename's old path and is not capped at 100 files.
     const out = await read(io, ["gh", "api", "--paginate", `repos/${r.key}/pulls/${n}/files?per_page=100`, "--jq", ".[] | {filename, previous_filename, status, additions, deletions}"]);
@@ -203,7 +205,13 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
     }
   }
   const mode = prMode(r, pr.files);
-  if (d.merge === "wait" || (held && (mode === "shadow" || (!d.merge && (pr.state !== "OPEN" || marker.includes(JSON.stringify(d.reason))))))) {
+  const line = `${d.merge === true && mode === "shadow" ? WOULD : ""}${JSON.stringify(d.reason)}`;
+  const other = (l: string, i: number) => !i || (l.startsWith(WOULD) ? l.slice(WOULD.length) : l) !== JSON.stringify(d.reason);
+  const seen = held && !marker.every(other);
+  const gate = () => io.event?.("gate", r.key, t.id, { pr: pr.url, head: pr.headRefOid, mode, merge: d.merge, reason: d.reason });
+  if (d.merge === "wait" || (held && (mode === "shadow" ? seen : !d.merge && (pr.state !== "OPEN" || seen)))) {
+    // A verdict already commented on that comes back is not commented again, but status and stats follow it.
+    if (seen && marker.at(-1) !== line) put(io, f, [...marker.filter(other), line].join("\n")), gate();
     // Shared only when nothing was awaited since the view, so feedback never reads a stale one.
     if (share && !fetch) share.pr = pr;
     return pr;
@@ -230,7 +238,7 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
     return void io.event?.("done", r.key, t.id, { pr: pr.url }, pr.url);
   }
   const before = held ? marker : [pr.headRefOid];
-  put(io, f, [...before, JSON.stringify(d.reason)].join("\n"));
+  put(io, f, [...before, line].join("\n"));
   try {
     await tr.comment(t, `${d.merge ? "would auto-merge" : "not auto-merged"}: ${d.reason}`);
   } catch (e) {
@@ -238,7 +246,7 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
     else remove(io, f);
     throw e;
   }
-  io.event?.("gate", r.key, t.id, { pr: pr.url, head: pr.headRefOid, mode, merge: d.merge, reason: d.reason });
+  gate();
   return pr;
 }
 

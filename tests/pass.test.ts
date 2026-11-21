@@ -1257,7 +1257,8 @@ test("cleanup keeps work the session's own config or refs would hide: untracked 
   git(wt1, "config", "status.showUntrackedFiles", "no");
   writeFileSync(join(wt1, "new"), "x");
   git(wt2, "commit", "-q", "--allow-empty", "-m", "c");
-  git(wt2, "update-ref", "refs/remotes/origin/agent/gh-2", "HEAD");
+  git(wt2, "update-ref", "refs/remotes/origin/main", "HEAD");
+  git(wt2, "reset", "-q", "--hard", "HEAD^");
   git(wt3, "commit", "-q", "--allow-empty", "-m", "c");
   git(wt3, "switch", "-q", "--detach");
   git(wt3, "branch", "-f", "agent/gh-3", "origin/main");

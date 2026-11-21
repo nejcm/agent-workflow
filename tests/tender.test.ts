@@ -157,7 +157,7 @@ test("a second run or once on the same workspace is refused; the lock dies with 
 }, 15_000);
 
 test("spawnRun drops repository-local GIT_* variables", () => {
-  const script = `import { spawnRun } from "./tender"; console.log((await spawnRun(["sh", "-c", "echo \${GIT_DIR:-unset} \${GIT_INDEX_FILE:-unset} \${HOME:+home}"])).out.trim());`;
-  const r = Bun.spawnSync(["bun", "-e", script], { cwd: join(import.meta.dir, ".."), env: { ...process.env, GIT_DIR: "/x", GIT_INDEX_FILE: "/y" }, stdout: "pipe" });
-  expect(r.stdout.toString().trim()).toBe("unset unset home");
+  const script = `import { spawnRun } from "./tender"; console.log((await spawnRun(["sh", "-c", "echo \${GIT_DIR:-unset} \${GIT_INDEX_FILE:-unset} \${HOME:+home} \${GIT_CONFIG_COUNT:-unset}"])).out.trim());`;
+  const r = Bun.spawnSync(["bun", "-e", script], { cwd: join(import.meta.dir, ".."), env: { ...process.env, GIT_DIR: "/x", GIT_INDEX_FILE: "/y", GIT_CONFIG_COUNT: "1" }, stdout: "pipe" });
+  expect(r.stdout.toString().trim()).toBe("unset unset home 1");
 });

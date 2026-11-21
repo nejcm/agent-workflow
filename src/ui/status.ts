@@ -6,6 +6,7 @@ import { repoDir } from "../config/config";
 import { PR_URL } from "../github";
 import { handedOff, windows, winName } from "../session/launcher";
 import { IN_REVIEW_FILE, readReady, worktreeIds } from "../pass";
+import { WOULD } from "../review/merge";
 import { phaseProgress, type PhaseStatus } from "../review/phases";
 import { openQuestion } from "../session/question";
 import { resolve, type State } from "../session/state";
@@ -27,8 +28,8 @@ export interface Row {
   startedAt: number | null;
   phases: { done: number; total: number; items: PhaseItem[] } | null;
   pr: string | null;
-  /** "held": tender already commented on the PR's current head, refused or, in shadow, would merge (the `<ID>.merge` marker). */
-  merge: "held" | null;
+  /** tender's last auto-merge comment on the PR's head (the `<ID>.merge` marker): "would" in shadow would merge, "held" refused. */
+  merge: "would" | "held" | null;
   /** tender moved the ticket to Ready to merge (the `<ID>.ready` marker, once the move is confirmed). */
   ready: boolean;
   transcript: string | null;
@@ -46,6 +47,8 @@ function progress(dir: string, id: string) {
   const p = phaseProgress(dir, id);
   return p && { ...p, items: p.items.map((x) => ({ key: clean(x.key, 40), title: clean(x.title, 120), status: x.status })) };
 }
+
+const mergeMark = (f: string) => (existsSync(f) ? (readFileSync(f, "utf8").split("\n").at(-1)!.startsWith(WOULD) ? "would" : "held") : null);
 
 const MAX_PR_BYTES = 512;
 
@@ -83,7 +86,7 @@ export function rows(cfg: Config, wins: Map<string, string>, home = homedir(), n
         idleMs,
         phases: progress(dir, id),
         pr,
-        merge: existsSync(join(dir, `${id}.merge`)) ? "held" : null,
+        merge: mergeMark(join(dir, `${id}.merge`)),
         ready: readReady(join(dir, `${id}.ready`))?.step === "moved",
         transcript: t,
         window: session === "running" ? wins.get(winName(r.key, id)) ?? null : null,

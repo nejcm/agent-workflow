@@ -14,7 +14,7 @@ ready ticket ──► resolve its repo; not in `repos`, or GitHub redirects it 
 .tender/run/question.md changed  ──► comment "tender: question from agent: …"; first reply by a feedbackAuthor ──► .tender/run/answer.md + one line via .tender/run/inbox (Claude) or pasted (Codex), once idle
 PR for agent/<ID> exists ──► In Review + comment with the PR link
 .tender/run/findings.json (PR open) ──► each entry filed once as an unlabelled ticket + one "tender:" comment linking them
-in review, autoMerge on   ──► gh pr merge --squash --delete-branch, ticket Done; or one "tender: not auto-merged" comment per head SHA and reason (shadow: "tender: would auto-merge", never merges)
+in review, autoMerge on   ──► gh pr merge --squash --delete-branch, ticket Done; or one "tender: not auto-merged" comment per head SHA and reason (shadow: "tender: would auto-merge" or "not auto-merged" per head SHA and verdict, never merges)
 in review, window open   ──► feedbackAuthor PR comments, failed checks, conflicts ──► .tender/run/feedback.md + one line via .tender/run/inbox (Claude) or pasted (Codex), once idle
 in review, PR clean, no pane output for 5 min or window gone, nothing to deliver, not auto-merged ──► Ready to merge + comment; new commits, failed check, conflict or new feedback ──► back to In Review + comment
 session ended, no PR     ──► one comment "tender: session ended without a PR"

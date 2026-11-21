@@ -5,6 +5,7 @@ import { addedLines, ESCAPE_HATCHES, escapeHatch, hatchInWorker } from "../src/r
 import { type PrFacts, isCritical, isTest, mergeDecision, parseAssessment, prMode } from "../src/review/merge";
 import { openDb, recorder } from "../src/db";
 import { pass } from "../src/pass";
+import { rows } from "../src/ui/status";
 import { configCache } from "../src/config/repo-config";
 import { config, fakeIo, fakeTracker, repoFiles, root, ticket, useTempRoot, web, windowsOut, worktree } from "./helpers";
 
@@ -548,6 +549,34 @@ test("auto-merge pass: a held head comments again when its reason changes, once 
   facts = { ...facts, isDraft: true };
   await run();
   expect(calls).toEqual(["comment gh-1 not auto-merged: PR is a draft", "comment gh-1 not auto-merged: touches critical path package.json"]);
+});
+
+test("auto-merge pass: shadow comments again when the verdict flips on a held head, once per verdict", async () => {
+  let facts: any = { ...prFacts({ files: [file("src/a.ts")] }), number: 7, url: "https://github.com/acme/web/pull/7", baseRefOid: "f".repeat(40), headRefOid: "a".repeat(40) };
+  const respond = (a: string[]) => (a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"OPEN"}]' } : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(facts) } : a[1] === "api" ? filesOut(facts) : undefined);
+  const c = config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "shadow" }] });
+  worktree("gh-1");
+  const calls: string[] = [];
+  const merge: (string | null)[] = [];
+  const run = async () => {
+    const f = fakeTracker({ inReview: [ticket(1)] });
+    await pass(c, fakeIo(respond).io, () => f.tr, "/tender");
+    calls.push(...f.calls);
+    merge.push(rows(c, new Map(), root)[0]!.merge);
+  };
+  await run();
+  await run();
+  facts = { ...facts, isDraft: true };
+  await run();
+  await run();
+  facts = { ...facts, isDraft: false };
+  await run();
+  expect(calls).toEqual(["comment gh-1 would auto-merge: small change", "comment gh-1 not auto-merged: PR is a draft"]);
+  expect(merge).toEqual(["would", "would", "held", "held", "would"]);
+  // A marker written before verdicts were tagged is not commented again.
+  writeFileSync(join(root, "acme/web/gh-1.merge"), ["a".repeat(40), JSON.stringify("small change")].join("\n"));
+  await run();
+  expect(calls).toHaveLength(2);
 });
 
 test("merge decision: zero checks wait until the head is old enough for CI to register; branch protection holds with a reason", () => {

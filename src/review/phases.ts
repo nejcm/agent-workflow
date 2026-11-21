@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Io, Ticket, Tracker } from "../types";
-import { hasMarker, put, readRun } from "../util";
+import { put, readRun } from "../util";
 
 export type PhaseStatus = "todo" | "in-progress" | "done";
 export interface Phase {
@@ -14,6 +14,7 @@ const RANK: Record<PhaseStatus, number> = { todo: 0, "in-progress": 1, done: 2 }
 const MAX_PHASES = 20;
 const KEY = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const MARK = "tender-phase: ";
+const footer = (body: string) => body.trimEnd().split("\n").at(-1)!.trim();
 
 /** Validates the agent-written phases file; it is untrusted, so anything off throws. */
 export function parsePhases(raw: string): Phase[] {
@@ -78,11 +79,12 @@ export async function syncPhases(t: Ticket, tr: Tracker, io: Io, dir: string, fi
       if (Object.keys(synced).length >= MAX_PHASES) throw new Error(`phases: more than ${MAX_PHASES} created for ${t.id}`);
       const title = `${t.id}: ${p.title}`;
       const known = new Set(Object.values(synced).map((x) => x.ref));
-      // Adopt a sub-ticket created by a run that died before saving the sidecar instead of duplicating it.
-      // By key marker, so same-titled phases can't swap; by title only for one created before markers.
+      // Adopt a sub-ticket left by a lost sidecar write: by its footer key, else (made before footers) by title.
       const subs = (await tr.listPhases(t)).filter((x) => !known.has(x.ref));
-      const orphan = subs.find((x) => hasMarker(x.body, MARK + p.key)) ?? subs.find((x) => x.title === title && !x.body.split("\n").some((l) => l.trim().startsWith(MARK)));
-      const body = `${p.body}\n\n${MARK}${p.key}`.trimStart();
+      const marked = subs.filter((x) => footer(x.body) === MARK + p.key);
+      if (marked.length > 1) io.log(`phase ${t.id}/${p.key}: ${marked.length} sub-tickets claim it, adopting none`);
+      const orphan = marked.length ? marked.length === 1 ? marked[0] : undefined : subs.find((x) => x.title === title && !footer(x.body).startsWith(MARK));
+      const body = p.body ? `${p.body}\n\n${MARK}${p.key}` : MARK + p.key;
       s = synced[p.key] = { ref: orphan?.ref ?? (await tr.createPhase(t, title, body)), status: "todo" };
       save();
     }

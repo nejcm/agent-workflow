@@ -8,6 +8,9 @@ export function parseGitHub(r: Record<string, any>, at: string, check: Check) {
   return s;
 }
 
+// gh issue list pages by 100 itself, so a short listing stays one call.
+const LIST_CAP = 1000;
+
 export function github(l: GitHubSource, host: string, io: Io, defaultHost: boolean, repos: string[]): Tracker {
   const hostLabel = `host:${host}`;
   let login: Promise<string> | undefined;
@@ -27,7 +30,7 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
       const name = await canonical(io, repo);
       if (!name && complete) throw new Error(`repo ${repo}: lookup failed`);
       if (!name || !sameRepo(name, repo)) continue;
-      const argv = ["gh", "issue", "list", "--repo", repo, "--state", "open", "--limit", "100"];
+      const argv = ["gh", "issue", "list", "--repo", repo, "--state", "open", "--limit", String(LIST_CAP)];
       for (const x of labels) argv.push("--label", x);
       if (search) argv.push("--search", search);
       let issues: any[];
@@ -38,7 +41,11 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
         io.log(`repo ${repo}: issue list failed, skipped: ${(e as Error).message}`);
         continue;
       }
-      if (complete && issues.length >= 100) throw new Error(`repo ${repo}: 100 issues listed, the rest unknown`);
+      if (issues.length >= LIST_CAP) {
+        const msg = `repo ${repo}: ${LIST_CAP} issues listed, the rest unknown`;
+        if (complete) throw new Error(msg);
+        io.log(msg);
+      }
       for (const i of issues)
         if (Number.isInteger(i.number)) {
           const labels: string[] = (i.labels ?? []).map((x: any) => x.name);
@@ -58,7 +65,7 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
     globalIds: false,
     restartHint: () => `remove the ${l.inProgressLabel} label`,
     describe: () => "github (all repos)",
-    // Excluded server-side too: claimed tickets keep the ready label and would otherwise fill the 100 limit.
+    // Excluded server-side too: claimed tickets keep the ready label and would otherwise fill the list cap.
     listReady: async () => (await listMine([l.readyLabel], skip.map((x) => `-label:${JSON.stringify(x)}`).join(" "))).filter((t) => !skip.some((x) => hasLabel(t.labels, x))),
     listInProgress: () => listMine([l.readyLabel, l.inProgressLabel]),
     // A ticket with both labels counts as Ready to merge.

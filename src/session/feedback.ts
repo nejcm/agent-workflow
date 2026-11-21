@@ -34,6 +34,18 @@ export function prItems(pr: any, lines: any[]): Item[] {
   ];
 }
 
+/** A PR's line comments; past 10 pages it throws rather than return part of them. */
+export async function lineComments(io: Io, repo: string, n: string) {
+  const all: any[] = [];
+  for (let page = 1; page <= 11; page++) {
+    const got: any[] = JSON.parse(await read(io, ["gh", "api", `repos/${repo}/pulls/${n}/comments?per_page=100${page > 1 ? `&page=${page}` : ""}`]));
+    if (page > 10 && got.length) break;
+    all.push(...got);
+    if (got.length < 100) return all;
+  }
+  throw new Error(`${repo}#${n}: over 1000 line comments`);
+}
+
 const attr = (s: string) => s.replace(/[&"<]/g, (m) => ({ "&": "&amp;", '"': "&quot;", "<": "&lt;" })[m]!);
 const esc = (s: string) => (s.length > MAX_ITEM_CHARS ? `${s.slice(0, MAX_ITEM_CHARS)}\n[truncated]` : s).replace(/<\/(feedback|comment|log)/gi, "&lt;/$1");
 
@@ -67,8 +79,7 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
   const pr = share?.pr?.url === url && !saved.capped ? share.pr : JSON.parse(await read(io, ["gh", "pr", "view", n, "--repo", r.key, "--json", share ? PR_FIELDS + share.fields : `state,baseRefName,headRefOid,mergeStateStatus,statusCheckRollup${talk ? ",reviews,comments" : ""}`]));
   if (share) share.pr = pr;
   if (pr.state !== "OPEN") return;
-  // shortcut: first 100 line comments only; paginate if a PR ever gets more.
-  const lines = talk ? JSON.parse(await read(io, ["gh", "api", `repos/${r.key}/pulls/${n}/comments?per_page=100`])) : [];
+  const lines = talk ? await lineComments(io, r.key, n) : [];
   const ok = byOperator(r.feedbackAuthors);
   const items = prItems(pr, lines)
     .filter((c) => Date.parse(c.createdAt) > cur.seenAt && ok(c))

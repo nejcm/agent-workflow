@@ -491,3 +491,48 @@ test("linear adapter: intake markers match whole lines only; reopen drops the re
     expect(bodies.some((b) => b.query.includes("issueUpdate"))).toBe(false);
   });
 });
+
+test("linear adapter: defaultHost lists past 100 other-host tickets by cursor; at 10 pages it logs, or throws when complete", async () => {
+  const l = lin(config({ sources: [src({ tracker: "linear", team: "ENG" })] }));
+  const node = (n: number, other: boolean) => ({ id: `u${n}`, identifier: `ENG-${n}`, title: "t", description: null, url: "u", labels: { nodes: [{ name: "agent" }, ...(other ? [{ name: "host:other" }] : [])] } });
+  const afters: unknown[] = [];
+  let pages = 2;
+  const { io, logs } = fakeIo();
+  io.fetch = (async (_url: string, init: any) => {
+    const { query, variables } = JSON.parse(init.body);
+    if (!query.includes("issues(")) return Response.json({ data: { viewer: { id: "me" } } });
+    afters.push(variables.after);
+    const p = variables.after ? Number(variables.after.slice(1)) : 0;
+    const nodes = p + 1 < pages ? Array.from({ length: 100 }, (_, i) => node(p * 100 + i + 1, true)) : [node(p * 100 + 1, false)];
+    return Response.json({ data: { issues: { nodes, pageInfo: { hasNextPage: p + 1 < pages, endCursor: `p${p + 1}` } } } });
+  }) as any;
+  await withLinearKey(async () => {
+    const tr = linear(l, "box", io, true);
+    expect((await tr.listReady()).map((t) => t.id)).toEqual(["ENG-101"]);
+    expect(afters).toEqual([null, "p1"]);
+    expect(logs).toEqual([]);
+    afters.length = 0;
+    pages = 99;
+    expect(await tr.listReady()).toEqual([]);
+    expect(afters).toHaveLength(10);
+    expect(logs).toEqual(["linear ENG Todo: 1000 issues listed, the rest unknown"]);
+    await expect(tr.listInReview(true)).rejects.toThrow("linear ENG In Review: 1000 issues listed, the rest unknown");
+  });
+});
+
+test("linear adapter: a failed later page keeps the rows already listed when best-effort, throws when complete", async () => {
+  const l = lin(config({ sources: [src({ tracker: "linear", team: "ENG" })] }));
+  const { io, logs } = fakeIo();
+  io.fetch = (async (_url: string, init: any) => {
+    const { query, variables } = JSON.parse(init.body);
+    if (!query.includes("issues(")) return Response.json({ data: { viewer: { id: "me" } } });
+    if (variables.after) return Response.json({ errors: [{ message: "rate limited" }] }, { status: 429 });
+    return Response.json({ data: { issues: { nodes: [{ id: "u1", identifier: "ENG-1", labels: { nodes: [{ name: "agent" }] } }], pageInfo: { hasNextPage: true, endCursor: "p1" } } } });
+  }) as any;
+  await withLinearKey(async () => {
+    const tr = linear(l, "box", io, true);
+    expect((await tr.listReady()).map((t) => t.id)).toEqual(["ENG-1"]);
+    expect(logs[0]).toStartWith("linear ENG Todo: page 2 failed, 1 issues kept: linear 429");
+    await expect(tr.listInReview(true)).rejects.toThrow("linear 429");
+  });
+});

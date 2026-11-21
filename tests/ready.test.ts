@@ -400,12 +400,12 @@ test("maxInReview: a failed in-review listing starts nothing", async () => {
   expect(logs).toContain("[web] list in-review failed, so no new starts: down");
 });
 
-test("maxInReview: a github listing that failed, lost its repo lookup or filled its page is unknown, not short", async () => {
-  const page = JSON.stringify(Array.from({ length: 100 }, (_, i) => ({ number: i + 1, labels: [{ name: "host:other" }] })));
+test("maxInReview: a github listing that failed, lost its repo lookup or hit its cap is unknown, not short", async () => {
+  const page = JSON.stringify(Array.from({ length: 1000 }, (_, i) => ({ number: i + 1, labels: [{ name: "host:other" }] })));
   const cases: [string, (a: string[]) => { code?: number; out?: string } | undefined][] = [
     ["boom", (a) => (a[2] === "list" ? (a.includes("in-review") ? { code: 1 } : { out: "[]" }) : undefined)],
     ["lookup failed", (a) => (a[1] === "repo" ? { code: 1 } : undefined)],
-    ["100 issues listed", (a) => (a[2] === "list" ? { out: page } : undefined)],
+    ["1000 issues listed", (a) => (a[2] === "list" ? { out: page } : undefined)],
   ];
   for (const [err, respond] of cases) {
     canonCache.clear();
@@ -415,13 +415,20 @@ test("maxInReview: a github listing that failed, lost its repo lookup or filled 
   }
 });
 
-test("maxInReview: a linear listing that filled its page is unknown, not short", async () => {
+test("maxInReview: a linear listing that hit its page cap is unknown, not short", async () => {
   const { io } = fakeIo();
-  io.fetch = (async () => Response.json({ data: { issues: { nodes: Array.from({ length: 100 }, (_, i) => ({ id: `u${i}`, identifier: `ENG-${i + 1}`, labels: { nodes: [{ name: "host:other" }] } })) } } })) as any;
+  let pages = 11;
+  io.fetch = (async (_url: string, init: any) => {
+    const p = Number(JSON.parse(init.body).variables.after ?? 0);
+    const nodes = Array.from({ length: 100 }, (_, i) => ({ id: `u${p * 100 + i}`, identifier: `ENG-${p * 100 + i + 1}`, labels: { nodes: [{ name: "host:other" }] } }));
+    return Response.json({ data: { issues: { nodes, pageInfo: { hasNextPage: p + 1 < pages, endCursor: String(p + 1) } } } });
+  }) as any;
   await withLinearKey(async () => {
     const tr = linear(lin(config({ sources: [src({ tracker: "linear", team: "ENG" })] })), "box", io, true);
-    await expect(tr.listInReview(true)).rejects.toThrow("100 issues listed");
+    await expect(tr.listInReview(true)).rejects.toThrow("1000 issues listed");
     expect(await tr.listInReview()).toEqual([]);
+    pages = 10;
+    expect(await tr.listInReview(true)).toEqual([]);
   });
 });
 

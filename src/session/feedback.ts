@@ -26,11 +26,12 @@ export interface FeedbackCursor {
 type Item = TicketComment & { on?: string };
 
 /** Reviews with text (or changes requested), PR comments and line comments, as comments. */
+// A line comment keeps its draft time as created_at; updated_at moves to when its review is submitted (and on edit).
 export function prItems(pr: any, lines: any[]): Item[] {
   return [
     ...(pr.reviews ?? []).filter((r: any) => r.body?.trim() || r.state === "CHANGES_REQUESTED").map((r: any) => ({ id: String(r.id), body: r.body?.trim() || "(changes requested)", createdAt: r.submittedAt ?? "", author: r.author?.login })),
     ...(pr.comments ?? []).map((c: any) => ({ id: String(c.id), body: c.body ?? "", createdAt: c.createdAt ?? "", author: c.author?.login })),
-    ...lines.map((c: any) => ({ id: String(c.id), body: c.body ?? "", createdAt: c.created_at ?? "", author: c.user?.login, on: `${c.path}:${c.line ?? c.original_line}` })),
+    ...lines.map((c: any) => ({ id: String(c.id), body: c.body ?? "", createdAt: c.updated_at ?? c.created_at ?? "", author: c.user?.login, on: `${c.path}:${c.line ?? c.original_line}` })),
   ];
 }
 

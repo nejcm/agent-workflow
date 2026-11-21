@@ -260,3 +260,14 @@ test("feedback: line comments past 100 are read from the next page; past 1000 it
   total = 1001;
   await expect(lineComments(io, "acme/web", "7")).rejects.toThrow("acme/web#7: over 1000 line comments");
 });
+
+test("feedback: a line comment drafted before the cursor is sent when its review is submitted after it", async () => {
+  const d = setup();
+  d.pr.comments = [{ id: "c1", author: { login: "op" }, body: "rename foo", createdAt: ago(300_000) }];
+  await d.run();
+  expect(d.cursor().seenAt).toBe(Date.parse(d.pr.comments[0].createdAt));
+  d.lines([{ id: 9, user: { login: "op" }, body: "off by one", created_at: ago(400_000), updated_at: ago(180_000), path: "src/a.ts", line: 3 }]);
+  await d.run();
+  expect(d.file()).toContain('<comment from="op" on="src/a.ts:3">\noff by one\n</comment>');
+  expect(d.cursor().rounds).toBe(2);
+});

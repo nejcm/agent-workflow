@@ -67,8 +67,10 @@ export function launcher(l: Pick<Session, "agent" | "sandbox" | "path" | "model"
   // gh exits if it cannot read its config dir; <ID>.gh is never created, so gh runs on defaults plus nono's GH_TOKEN.
   // A private XDG cache: the host's ~/.cache (Claude's claude-cli-nodejs included) stays out of the sandbox.
   const box = nono ? `unset CLAUDE_CODE_OAUTH_TOKEN\nexport GH_CONFIG_DIR=${quote(wt)}.gh XDG_CACHE_HOME=${quote(join(tmp, "cache"))} TENDER_BUN=${quote(bun)}\n` : "";
-  const scope = ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--unit", quote(unit), "--"];
-  return `#!/usr/bin/env bash\ncd ${quote(wt)} || exit 1\nunset LINEAR_API_KEY\nexport TMPDIR=${quote(tmp)} TMP=${quote(tmp)} TEMP=${quote(tmp)}\n${box}${env}\nexec ${[...scope, ...wrap, ...cmd].join(" ")}\n`;
+  // systemd 258+ expands $$ and ${VAR} in a scope's argv (prompt, Stop hook); the flag exists only since 254.
+  const expand = `expand=$(systemd-run --help 2>/dev/null | grep -qe --expand-environment= && echo --expand-environment=no)\n`;
+  const scope = ["systemd-run", "--user", "--scope", "--quiet", "--collect", "$expand", "--unit", quote(unit), "--"];
+  return `#!/usr/bin/env bash\ncd ${quote(wt)} || exit 1\nunset LINEAR_API_KEY\nexport TMPDIR=${quote(tmp)} TMP=${quote(tmp)} TEMP=${quote(tmp)}\n${box}${env}\n${expand}exec ${[...scope, ...wrap, ...cmd].join(" ")}\n`;
 }
 
 /** Kills the session's scope, then its window, as for a canceled ticket; drops it from `wins`. */

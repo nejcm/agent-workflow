@@ -192,7 +192,6 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
   }
   const mode = prMode(r, pr.files);
   if (d.merge === "wait" || (held && (mode === "shadow" || (!d.merge && (pr.state !== "OPEN" || marker.includes(JSON.stringify(d.reason))))))) {
-    // A held head is commented again only for a new reason while the PR is open.
     // Shared only when nothing was awaited since the view, so feedback never reads a stale one.
     if (share && !fetch) share.pr = pr;
     return pr;

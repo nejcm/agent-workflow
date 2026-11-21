@@ -31,12 +31,16 @@ async function status(cfg: Config, io: Io) {
   ].join("\n");
 }
 
+// `git rev-parse --local-env-vars`: inherited, they would point every git call at another repository.
+const LOCAL_GIT = new Set(["GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE", "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_COMMON_DIR"]);
+
 // timeout signals its whole group and still fires if tender is killed. The drain bound covers what outlives it holding the pipes;
 // shortcut: a grandchild ignoring TERM keeps running (signalling after the reap could hit a reused group id).
 export const spawnRun: Run = async (argv, cwd, secs = 60, { env, max = Infinity } = {}) => {
   const start = performance.now();
   const cmd = argv.slice(0, 3).join(" ");
-  const p = Bun.spawn(["timeout", "-k", "5", String(secs), ...argv], { cwd, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const clean = Object.fromEntries(Object.entries(env ?? process.env).filter(([k]) => !LOCAL_GIT.has(k)));
+  const p = Bun.spawn(["timeout", "-k", "5", String(secs), ...argv], { cwd, env: clean, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const readers = [p.stdout.getReader(), p.stderr.getReader()];
   let over = false;
   const text = async (r: ReadableStreamDefaultReader<Uint8Array>) => {

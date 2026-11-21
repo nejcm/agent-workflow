@@ -333,7 +333,8 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
   const kib = Buffer.byteLength(text) / 1024;
   if (kib > MAX_PROMPT_KIB) throw new Error(`${id}: prompt is ${Math.ceil(kib)} KiB, over ${MAX_PROMPT_KIB} KiB`);
   const token = join(io.home, CLAUDE_TOKEN);
-  if (r.agent === "claude" && !nono && !existsSync(token)) throw new Error(`${token} is missing: run \`claude setup-token\` and save the token it prints there (chmod 600)`);
+  // An empty CLAUDE_CODE_OAUTH_TOKEN reads as unset, so the session would start logged out.
+  if (r.agent === "claude" && !nono && !(existsSync(token) && readFileSync(token, "utf8").trim())) throw new Error(`${token} is missing or empty: run \`claude setup-token\` and save the token it prints there (chmod 600)`);
   const warn = r.agent === "claude" && nono ? checkLogin(readLogin(io.home), Date.now()) : undefined;
   if (warn) io.log(warn);
   const bun = nono ? findBun([cfg.workspaceRoot]) : "";

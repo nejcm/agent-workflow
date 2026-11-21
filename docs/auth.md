@@ -15,7 +15,7 @@ claude setup-token   # prints the token; save it with:
 install -m 600 /dev/stdin ~/.claude-tender/oauth-token   # paste, then Ctrl-D
 ```
 
-The launch script reads it on the host and passes it as `CLAUDE_CODE_OAUTH_TOKEN`, so it never lands in the script, the prompt or the logs. An unsandboxed Claude start fails while the file is missing. Copying `.credentials.json` per ticket would not work: Claude rotates refresh tokens, so the copies would log each other out.
+The launch script reads it on the host and passes it as `CLAUDE_CODE_OAUTH_TOKEN`, so it never lands in the script, the prompt or the logs. An unsandboxed Claude start fails while the file is missing, empty or whitespace-only. Copying `.credentials.json` per ticket would not work: Claude rotates refresh tokens, so the copies would log each other out.
 
 Log Codex in; this login is separate from your own:
 

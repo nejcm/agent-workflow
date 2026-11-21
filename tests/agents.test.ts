@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { AGENTS, claudeDir, claudeSessions, codexHome, codexState, INBOX_HOOK, INBOX_WAITER, parseAgents, recordedAgent, recordedAgentConfig } from "../src/session/agents";
+import { AGENTS, CLAUDE_TOKEN, claudeDir, claudeSessions, codexHome, codexState, INBOX_HOOK, INBOX_WAITER, parseAgents, recordedAgent, recordedAgentConfig } from "../src/session/agents";
 import { root, session, useTempRoot } from "./helpers";
 
 useTempRoot();
@@ -141,6 +141,20 @@ test("launch passes model and effort as quoted words: claude --model/--effort, c
   expect(codex.slice(-7)).toEqual(["-m", "'gpt-5'", "-c", `'model_reasoning_effort="high"'`, "-C", "'/w'", "P"]);
   expect(AGENTS.codex.launch("'/w'", "P", false, {})).toEqual(AGENTS.codex.launch("'/w'", "P", false));
   expect(AGENTS.claude.launch("'/w'", "P", true, { model: "sonnet" })[1].slice(-3)).toEqual(["--model", "'sonnet'", "P"]);
+});
+
+test("an unsandboxed claude env exports the setup token from the host file, and exits before claude when it is unreadable", async () => {
+  const [env] = AGENTS.claude.launch("'/w'", "P", false);
+  const sh = async () => {
+    const p = Bun.spawn(["/bin/bash", "-c", `${env}\nprintf '%s|' "$CLAUDE_CODE_OAUTH_TOKEN"; printenv CLAUDE_CODE_OAUTH_TOKEN`], { env: { HOME: root, PATH: "/usr/bin:/bin" }, stdio: ["ignore", "pipe", "ignore"] });
+    return [await new Response(p.stdout).text(), await p.exited];
+  };
+  writeFileSync(join(root, CLAUDE_TOKEN), "fake-setup-token\n");
+  expect(await sh()).toEqual(["fake-setup-token|fake-setup-token\n", 0]);
+  rmSync(join(root, CLAUDE_TOKEN));
+  expect(await sh()).toEqual(["", 1]);
+  mkdirSync(join(root, CLAUDE_TOKEN));
+  expect(await sh()).toEqual(["", 1]);
 });
 
 test("recordedAgentConfig reads a plain name or JSON, and nothing invalid", () => {

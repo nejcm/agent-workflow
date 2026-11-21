@@ -221,13 +221,20 @@ test.if(realpathSync("/bin/sh").endsWith("bash"))("control: without -p, bash run
 });
 
 const lock = () => join(t, "home/.claude/.oauth_refresh.lock");
+const waited = () => join(t, "home/.claude/waited");
+const signalling = [...CAPTURE_COMMAND.slice(0, -1), CAPTURE_COMMAND.at(-1)!.replace("Bun.sleepSync(50)", 'Bun.sleepSync(50),f.writeFileSync(d+"waited","")')];
 
-test("capture waits while Claude holds its refresh lock, then reads the token saved under it", async () => {
-  mkdirSync(lock(), { recursive: true });
-  const start = performance.now();
-  setTimeout(() => (creds(join(t, "home"), JSON.stringify({ claudeAiOauth: oauth({ accessToken: TOKEN2 }) })), rmSync(lock(), { recursive: true })), 500);
-  expect(await capture(valid)).toEqual({ out: TOKEN2, err: "", code: 0, ran: false });
-  expect(performance.now() - start).toBeGreaterThan(450);
+test.each([
+  ["dir", () => mkdirSync(lock(), { recursive: true })],
+  ["file", () => file(lock(), "")],
+])("capture waits while Claude holds its refresh lock (a %s), then reads the token saved under it", async (_, hold) => {
+  expect(signalling).not.toEqual(CAPTURE_COMMAND);
+  hold();
+  const run = capture(valid, () => ({}), signalling);
+  while (!existsSync(waited())) await Bun.sleep(10);
+  creds(join(t, "home"), JSON.stringify({ claudeAiOauth: oauth({ accessToken: TOKEN2 }) }));
+  rmSync(lock(), { recursive: true });
+  expect(await run).toEqual({ out: TOKEN2, err: "", code: 0, ran: false });
 });
 
 test("capture reads anyway once a stuck refresh lock outlasts 3 s", async () => {
@@ -302,4 +309,16 @@ test("refresher stops spawning once the login reaches its time limit, and says s
   creds(home, login({ expiresAt: NOW - 1, refreshTokenExpiresAt: NOW + 86_400_000 }));
   await check();
   expect(calls()).toHaveLength(1);
+});
+
+test("refresher when another host Claude refreshed first: a refresh racing ours reads as ok, and the next tick spawns nothing", async () => {
+  const home = join(t, "home");
+  const logs: string[] = [];
+  creds(home, login({ expiresAt: NOW + 60_000 }));
+  // The resolver runs after the expiry read, so the other refresh lands between read and spawn.
+  const check = refresher(async () => (creds(home, login({ expiresAt: NOW + 8 * 3_600_000 })), fakeClaude(0)), home, (m) => logs.push(m), () => NOW);
+  await check();
+  await check();
+  expect(calls()).toHaveLength(1);
+  expect(logs).toEqual(["claude login refresh ok, exit 0"]);
 });

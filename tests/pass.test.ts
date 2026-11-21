@@ -377,14 +377,17 @@ test("seedCodex: the trust entry round-trips any path, keeps an existing one, an
   }
 });
 
-test("an unsandboxed claude start without the token file fails before the session clone, with the fix in the log", async () => {
-  rmSync(join(root, ".claude-tender/oauth-token"));
+test.each([
+  ["missing", () => rmSync(join(root, ".claude-tender/oauth-token"))],
+  ["empty", () => writeFileSync(join(root, ".claude-tender/oauth-token"), " \n")],
+])("an unsandboxed claude start with the token file %s fails before the session clone, with the fix in the log", async (_, breakToken) => {
+  breakToken();
   const { tr, calls } = fakeTracker({ ready: [ticket(1)] });
   const { io, cmds, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : noPr(a)));
   await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), sandbox: "none" }] }), io, () => tr, "/tender");
   expect(calls).toEqual([]);
   expect(cmds.filter((c) => / clone -q | worktree add | new-window /.test(c))).toEqual([]);
-  expect(logs.join("\n")).toContain(`${root}/.claude-tender/oauth-token is missing: run \`claude setup-token\``);
+  expect(logs.join("\n")).toContain(`${root}/.claude-tender/oauth-token is missing or empty: run \`claude setup-token\``);
 });
 
 test("a nono claude start needs the host login, not the token file; a near time limit only warns", async () => {

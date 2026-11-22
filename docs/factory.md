@@ -46,6 +46,7 @@ checks:
 services:
   db:
     image: postgres:17
+    environment: { POSTGRES_PASSWORD: tender }
     ports: ["127.0.0.1:${TENDER_PORT_1}:5432"]
 ```
 

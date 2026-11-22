@@ -10,20 +10,13 @@ export function parseLinear(r: Record<string, any>, at: string, check: Check) {
   return s;
 }
 
-const REPO_LINE = /^repo:[ \t]*(.*?)[ \t]*$/i;
-const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+const REPO_LINE = /^repo:[ \t]*([^\r\n]*?)[ \t\r]*$/im;
 
 const repoLabel = (labels: string[]) => labels.find((x) => /^repo:/i.test(x))?.slice(5).trim();
-// Linear stores descriptions as Markdown, so `my_repo` may arrive as `my\_repo`; escapes stay literal in a fenced block.
+// Linear stores Markdown, so `my_repo` may arrive as `my\_repo`; with a code fence anywhere, escapes may be literal, so keep them.
 function repoLine(t?: string | null) {
-  let fence = "";
-  for (const line of (t ?? "").split(/[\r\n\u2028\u2029]/)) {
-    const repo = REPO_LINE.exec(line)?.[1];
-    if (repo !== undefined) return fence ? repo : repo.replace(/\\([!-/:-@[-`{-~])/g, "$1");
-    const [, mark = "", rest = ""] = FENCE.exec(line) ?? [];
-    if (!fence) fence = mark;
-    else if (mark[0] === fence[0] && mark.length >= fence.length && !rest.trim()) fence = "";
-  }
+  const repo = REPO_LINE.exec(t ?? "")?.[1];
+  return repo === undefined || /```|~~~/.test(t!) ? repo : repo.replace(/\\([!-/:-@[-`{-~])/g, "$1");
 }
 
 /** Untrusted repo string named by the ticket itself: its `repo:` label, else the first `repo:` line of its description. */

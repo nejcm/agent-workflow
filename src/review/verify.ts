@@ -37,14 +37,12 @@ export const readVerified = (dir: string, id: string) => readFile(join(dir, `${i
 /** The recorded result when it is for this head under this contract, else undefined (never verified, stale head or changed contract). */
 export const verifiedAt = (v: Verified | undefined, head: string | undefined, c: Pick<VerifyContract, "digest"> | undefined) => (v && c && v.head === head && v.digest === c.digest ? v : undefined);
 
-// Its description is systemd-run's default, the command line, which ends with the run's <ID>.verify.
-const listUnit = async (cfg: Config, io: Io) => (await read(io, ["systemctl", "--user", "list-units", "--type=service", "--all", "--plain", "--no-legend", verifyUnit(cfg)])).split("\n").map((l) => l.trim().split(/\s+/)).find((f) => f[0] === verifyUnit(cfg));
-// Not listed once collected; listed as failed or inactive until then.
-const running = (f: string[] | undefined) => RUNNING.includes(f?.[2] ?? "inactive");
-
 /** Records finished runs and removes every `<ID>.verify` once the verifier is idle; true while it runs, throws if systemd cannot tell. */
 export async function reconcileVerify(cfg: Config, io: Io) {
-  if (running(await listUnit(cfg, io))) return true;
+  const out = await read(io, ["systemctl", "--user", "list-units", "--type=service", "--all", "--plain", "--no-legend", verifyUnit(cfg)]);
+  // Not listed once collected; listed as failed or inactive until then.
+  const st = out.split("\n").map((l) => l.trim().split(/\s+/)).find((f) => f[0] === verifyUnit(cfg))?.[2] ?? "inactive";
+  if (RUNNING.includes(st)) return true;
   for (const r of Object.values(cfg.repos)) {
     const dir = repoDir(cfg, r.key);
     for (const d of subdirs(dir)) {
@@ -68,8 +66,9 @@ export async function reconcileVerify(cfg: Config, io: Io) {
 
 /** Asks systemd to stop the workspace's verifier, only while it runs `vdir`, without waiting; the next reconcile sees it gone. */
 export async function stopVerify(cfg: Config, io: Io, vdir: string) {
-  const f = await listUnit(cfg, io);
-  if (!running(f) || f!.at(-1) !== vdir) return;
+  const out = await read(io, ["systemctl", "--user", "show", "--property=ActiveState,Description", verifyUnit(cfg)]);
+  const p = Object.fromEntries(out.split("\n").map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
+  if (!RUNNING.includes(p.ActiveState) || p.Description !== vdir) return;
   await write(io, ["systemctl", "--user", "stop", "--no-block", verifyUnit(cfg)]).catch((e) => {
     if (!/ not loaded\.$/.test(e.message)) throw e;
   });
@@ -93,7 +92,7 @@ export async function startVerify(cfg: Config, io: Io, r: Session, id: string, p
   verifier.busy = true;
   // A backstop only: each check has its own deadline, and stopping the unit kills everything a check left behind.
   const secs = c.checks.reduce((n, x) => n + x.timeout + 10, SLOW_SECS);
-  await write(io, ["systemd-run", "--user", "--quiet", "--collect", "--unit", verifyUnit(cfg), "-p", `RuntimeMaxSec=${secs}`, `--setenv=PATH=${process.env.PATH ?? "/usr/bin:/bin"}`, "--", process.execPath, join(tenderDir, "src/review/verify.ts"), vdir]);
+  await write(io, ["systemd-run", "--user", "--quiet", "--collect", "--unit", verifyUnit(cfg), `--description=${vdir}`, "-p", `RuntimeMaxSec=${secs}`, `--setenv=PATH=${process.env.PATH ?? "/usr/bin:/bin"}`, "--", process.execPath, join(tenderDir, "src/review/verify.ts"), vdir]);
   io.log(`verify ${r.key}/${id}: started at ${head.slice(0, 12)}`);
 }
 

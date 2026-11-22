@@ -85,12 +85,12 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
   if (share) share.pr = pr;
   if (pr.state !== "OPEN") return;
   const res = verify?.result;
-  const failure = res && !res.pass && res.head === pr.headRefOid && res.digest === verify.digest ? res : undefined;
-  const acts = failure && (win ? !cur.verifyShas?.includes(failure.head) : cur.endedSha !== failure.head);
-  // A park or a spent round outlasts the poll, so a contract pushed since the fetch must not decide it.
-  const current = acts && verify?.live && !(await verify.live()) ? undefined : failure;
+  const current = res && !res.pass && res.head === pr.headRefOid && res.digest === verify.digest ? res : undefined;
+  // A park or a spent round outlasts the poll, so a contract pushed since the fetch must not decide it; checked right before each.
+  const live = async () => !verify?.live || (await verify.live());
   // Nobody is left to fix it: delivered or not, it goes to a human now, ahead of comments and their debounce, once per head.
   if (!win && current && cur.endedSha !== current.head) {
+    if (!(await live())) return false;
     await tr.park(t);
     io.event?.("park", r.key, t.id, { why: "verify failed, session ended" });
     put(io, file, JSON.stringify({ ...cur, endedSha: current.head, capped: true } satisfies FeedbackCursor));
@@ -121,6 +121,7 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
   }
   const vCapped = !!vfail && (cur.verifyRounds ?? 0) >= verify!.maxRounds;
   if ((fb && cur.rounds >= r.feedbackRounds) || vCapped) {
+    if (vCapped && !(await live())) return false;
     // Label first: if adding it fails, this retries next poll instead of leaving a capped cursor that reads as resumed.
     await tr.park(t);
     io.event?.("park", r.key, t.id, { why: vCapped ? "verify rounds" : "feedback rounds" });
@@ -133,6 +134,7 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
   if (pane === undefined) return false;
   const runs = [...new Set(failed.map((c) => /\/actions\/runs\/(\d+)/.exec(c.detailsUrl ?? c.targetUrl ?? "")?.[1]).filter((x): x is string => !!x))].slice(0, MAX_RUNS);
   const logs = await Promise.all(runs.map((id) => failedLog(io, r.key, id)));
+  if (vfail && !(await live())) return false;
   put(io, file, JSON.stringify({ seenAt: newest ?? cur.seenAt, ciShas: failed.length ? [...(cur.ciShas ?? []), pr.headRefOid].slice(-10) : cur.ciShas, dirtyShas: dirty ? [...(cur.dirtyShas ?? []), pr.headRefOid].slice(-10) : cur.dirtyShas, rounds: cur.rounds + (fb ? 1 : 0), verifyRounds: (cur.verifyRounds ?? 0) + (vfail ? 1 : 0) || undefined, verifyShas, endedSha: cur.endedSha } satisfies FeedbackCursor));
   io.event?.("feedback-round", r.key, t.id, { round: cur.rounds + (fb ? 1 : 0), comments: items.length, failedChecks: failed.length, conflict: dirty, ...(vfail && { failedVerify: vfail.check, verifyRound: (cur.verifyRounds ?? 0) + 1 }) });
   const text = [

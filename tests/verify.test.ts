@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { type Entry, loadSession, parseRepoConfig } from "../src/config/repo-config";
 import { mergeDecision, type PrFacts } from "../src/review/merge";
-import { readVerified, reconcileVerify, runVerify, startVerify, verifiedAt, verifyUnit } from "../src/review/verify";
+import { readVerified, reconcileVerify, runVerify, startVerify, stopVerify, verifiedAt, verifyUnit } from "../src/review/verify";
 import { pass } from "../src/pass";
 import { Kept } from "../src/util";
 import { config, fakeIo, fakeTracker, repoFiles, root, setBaseSha, ticket, useTempRoot, web, windowsOut, worktree } from "./helpers";
@@ -94,7 +94,7 @@ test("scheduler: one detached systemd-run per pass at a fetched head equal to th
   const vdir = join(root, "acme/web/gh-1.verify");
   expect(d.cmds).toContain(`git -C ${root}/src-web fetch -q --no-tags origin refs/pull/7/head`);
   const runs = d.cmds.filter((x) => x.startsWith("systemd-run"));
-  expect(runs).toEqual([expect.stringMatching(new RegExp(`^systemd-run --user --quiet --collect --unit ${verifyUnit(d.c)} -p RuntimeMaxSec=1510 --setenv=PATH=.* -- \\S+ /tender/src/review/verify.ts ${vdir}$`))]);
+  expect(runs).toEqual([expect.stringMatching(new RegExp(`^systemd-run --user --quiet --collect --unit ${verifyUnit(d.c)} --description=${vdir} -p RuntimeMaxSec=1510 --setenv=PATH=.* -- \\S+ /tender/src/review/verify.ts ${vdir}$`))]);
   expect(JSON.parse(readFileSync(join(vdir, "job.json"), "utf8"))).toEqual({ base: `${root}/src-web`, head: "h", digest: sha(YAML), checks: s.verify!.checks, tenderDir: "/tender" });
   expect([v.busy, existsSync(join(root, "acme/web/gh-2.verify"))]).toEqual([true, false]);
   verified("gh-3", { head: "h", pass: false, check: "test", tail: "x" });
@@ -163,7 +163,10 @@ test("done: its own running verifier is stopped without waiting, another ticket'
   const { tr } = fakeTracker({ done: ["gh-5"] });
   let state = "active";
   let running = "gh-2";
-  const x = fakeIo((a) => (a[2] === "list-units" && a[3] === "--type=service" ? { out: `${verifyUnit(c)} loaded ${state} running [systemd-run] /bun /tender/src/review/verify.ts ${root}/acme/web/${running}.verify\n` } : undefined));
+  const x = fakeIo((a) =>
+    a[2] === "list-units" && a[3] === "--type=service" ? { out: `${verifyUnit(c)} loaded ${state} running x\n` }
+    : a[2] === "show" ? { out: `Description=${root}/acme/web/${running}.verify\nActiveState=${state}\n` }
+    : undefined);
   await pass(c, x.io, () => tr, "/tender");
   expect(x.cmds.some((l) => l.startsWith("systemctl --user stop"))).toBe(false);
   running = "gh-5";
@@ -195,6 +198,16 @@ test("runner: no host git or XDG config reaches a check; a huge failing output i
   await reconcileVerify(c, fakeIo().io);
   const v = readVerified(join(root, "acme/web"), "gh-1");
   expect(v && !v.pass && v.tail.endsWith("last line") && v.tail.length).toBe(8000);
+});
+
+test("stopVerify matches the run by the exact description tender gave it, also in a path with spaces", async () => {
+  const c = config();
+  const vdir = "/tmp/tender workspace/acme/web/gh-5.verify";
+  const x = fakeIo((a) => (a[2] === "show" ? { out: `Description=${vdir}\nActiveState=active\n` } : undefined));
+  await stopVerify(c, x.io, "/tmp/tender workspace/acme/web/gh-6.verify");
+  expect(x.cmds.some((l) => l.startsWith("systemctl --user stop"))).toBe(false);
+  await stopVerify(c, x.io, vdir);
+  expect(x.cmds).toContain(`systemctl --user stop --no-block ${verifyUnit(c)}`);
 });
 
 function inReview(o: { win?: boolean; maxRounds?: number; ready?: boolean; autoMerge?: string } = {}) {
@@ -314,6 +327,31 @@ test("a contract pushed since the poll's fetch never parks, spends a round or pr
   tip.sha = "a".repeat(40);
   await ready.run();
   expect(ready.calls).toEqual([`ready gh-1 ready to merge: ${URL}`]);
+  rmSync(join(root, "acme/web/gh-1.feedback"), { force: true });
+  verified("gh-1", { head: "a", pass: false, check: "test", tail: "x" });
+  const slow = inReview({ win: true });
+  slow.pr.statusCheckRollup = [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "FAILURE", detailsUrl: "https://github.com/acme/web/actions/runs/9/job/1" }];
+  tip = pin(slow);
+  tip.sha = "a".repeat(40);
+  const run = slow.io.run;
+  // The base moves while the CI log is fetched, after every earlier check passed.
+  slow.io.run = async (a, ...r) => (a[0] === "sh" && a[2]!.includes("gh run view") && (tip.sha = "f".repeat(40)), run(a, ...r));
+  await slow.run();
+  expect(existsSync(join(root, "acme/web/gh-1.feedback")) && slow.cursor().verifyRounds).toBeFalsy();
+  slow.io.run = run;
+  tip.sha = "a".repeat(40);
+  await slow.run();
+  expect(slow.cursor().verifyRounds).toBe(1);  const capped = inReview({ win: true, maxRounds: 1 });
+  // A new base commit, so its maxRounds is read rather than the cached contract's.
+  setBaseSha("d".repeat(40));
+  tip = pin(capped);
+  writeFileSync(join(root, "acme/web/gh-1.feedback"), JSON.stringify({ seenAt: 0, rounds: 0, verifyRounds: 1, verifyShas: ["z"] }));
+  verified("gh-1", { head: "a", digest: sha(`maxRounds: 1\n${YAML}`), pass: false, check: "test", tail: "x" });
+  await capped.run();
+  expect(capped.calls).toEqual([]);
+  tip.sha = "d".repeat(40);
+  await capped.run();
+  expect(capped.calls[0]).toBe("park gh-1");
 });
 
 test("ready to merge: a .tender/ that cannot be read holds it back", async () => {

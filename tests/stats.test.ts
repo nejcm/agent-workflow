@@ -163,7 +163,7 @@ test("stats: a failed listing or a renamed repo is reported, never fatal; nothin
   const r = await stats(cfg, io, { now: NOW });
   expect(r.repos[0]).toMatchObject({ repo: "acme/web", error: "gh pr list: nope", paths: [] });
   expect(statsTable(r)).toContain("acme/web: skipped, gh pr list: nope");
-  expect(cmds.every((c) => /^(gh (repo view|pr list)|git -C \S+ (rev-parse|ls-tree|cat-file|check-ignore))/.test(c))).toBe(true);
+  expect(cmds.every((c) => /^(gh (repo view|pr list)|git -C \S+ (rev-parse|ls-tree|cat-file))/.test(c))).toBe(true);
 });
 
 test("stats: PRs under several trust rules, one of them off, never get a recommendation", async () => {

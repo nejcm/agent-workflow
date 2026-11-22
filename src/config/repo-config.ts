@@ -206,15 +206,7 @@ export function dirEntries(dir: string, names = ["config.yaml", "verify.yaml"]):
 
 export const configCache = new Map<string, { sha: string; committed: Entry[]; own?: string; config?: RepoConfig; error?: string; logged?: boolean }>();
 
-/** A git-ignored `.tender/config.yaml` in the host's own checkout: personal, outside git, so no PR changes it. */
-async function personalConfig(io: Io, path: string) {
-  const r = await io.run([...GIT, "-C", path, "check-ignore", "-q", "--", ".tender/config.yaml"]);
-  if (r.code === 1) return [];
-  if (r.code !== 0) throw new Error(`git check-ignore .tender/config.yaml in ${path}: ${r.err.trim() || `exit ${r.code}`}`);
-  return dirEntries(path, ["config.yaml"]);
-}
-
-/** The repo's `.tender/` at `origin/<base>` in its clone, never a worktree, with a personal config.yaml when that commit has none; re-read when either changes. */
+/** The repo's `.tender/` at `origin/<base>` in its clone, never a worktree; when that commit has no config.yaml, the host checkout's own (personal: no PR writes it), re-read when it changes. */
 export async function repoConfig(io: Io, r: Repo, base: string) {
   const sha = (await read(io, [...GIT, "-C", r.path, "rev-parse", "--verify", `refs/remotes/origin/${base}^{commit}`])).trim();
   if (!/^[0-9a-f]{40,64}$/.test(sha)) throw new Error(`${r.key}: no origin/${base} in ${r.path}`);
@@ -222,7 +214,12 @@ export async function repoConfig(io: Io, r: Repo, base: string) {
   const committed = hit?.sha === sha ? hit.committed : await gitEntries(io, r.path, sha);
   // Fails closed: an unreadable personal file makes the config invalid rather than dropping its policy.
   let mine: Entry[] | Error = [];
-  if (!committed.some((e) => e.name === "config.yaml")) mine = await personalConfig(io, r.path).catch((e: Error) => e);
+  if (!committed.some((e) => e.name === "config.yaml"))
+    try {
+      mine = dirEntries(r.path, ["config.yaml"]);
+    } catch (e) {
+      mine = e as Error;
+    }
   const own = mine instanceof Error ? `error: ${mine.message}` : mine.length ? JSON.stringify(mine) : undefined;
   if (hit?.sha === sha && hit.own === own) return hit;
   let c: NonNullable<typeof hit>;

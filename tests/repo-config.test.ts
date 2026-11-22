@@ -251,14 +251,14 @@ test("gitEntries parses real git trees: symlinks and oversize files come back as
   expect((await gitEntries(io, repo, "HEAD")).map((e) => [e.name, e.regular, e.text])).toEqual([["config.yaml", true, "agent: codex\n"]]);
 });
 
-test("repoConfig reads a git-ignored config.yaml from the host's checkout when the base commit has none, and re-reads it when it changes", async () => {
+test("repoConfig reads the host checkout's config.yaml only when the base commit has none: missing is none, unreadable or invalid holds the repo", async () => {
   const repo = join(root, "own");
   const sh = (...a: string[]) => expect(Bun.spawnSync(a, { stdout: "pipe", stderr: "pipe" }).exitCode).toBe(0);
   const commit = (m: string) => (sh("git", "-C", repo, "add", "-A"), sh("git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", m), sh("git", "-C", repo, "update-ref", "refs/remotes/origin/main", "HEAD"));
+  const own = join(repo, ".tender/config.yaml");
   sh("git", "init", "-q", "-b", "main", repo);
   mkdirSync(join(repo, ".tender"));
   writeFileSync(join(repo, ".tender/verify.yaml"), "checks:\n  - { name: test, run: bun test }\n");
-  writeFileSync(join(repo, ".gitignore"), ".tender/config.yaml\n");
   commit("c");
   const { io } = fakeIo((x) => {
     if (x[0] !== "git") return;
@@ -266,33 +266,27 @@ test("repoConfig reads a git-ignored config.yaml from the host's checkout when t
     return { code: r.exitCode, out: r.stdout.toString() };
   });
   const r = config({ repos: [{ name: "acme/web", path: repo }] }).repos["acme/web"]!;
-  const read = async () => (await repoConfig(io, r, "main")).config;
-  expect((await read())?.agent).toBe("claude");
-  writeFileSync(join(repo, ".tender/config.yaml"), "agent: codex\ncriticalPaths: [src/**]\n");
-  expect(await read()).toMatchObject({ agent: "codex", criticalPaths: ["src/**"], verify: { checks: [{ name: "test" }] } });
-  writeFileSync(join(repo, ".tender/config.yaml"), "agent: claude\nautoMerge: shadow\n");
-  expect(await read()).toMatchObject({ agent: "claude", autoMerge: "shadow" });
-  writeFileSync(join(repo, ".gitignore"), "");
-  expect((await read())?.autoMerge).toBeUndefined();
-  writeFileSync(join(repo, ".gitignore"), ".tender/config.yaml\n");
+  const load = () => repoConfig(io, r, "main");
+  expect((await load()).config).toMatchObject({ agent: "claude", autoMerge: undefined, criticalPaths: [] });
+  writeFileSync(own, "autoMerge: shadow\ncriticalPaths: [prompts/**]\n");
+  expect((await load()).config).toMatchObject({ autoMerge: "shadow", criticalPaths: ["prompts/**"], verify: { checks: [{ name: "test" }] } });
+  writeFileSync(own, "autoMerge: [\n");
+  expect((await load()).config).toBeUndefined();
+  writeFileSync(own, "autoMerge: shadow\n");
+  chmodSync(own, 0);
+  expect(((c) => [c.config, c.error])(await load())).toEqual([undefined, expect.stringContaining("EACCES")]);
+  chmodSync(join(repo, ".tender"), 0);
+  expect(((c) => [c.config, c.error])(await load())).toEqual([undefined, expect.stringContaining("EACCES")]);
+  chmodSync(join(repo, ".tender"), 0o755);
+  chmodSync(own, 0o644);
+  expect((await load()).config?.autoMerge).toBe("shadow");
   sh("git", "-C", repo, "add", "-f", ".tender/config.yaml");
-  sh("git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "tracked");
-  sh("git", "-C", repo, "update-ref", "refs/remotes/origin/main", "HEAD");
-  writeFileSync(join(repo, ".tender/config.yaml"), "agent: codex\n");
-  writeFileSync(join(repo, ".tender/verify.yaml"), "x");
+  commit("tracked");
+  writeFileSync(own, "agent: codex\n");
   chmodSync(join(repo, ".tender/verify.yaml"), 0);
-  expect(await read()).toMatchObject({ agent: "claude", autoMerge: "shadow" });
-  sh("git", "-C", repo, "rm", "-q", "--cached", ".tender/config.yaml");
-  sh("git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "untracked");
-  sh("git", "-C", repo, "update-ref", "refs/remotes/origin/main", "HEAD");
-  expect(await read()).toMatchObject({ agent: "codex" });
-  chmodSync(join(repo, ".tender/config.yaml"), 0);
-  expect((await repoConfig(io, r, "main")).error).toContain("EACCES");
-  chmodSync(join(repo, ".tender/config.yaml"), 0o644);
-  expect((await read())?.agent).toBe("codex");
-  writeFileSync(join(repo, ".git/index"), "broken");
-  const broken = await repoConfig(io, r, "main");
-  expect([broken.config, broken.error]).toEqual([undefined, expect.stringContaining("git check-ignore .tender/config.yaml")]);
+  expect((await load()).config).toMatchObject({ agent: "claude", autoMerge: "shadow" });
+  chmodSync(own, 0);
+  expect((await load()).config).toMatchObject({ agent: "claude", autoMerge: "shadow" });
 });
 
 test("an invalid repo config starts nothing: logged once and commented once per base commit", async () => {

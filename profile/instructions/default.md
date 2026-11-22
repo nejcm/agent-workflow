@@ -14,9 +14,9 @@ Do these steps in order:
    {{verify}} and make them pass. Fix the code, not the tests: never skip, weaken or delete a test, or
    hard-code values to make one pass. If a test is wrong, fix it and say why in the PR body.
 4. Verify the change on the real surface it affects (CLI, API, UI). If the repo has a verification
-   skill (for example `.claude/skills/*verif*`), use it. Note what you ran and the result for the PR
-   body: the command and its output, not just "it works". If you could not verify beyond the tests, say
-   so there.
+   skill (`.agents/skills/verify-*/` or `.claude/skills/*verif*/`), use it. Note what you ran
+   and the result for the PR body: the command and its output, not just "it works". If you could not
+   verify beyond the tests, say so there.
 5. Review. Get an independent review of the diff from a model of a different family than yours. Give
    the reviewer the ticket and the diff, and ask it to check that every requirement is met and the risky
    cases are tested, and to skip style. Check each finding against the code and fix only the ones you

@@ -253,7 +253,7 @@ types:
 | `types[].instructions` | relative path to a `.md` file | required | resolved inside the profile, symlinks included; `..` or a path that leaves it is rejected |
 | `types[].agent` | like the repo's `agent` | the repo's `agent` | replaces the repo's `agent` whole, so a provider switch never keeps the repo's model or effort |
 | `types[].output` | `pr` | `pr` | |
-| `types[].needs` | `{ ports: 1-10, compose?: <path in the repo> }` | none | loopback TCP ports the session may listen on and connect to, as `TENDER_PORT_0`…, and a Compose file `tender` starts for it from the base commit, see [Ports and services](sandbox.md#ports-and-services) |
+| `types[].needs` | `{ ports: 1-10, compose?: <path in the repo> }` | none | TCP ports the session may listen on and connect to, as `TENDER_PORT_0`…, and a Compose file `tender` starts for it from the base commit; nono grants a port on every host, so the session (which holds `GH_TOKEN`) or a check's head code can reach that port anywhere, see [Ports and services](sandbox.md#ports-and-services) |
 
 The last type must be `default`, with no `match`: it takes every ticket no other type matches. A repo's own `types` replace a profile type of the same name in place and add new ones just before `default`; their `instructions` still name files in the host's profile, so a repo cannot point the agent at a file of its own. A type never changes a merge decision: those stay per repo. `tender` reads `types.yaml` at startup (restart it after editing, or after fixing an instruction file a repo's `types` names) and each instruction file when a ticket starts, refusing the start if the file was replaced by a symlink or moved under one since; it records the chosen type and file in `<ID>.type` for `tender watch`.
 

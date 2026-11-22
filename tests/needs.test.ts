@@ -5,7 +5,7 @@ import { loadSession, parseRepoConfig } from "../src/config/repo-config";
 import { pass } from "../src/pass";
 import { reconcileVerify, runVerify, startVerify, verifyUnit } from "../src/review/verify";
 import { launcher, scopeUnit } from "../src/session/launcher";
-import { allocatePorts, checkMappings, composeProject, portFree, requireLandlock } from "../src/session/needs";
+import { allocatePorts, checkMappings, checkSources, composeProject, portFree, requireLandlock } from "../src/session/needs";
 import type { AgentName, Config } from "../src/types";
 import { Kept } from "../src/util";
 import { check } from "../tender";
@@ -73,6 +73,12 @@ test("compose mappings: only 127.0.0.1 on an assigned port, and never the host's
     expect(() => checkMappings(mapping([...ports], extra), [20000, 20001])).toThrow(msg);
 });
 
+test("compose sources: a file that pulls in another is rejected, since only the declared one is critical", () => {
+  expect(() => checkSources("services:\n  a: { image: x, extends: { service: b } }\n  b: { image: x }\n")).not.toThrow();
+  expect(() => checkSources("include: [inc.yaml]\nservices:\n  a: { image: x }\n")).toThrow("include is not allowed");
+  expect(() => checkSources("services:\n  a: { extends: { file: inc.yaml, service: root } }\n")).toThrow("service a extends another file");
+});
+
 test("launcher: each assigned port is granted in nono and exported; services start on the host from `/` before the agent", () => {
   const c = config();
   const s = launcher(ses(c), "/ws/web/gh-1", "/ws/web/gh-1.prompt.md", scopeUnit(c, "acme/web", "gh-1"), "/tender", "/b/bun", [20001, 20002], "/ws/web/gh-1.compose");
@@ -137,8 +143,8 @@ test("verify: a check's services start from the base tree with a clean env, and 
     "docker compose -p p-verify down -v",
     `git -C ${root}/src-web archive --format=tar -o ${v.vdir}/compose/tree.tar ${"b".repeat(40)}`,
     `tar -x -f ${v.vdir}/compose/tree.tar -C ${tree}`,
-    `docker compose -p p-verify --project-directory ${tree} -f ${tree}/dev/compose.yaml config --format json`,
-    `docker compose -p p-verify --project-directory ${tree} -f ${tree}/dev/compose.yaml up -d --wait`,
+    `docker compose -p p-verify --project-directory ${tree} -f ${tree}/dev/compose.yaml --env-file /dev/null config --format json`,
+    `docker compose -p p-verify --project-directory ${tree} -f ${tree}/dev/compose.yaml --env-file /dev/null up -d --wait`,
   ]);
   const up = Object.entries(v.envs).find(([k]) => k.endsWith("up -d --wait"))![1]!;
   expect(Object.keys(up).sort()).toEqual(["HOME", "PATH", "TENDER_PORT_0", "TENDER_PORT_1", ...["DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "XDG_RUNTIME_DIR"].filter((k) => process.env[k])].sort());

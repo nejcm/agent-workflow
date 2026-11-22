@@ -99,6 +99,13 @@ export function checkMappings(json: string, ports: number[]) {
   }
 }
 
+/** Throws if the file pulls in another (`include`, `extends.file`): only the declared file is a critical path. */
+export function checkSources(yaml: string) {
+  const doc = Bun.YAML.parse(yaml) as Record<string, any> | null;
+  if (doc?.include !== undefined) throw new Error("compose: include is not allowed; keep the services in the declared file");
+  for (const [name, s] of Object.entries<any>(doc?.services ?? {})) if (s?.extends?.file !== undefined) throw new Error(`compose: service ${name} extends another file; keep the services in the declared file`);
+}
+
 /** Removes the project's containers, networks and volumes by name alone; a no-op when it has none. */
 export const composeDown = (io: Io, project: string) => compose(io, ["-p", project, "down", "-v"], 120);
 
@@ -114,7 +121,9 @@ export async function composeUp(io: Io, j: ComposeJob, dir: string, secs: number
   rmSync(tar, { force: true });
   const file = join(tree, j.file);
   if (!existsSync(file) || !realpathSync(file).startsWith(`${realpathSync(tree)}/`) || !statSync(file).isFile()) throw new Error(`compose: ${j.file} is not a file in ${j.sha.slice(0, 12)}`);
-  const f = ["-p", j.project, "--project-directory", tree, "-f", file];
+  checkSources(readFileSync(file, "utf8"));
+  // `--env-file /dev/null`: a committed `.env` is not critical, so it must not feed interpolation.
+  const f = ["-p", j.project, "--project-directory", tree, "-f", file, "--env-file", "/dev/null"];
   checkMappings(await compose(io, [...f, "config", "--format", "json"], 60, j.ports), j.ports);
   await compose(io, [...f, "up", "-d", "--wait"], secs, j.ports);
 }

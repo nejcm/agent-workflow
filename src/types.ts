@@ -50,7 +50,22 @@ export interface RepoConfig {
   tracker?: { linear?: { project: string; team?: string } };
   intake: IntakeRule[];
   feedbackRounds?: number;
+  /** `.tender/verify.yaml`; unset when the repo has none. */
+  verify?: VerifyContract;
   files: Record<string, string>;
+}
+
+export interface VerifyCheck {
+  name: string;
+  run: string;
+  timeout: number;
+  proof: string[];
+}
+/** `digest` is the file's sha256, so a changed contract invalidates a pass. */
+export interface VerifyContract {
+  checks: VerifyCheck[];
+  maxRounds: number;
+  digest: string;
 }
 
 /** One `intake` entry of a repo's `.tender/config.yaml`; durations are `<n>m|h|d`. */
@@ -77,8 +92,8 @@ export interface IntakeRule {
   judge?: { minWorth: number; minFixable: number };
 }
 
-/** Host and repo settings combined for one start or merge decision. */
-export type Session = Omit<Repo, "baseBranch"> & Omit<RepoConfig, "autoMerge"> & { baseBranch: string; ceiling: AutoMerge };
+/** Host and repo settings combined for one start or merge decision; `baseSha` is the origin/<base> commit `.tender/` was read at. */
+export type Session = Omit<Repo, "baseBranch"> & Omit<RepoConfig, "autoMerge"> & { baseBranch: string; ceiling: AutoMerge; baseSha?: string };
 
 export type AutoMerge = "off" | "shadow" | "intelligent" | "all";
 

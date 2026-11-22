@@ -1,9 +1,10 @@
+import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AUTO_MERGE, GLOB_RULES, INTAKE_NAME, validGlob } from "./config";
 import { baseBranch } from "../github";
 import { EFFORTS, MODEL } from "../session/agents";
-import type { AgentConfig, AgentName, AutoMerge, Check, IntakeRule, Io, PromptSet, PromptText, Repo, RepoConfig, Session } from "../types";
+import type { AgentConfig, AgentName, AutoMerge, Check, IntakeRule, Io, PromptSet, PromptText, Repo, RepoConfig, Session, VerifyContract } from "../types";
 import { GIT, hasLabel, read, TENDER_DIR, write } from "../util";
 
 const MAX_FILE = 64 * 1024;
@@ -23,7 +24,7 @@ export interface Entry {
   text?: string;
 }
 
-const wanted = (name: string) => name === "config.yaml" || (name.startsWith("prompts/") && PROMPT.test(name.slice(8)));
+const wanted = (name: string) => name === "config.yaml" || name === "verify.yaml" || (name.startsWith("prompts/") && PROMPT.test(name.slice(8)));
 
 /** Validates a repo's `.tender/config.yaml` and prompts; throws listing every problem. */
 export function parseRepoConfig(entries: Entry[]): RepoConfig {
@@ -33,6 +34,7 @@ export function parseRepoConfig(entries: Entry[]): RepoConfig {
   const obj = (v: unknown): v is Record<string, any> => !!v && typeof v === "object" && !Array.isArray(v);
   const files: Record<string, string> = {};
   let yaml: string | undefined;
+  let verify: string | undefined;
   for (const e of entries) {
     if (e.name === ".") errs.push(".tender: must be a directory");
     else if (e.name === "prompts/default.md") errs.push(`${e.name}: no longer replaces tender's prompt; move your changes into prompt.steps and prompt.append`);
@@ -40,6 +42,7 @@ export function parseRepoConfig(entries: Entry[]): RepoConfig {
     else if (!e.regular) errs.push(`${e.name}: must be a regular file`);
     else if (e.size > MAX_FILE || e.text === undefined) errs.push(`${e.name}: over 64 KiB`);
     else if (e.name === "config.yaml") yaml = e.text;
+    else if (e.name === "verify.yaml") verify = e.text;
     else files[e.name.slice(8)] = e.text;
   }
   let raw: any = {};
@@ -95,6 +98,7 @@ export function parseRepoConfig(entries: Entry[]): RepoConfig {
     tracker: raw.tracker,
     intake: parseIntake(raw.intake, check),
     feedbackRounds: obj(fb) ? fb.maxRounds : undefined,
+    verify: verify === undefined ? undefined : parseVerify(verify, check),
     files,
   };
   check(c.testCmd === undefined || str(c.testCmd), "testCmd: non-empty string");
@@ -130,6 +134,39 @@ export function parseRepoConfig(entries: Entry[]): RepoConfig {
   if (obj(lt)) check(lt.team === undefined || (str(lt.team) && /^[A-Z0-9]+$/.test(lt.team)), "tracker.linear.team: Linear team key, e.g. ENG");
   if (errs.length) throw new Error(errs.join("\n  "));
   return c;
+}
+
+// What `gh --attach` uploads.
+const PROOF = /\.(png|gif|jpe?g|webp|svg|mp4|mov|webm)$/i;
+
+function parseVerify(yaml: string, check: Check): VerifyContract {
+  const obj = (v: unknown): v is Record<string, any> => !!v && typeof v === "object" && !Array.isArray(v);
+  let raw: any;
+  try {
+    raw = Bun.YAML.parse(yaml);
+  } catch (e) {
+    check(false, `verify.yaml: ${(e as Error).message}`);
+  }
+  check(obj(raw), "verify.yaml: must be a mapping with checks and maxRounds");
+  const o: Record<string, any> = obj(raw) ? raw : {};
+  for (const k of Object.keys(o)) check(["checks", "maxRounds"].includes(k), `verify.${k}: unknown key`);
+  const maxRounds = o.maxRounds ?? 2;
+  check(Number.isInteger(maxRounds) && maxRounds >= 1 && maxRounds <= 10, "verify.maxRounds: integer 1-10");
+  check(Array.isArray(o.checks) && o.checks.length > 0 && o.checks.length <= 20, "verify.checks: list of 1-20 checks");
+  const checks = (Array.isArray(o.checks) ? o.checks : []).map((c: unknown, i: number) => {
+    const at = `verify.checks[${i}]${obj(c) && typeof c.name === "string" ? ` (${c.name})` : ""}`;
+    check(obj(c), `${at}: mapping`);
+    const x: Record<string, any> = obj(c) ? c : {};
+    for (const k of Object.keys(x)) check(["name", "run", "timeout", "proof"].includes(k), `${at}.${k}: unknown key`);
+    const v = { name: x.name, run: x.run, timeout: x.timeout ?? 600, proof: x.proof ?? [] };
+    check(typeof v.name === "string" && INTAKE_NAME.test(v.name), `${at}.name: required, [a-z0-9-]`);
+    check(typeof v.run === "string" && v.run.trim().length > 0 && v.run.length <= 4000 && !v.run.includes("\0"), `${at}.run: required, a shell command of at most 4000 chars`);
+    check(Number.isInteger(v.timeout) && v.timeout >= 1 && v.timeout <= 1800, `${at}.timeout: seconds, integer 1-1800`);
+    check(Array.isArray(v.proof) && v.proof.length <= 20 && v.proof.every((g: unknown) => validGlob(g) && PROOF.test(g)), `${at}.proof: at most 20 globs (${GLOB_RULES}) ending in .png, .gif, .jpg, .jpeg, .webp, .svg, .mp4, .mov or .webm`);
+    return v;
+  });
+  check(new Set(checks.map((c: { name: string }) => c.name)).size === checks.length, "verify.checks: names must be unique");
+  return { checks, maxRounds, digest: createHash("sha256").update(yaml).digest("hex") };
 }
 
 const INTAKE_KEYS = ["name", "run", "args", "every", "maxPerRun", "secrets", "network", "autoLabel", "labels", "recheck", "recheckAfter", "private", "loopback", "judge"];
@@ -199,7 +236,7 @@ export function promptFor(c: RepoConfig, labels: string[] = []) {
 export async function gitEntries(io: Io, path: string, sha: string): Promise<Entry[]> {
   const top = await read(io, [...GIT, "-C", path, "ls-tree", "-z", sha, "--", ".tender"]);
   if (top && !top.startsWith("040000 tree ")) return [{ name: ".", regular: false, size: 0 }];
-  const out = await read(io, [...GIT, "-C", path, "ls-tree", "-r", "-z", "--long", sha, "--", ".tender/config.yaml", ".tender/prompts"]);
+  const out = await read(io, [...GIT, "-C", path, "ls-tree", "-r", "-z", "--long", sha, "--", ".tender/config.yaml", ".tender/verify.yaml", ".tender/prompts"]);
   const entries: Entry[] = [];
   for (const line of out.split("\0").filter(Boolean)) {
     const m = /^(\d+) (\w+) ([0-9a-f]+) +(-|\d+)\t\.tender\/(.+)$/s.exec(line);
@@ -224,7 +261,7 @@ export function dirEntries(dir: string): Entry[] {
   };
   const prompts = lstatSync(join(dir, ".tender/prompts"), { throwIfNoEntry: false });
   const names = prompts?.isDirectory() ? readdirSync(join(dir, ".tender/prompts")).sort().map((n) => `prompts/${n}`) : prompts ? ["prompts"] : [];
-  return [...at("config.yaml"), ...names.flatMap((n) => (n === "prompts" ? [{ name: n, regular: false, size: 0 }] : at(n)))];
+  return [...at("config.yaml"), ...at("verify.yaml"), ...names.flatMap((n) => (n === "prompts" ? [{ name: n, regular: false, size: 0 }] : at(n)))];
 }
 
 export const configCache = new Map<string, { sha: string; config?: RepoConfig; error?: string; logged?: boolean }>();
@@ -254,12 +291,15 @@ export function combine(r: Repo, base: string, c: RepoConfig): Session {
   return { ...host, ...c, feedbackRounds: c.feedbackRounds ?? r.feedbackRounds, baseBranch: base, ceiling: r.autoMerge, criticalPaths: [...r.criticalPaths, ...c.criticalPaths], autoMerge: c.autoMerge !== undefined && rank(c.autoMerge) < rank(r.autoMerge) ? c.autoMerge : r.autoMerge };
 }
 
+/** Whether `origin/<base>` is still the commit `s` read `.tender/` at; a failed lookup throws. */
+export const atTip = async (io: Io, s: Session) => (await read(io, [...GIT, "-C", s.path, "ls-remote", "origin", `refs/heads/${s.baseBranch}`])).split("\t")[0] === s.baseSha;
+
 /** Fetches `origin/<base>` into the clone, then the settings there; undefined if the repo's config is invalid, logged once per commit. */
 export async function loadSession(io: Io, r: Repo, secs?: number): Promise<Session | undefined> {
   const base = await baseBranch(io, r);
   await write(io, [...GIT, "-C", r.path, "fetch", "origin", base], undefined, secs);
   const c = await repoConfig(io, r, base);
-  if (c.config) return combine(r, base, c.config);
+  if (c.config) return { ...combine(r, base, c.config), baseSha: c.sha };
   if (!c.logged) io.log(`${r.key}: .tender/ on ${base} at ${c.sha.slice(0, 12)} is invalid, so no tickets start:\n  ${c.error}`);
   c.logged = true;
 }

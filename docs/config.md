@@ -128,6 +128,8 @@ A key the source's tracker doesn't use (e.g. `team` on a GitHub source) is rejec
 ```
 .tender/
   config.yaml        # optional
+  verify.yaml        # optional verify contract, see below
+  checks/            # scripts verify.yaml runs, if any
   prompts/           # prompt text named by { file: <name>.md }
     verify.md
     bug.md
@@ -185,6 +187,30 @@ intake:
 | `tracker.linear.project` | Linear project name | none | the project whose tickets come here when they name no repo themselves, see [Which repo a ticket goes to](lifecycle.md#which-repo-a-ticket-goes-to) |
 | `tracker.linear.team` | team key `[A-Z0-9]+` | none | only checked: a ticket routed here from another team's source is logged once |
 | `intake` | list of rules, ≤ 20 | `[]` | see below |
+
+### Verify contract
+
+`.tender/verify.yaml`: the checks `tender` runs itself, sandboxed, on a PR's head before Ready to merge and auto-merge, see [Verify contract](auto-merge.md#verify-contract). Without it, medium and large changes never auto-merge.
+
+```yaml
+maxRounds: 2
+checks:
+  - name: test
+    run: bun test
+    timeout: 600
+  - name: e2e
+    run: bash .tender/checks/e2e.sh
+    proof: ["proof/*.png"]
+```
+
+| key | type | default | |
+|---|---|---|---|
+| `checks` | list of 1–20 `{ name, run, timeout, proof }` | required | run in order; the first failure stops the run |
+| `checks[].name` | `[a-z0-9][a-z0-9-]{0,31}`, unique | required | names the check in feedback and hold reasons |
+| `checks[].run` | string, ≤ 4000 chars | required | run with `sh -c` in the PR head's checkout, offline |
+| `checks[].timeout` | integer 1–1800 | `600` | seconds before the check is killed and fails |
+| `checks[].proof` | list of globs ending in `.png`, `.gif`, `.jpg`, `.jpeg`, `.webp`, `.svg`, `.mp4`, `.mov` or `.webm`, ≤ 20 | `[]` | validated only; not collected yet |
+| `maxRounds` | integer 1–10 | `2` | failed runs sent to the agent before the ticket is parked, counted apart from `feedback.maxRounds` |
 
 ### Intake rules
 

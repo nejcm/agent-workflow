@@ -130,6 +130,7 @@ const oid = (name: string) => Buffer.from(name).toString("hex").padEnd(40, "0");
 function gitTree(argv: string[]): { code?: number; out?: string; err?: string } | undefined {
   if (argv[0] !== "git") return;
   if (argv[3] === "rev-parse" && argv.at(-1)?.endsWith("^{commit}")) return { out: `${baseSha}\n` };
+  if (argv[3] === "ls-remote") return { out: `${baseSha}\t${argv.at(-1)}\n` };
   if (argv[3] === "ls-tree" && argv[4] !== "-r") return { out: Object.keys(repoFiles).length ? `040000 tree ${oid(".tender")}\t.tender\0` : "" };
   if (argv[3] === "ls-tree") return { out: Object.entries(repoFiles).map(([n, t]) => `100644 blob ${oid(n)} ${Buffer.byteLength(t)}\t.tender/${n}\0`).join("") };
   if (argv[3] === "cat-file") return { out: Object.entries(repoFiles).find(([n]) => oid(n) === argv[5])?.[1] };

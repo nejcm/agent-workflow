@@ -199,8 +199,8 @@ test("loadSession reads .tender/ at origin/<base> of the base clone, cached per 
   expect(git.every((x) => x.startsWith(`git -C ${root}/src-web `))).toBe(true);
   expect(git.slice(0, 2)).toEqual([`git -C ${root}/src-web fetch origin main`, `git -C ${root}/src-web rev-parse --verify refs/remotes/origin/main^{commit}`]);
   expect(git.filter((x) => x.includes(" ls-tree -r "))).toEqual([
-    `git -C ${root}/src-web ls-tree -r -z --long ${"a".repeat(40)} -- .tender/config.yaml .tender/prompts`,
-    `git -C ${root}/src-web ls-tree -r -z --long ${"b".repeat(40)} -- .tender/config.yaml .tender/prompts`,
+    `git -C ${root}/src-web ls-tree -r -z --long ${"a".repeat(40)} -- .tender/config.yaml .tender/verify.yaml .tender/prompts`,
+    `git -C ${root}/src-web ls-tree -r -z --long ${"b".repeat(40)} -- .tender/config.yaml .tender/verify.yaml .tender/prompts`,
   ]);
   expect(git).toContain(`git -C ${root}/src-web rev-parse --verify refs/remotes/origin/main^{commit}`);
   expect(cmds).toContain("gh repo view acme/web --json nameWithOwner,defaultBranchRef");

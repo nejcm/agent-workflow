@@ -8,8 +8,9 @@ import { baseBranch, canonical, findPr, sameRepo } from "./github";
 import { authStamp, claim, cloned, CODEX_AUTH, codexIdentity, codexLogin, codexRecorded, handedOff, nonoRun, refreshCodexCopy, scopeUnit, start, stopSession, sweepScopes, windows, winName } from "./session/launcher";
 import { autoMerge, checkState, policyBlocked, PR_FIELDS, prMode, prReady, viewPr } from "./review/merge";
 import { syncPhases } from "./review/phases";
+import { readVerified, reconcileVerify, startVerify, stopVerify, verifiedAt } from "./review/verify";
 import { agentPane, deliverAnswer, liveStates, syncQuestion } from "./session/question";
-import { combine, loadSession, parseRepoConfig } from "./config/repo-config";
+import { atTip, combine, loadSession, parseRepoConfig } from "./config/repo-config";
 import { lastSay, transcript } from "./ui/tail";
 import { type Adapter, TRACKERS } from "./trackers";
 import type { ProjectClaim } from "./trackers/linear";
@@ -182,7 +183,7 @@ async function stopReassigned(cfg: Config, tr: Tracker, io: Io, t: Ticket & { re
   }
 }
 
-async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins: Map<string, string>, state: ReturnType<typeof liveStates>, sessions: Map<string, Promise<Session | undefined>>) {
+async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins: Map<string, string>, state: ReturnType<typeof liveStates>, sessions: Map<string, Promise<Session | undefined>>, verifier: { busy?: boolean }, tenderDir: string) {
   await step(io, "list in-progress", async () => {
     for (const t of await tr.listInProgress())
       await step(io, `check ${t.id}`, async () => {
@@ -253,9 +254,14 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
       else
         await step(io, `pr ${t.id}`, async () => {
           const n = /\/pull\/(\d+)$/.exec((await findPr(key, t.id, io, dir)) ?? "")?.[1];
-          if (n && share) pr = share.pr = await viewPr(io, key, n, PR_FIELDS + share.fields);
+          // Parked in Ready to merge too, so a pushed head is judged against its verify result.
+          if (n && (share || w.readyToMerge)) pr = await viewPr(io, key, n, PR_FIELDS + (share?.fields ?? ""));
+          if (share) share.pr = pr;
         });
-      if (parked) continue;
+      if (parked) {
+        if (w.readyToMerge && tr.toReadyToMerge) await step(io, `ready ${t.id}`, async () => retryDemote(w, tr, io, dir, await sessionOf(io, sessions, r).catch(() => undefined), pr));
+        continue;
+      }
       // A view taken before an awaited comment or files call is stale; a closed PR is not found, so its recorded one is viewed.
       const prFile = join(dir, `${t.id}.pr`);
       const n = pr ? (pr !== share!.pr ? String(pr.number) : undefined) : w.readyToMerge && existsSync(prFile) ? /\/pull\/(\d+)$/.exec(readFileSync(prFile, "utf8"))?.[1] : undefined;
@@ -265,8 +271,10 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
       }
       let clear: boolean | undefined;
       // Loaded whatever the merge mode; an invalid config or failed fetch keeps the host's maxRounds.
-      const rounds = (await sessionOf(io, sessions, r).catch((e) => void (fresh || io.log(`feedback ${t.id}: .tender/ unavailable, using the host's feedback rounds: ${e.message}`))))?.feedbackRounds ?? r.feedbackRounds;
-      await step(io, `feedback ${t.id}`, async () => void (clear = await deliverFeedback({ ...r, feedbackRounds: rounds }, w, tr, io, dir, win, scopeUnit(cfg, key, t.id), () => state(dir, t.id), warned, share)));
+      const cur = await sessionOf(io, sessions, r).catch((e) => void (fresh || io.log(`feedback ${t.id}: .tender/ unavailable, using the host's feedback rounds: ${e.message}`)));
+      const rounds = cur?.feedbackRounds ?? r.feedbackRounds;
+      const verify = cur?.verify && { ...cur.verify, result: readVerified(dir, t.id), live: () => atTip(io, cur) };
+      await step(io, `feedback ${t.id}`, async () => void (clear = await deliverFeedback({ ...r, feedbackRounds: rounds }, w, tr, io, dir, win, scopeUnit(cfg, key, t.id), () => state(dir, t.id), warned, share, verify)));
       pr &&= share!.pr;
       // Never from the live state, which the session writes: ended is a listing without the window, idle is tmux's own output clock.
       // Listed again with its clock at the decision, since a pass can outlast IDLE_SECS.
@@ -275,9 +283,12 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
         const name = winName(key, t.id);
         return now.has(name) ? Date.now() / 1000 - now.activity.get(name)! >= IDLE_SECS : now.listed;
       };
+      if (pr && cur?.verify) await step(io, `verify ${t.id}`, () => startVerify(cfg, io, cur, t.id, pr, verifier, done, tenderDir));
+      const gate = verifyGate(cur, pr?.headRefOid, dir, t.id);
       // Auto-merge reports these as a hold; promoting too would post a second, contradicting verdict.
       const promote = !(merging && policyBlocked(pr));
-      if (pr && tr.toReadyToMerge) await step(io, `ready ${t.id}`, () => syncReady(w, tr, io, dir, pr, clear, done, promote));
+      // A contract pushed since the fetch may make that pass stale, and the move posts a comment.
+      if (pr && tr.toReadyToMerge) await step(io, `ready ${t.id}`, () => syncReady(w, tr, io, dir, pr, clear, async () => (await done()) && atTip(io, cur!), promote, gate));
     }
   });
 }
@@ -296,7 +307,7 @@ export function readReady(f: string): ReadyMark | undefined {
 const writeReady = (io: Io, f: string, m: ReadyMark) => put(io, f, m.step === "moved" ? m.head : m.step === "demote" ? `${m.head} demote ${m.why}` : `${m.head} ${m.step}`);
 
 // Promoted from GitHub's view and tender's own state only.
-async function syncReady(t: Ticket, tr: Tracker, io: Io, dir: string, pr: any, clear: boolean | undefined, done: () => Promise<boolean>, promote: boolean) {
+async function syncReady(t: Ticket, tr: Tracker, io: Io, dir: string, pr: any, clear: boolean | undefined, done: () => Promise<boolean>, promote: boolean, verify: Gate) {
   const f = join(dir, `${t.id}.ready`);
   if (pr.state === "MERGED") return;
   const m = readReady(f);
@@ -311,25 +322,53 @@ async function syncReady(t: Ticket, tr: Tracker, io: Io, dir: string, pr: any, c
       : pr.statusCheckRollup.some((c: any) => checkState(c) === "failed") ? "a check failed"
       : pr.reviewDecision === "CHANGES_REQUESTED" ? "changes requested"
       : !promote ? (pr.reviewDecision === "REVIEW_REQUIRED" ? "needs review" : "blocked by branch protection")
+      : verify === "fail" ? "verify failed"
+      : verify === "pending" ? "verify pending for this head"
       : clear === false ? "new feedback"
       // A failed move back after delivered feedback: this poll finds nothing left to deliver.
       : m?.step === "demote" ? m.why
       : undefined;
     if (!why) return void ((m?.step === "moved" && m.head === at) || writeReady(io, f, { head: at, step: "moved" }));
-    writeReady(io, f, { head: at, step: "demote", why });
-    await tr.toReview(t, `back in review, ${why}: ${pr.url}`);
-    io.event?.("review", t.repo!, t.id, { pr: pr.url, why });
-    return remove(io, f);
+    return demote(t, tr, io, f, at, why, pr.url);
   }
   // Tender's own move back is marked `demote` first, so `moved` here means a human moved it back.
   if (m?.step === "held" && m.head === pr.headRefOid) return;
   if (m?.step === "moved" && m.head === pr.headRefOid) return writeReady(io, f, { head: m.head, step: "held" });
-  if (!promote || clear !== true || !prReady(pr) || !(await done())) return remove(io, f);
+  if (!promote || verify !== "pass" || clear !== true || !prReady(pr) || !(await done())) return remove(io, f);
   // Before the move, so a move that lands without its comment still has a head to demote from.
   writeReady(io, f, { head: pr.headRefOid, step: "pending" });
   await tr.toReadyToMerge!(t, `ready to merge: ${pr.url}`);
   io.event?.("ready-to-merge", t.repo!, t.id, { pr: pr.url, head: pr.headRefOid });
   writeReady(io, f, { head: pr.headRefOid, step: "moved" });
+}
+
+type Gate = "pass" | "fail" | "pending" | "unknown";
+// Unknown while .tender/ cannot be read: Ready to merge then neither moves nor moves back.
+function verifyGate(cur: Session | undefined, head: string | undefined, dir: string, id: string): Gate {
+  if (!cur) return "unknown";
+  if (!cur.verify) return "pass";
+  const v = verifiedAt(readVerified(dir, id), head, cur.verify);
+  return !v ? "pending" : v.pass ? "pass" : "fail";
+}
+
+// Parking stops every other Ready to merge sync, so a move back that failed, or one the verify result calls for, happens here.
+async function retryDemote(t: Ticket, tr: Tracker, io: Io, dir: string, cur: Session | undefined, pr: any) {
+  const f = join(dir, `${t.id}.ready`);
+  const m = readReady(f);
+  // A failed view: the marker's head, else the last run's, stands in for the PR's.
+  const head = pr?.headRefOid ?? m?.head ?? readVerified(dir, t.id)?.head;
+  const gate = verifyGate(cur, head, dir, t.id);
+  const why = m?.step === "demote" ? m.why : gate === "fail" ? "verify failed" : gate === "pending" ? "verify pending for this head" : undefined;
+  if (!why) return;
+  await demote(t, tr, io, f, head ?? "", why, pr?.url ?? (existsSync(join(dir, `${t.id}.pr`)) ? readFileSync(join(dir, `${t.id}.pr`), "utf8") : ""));
+}
+
+// The reason is written first, so a move that fails is retried next poll.
+async function demote(t: Ticket, tr: Tracker, io: Io, f: string, head: string, why: string, url: string) {
+  writeReady(io, f, { head, step: "demote", why });
+  await tr.toReview(t, `back in review, ${why}: ${url}`);
+  io.event?.("review", t.repo!, t.id, { pr: url, why });
+  remove(io, f);
 }
 
 const IDLE_SECS = 5 * 60;
@@ -452,6 +491,9 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
   if (!wins.listed && !io.dry) return io.log("tmux windows unknown, so this pass is skipped");
   if (wins.listed) await step(io, "sweep scopes", () => sweepScopes(cfg, io));
   await refreshCodexCopies(cfg, io, wins);
+  // Before cleanup, so a done ticket's finished run is recorded before its files go; one start per pass at most.
+  const verifier: { busy?: boolean } = {};
+  await step(io, "verify", async () => void (verifier.busy = await reconcileVerify(cfg, io)));
 
   const lists = new Map<string, Promise<Ticket[]>>();
   const listReady = (x: { s: Source; io: Io; tr: Tracker }) => lists.get(x.s.name) ?? lists.set(x.s.name, x.tr.listReady().then((ts) => ts.filter((t) => !assignedElsewhere(x.io, t)))).get(x.s.name)!;
@@ -481,6 +523,11 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
         const w = wins.get(winName(r.key, id));
         if (end === "canceled" && !w && existsSync(join(dir, `${id}.ended`))) return;
         await stopSession(cfg, x.io, r.key, id, wins);
+        // Before anything is deleted or kept: systemd kills the run's cgroup and the next poll's reconcile removes <ID>.verify.
+        if (existsSync(join(dir, `${id}.verify`))) {
+          await stopVerify(cfg, x.io, join(dir, `${id}.verify`));
+          throw new Kept(`${r.key}/${id}: waiting for its verify run to stop`);
+        }
         if (end === "canceled") {
           if (existsSync(join(dir, `${id}.ended`))) return;
           put(x.io, join(dir, `${id}.ended`), new Date().toISOString());
@@ -546,7 +593,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
   }
   for (const { s, io: sio, tr } of srcs.values()) {
     try {
-      await reconcileSource(cfg, s, tr, sio, wins, state, sessions);
+      await reconcileSource(cfg, s, tr, sio, wins, state, sessions, verifier, tenderDir);
     } catch (e) {
       sio.log(`source failed: ${(e as Error).message}`);
     }

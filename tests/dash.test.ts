@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { action, attachCmd, exclusive, installed, openable, reduce, reselect, type View, watch } from "../src/ui/dash";
+import { action, attachCmd, exclusive, installed, openable, reduce, refreshed, reselect, type View, watch } from "../src/ui/dash";
 import { statusRow as row } from "./helpers";
 import { ticketTree, treeLayout } from "../src/ui/tree";
 
@@ -68,6 +68,17 @@ test("reselect follows the ticket across refreshes, else clamps", () => {
   expect(reselect("acme/web/C", rs, 0)).toBe(2);
   expect(reselect("acme/web/Z", rs, 7)).toBe(2);
   expect(reselect(undefined, [], 3)).toBe(0);
+});
+
+test("refresh keeps the selected ticket's scroll and tree, and resets both when it changes", () => {
+  const rs = [row({ id: "A" }), row({ id: "B" }), row({ id: "C" })];
+  const gone = refreshed(v({ sel: 1, back: 3 }), rs, [rs[0]!, rs[2]!]);
+  expect(gone.rs.map((r) => r.id)).toEqual(["A", "C"]);
+  expect(gone.view).toEqual(v({ sel: 1, back: 0 }));
+  expect(refreshed(v({ sel: 1, back: 3 }), rs, [row({ id: "0" }), ...rs]).view).toEqual(v({ sel: 2, back: 3 }));
+  const fewer = row({ id: "B", phases: { done: 0, total: 1, items: [{ key: "a", title: "Do a", status: "todo" }] } });
+  expect(refreshed(v({ sel: 1, tree: { sel: 3, detail: true } }), rs, [rs[0]!, fewer, rs[2]!]).view.tree).toEqual({ sel: 1, detail: true });
+  expect(refreshed(v({ sel: 1, tree: { sel: 2, detail: true } }), rs, [rs[0]!, rs[2]!]).view.tree).toEqual({ sel: 0, detail: false });
 });
 
 test("attach targets the window id, switches inside tmux and suspends outside", () => {

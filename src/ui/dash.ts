@@ -89,6 +89,16 @@ export function reselect(prev: string | undefined, next: Row[], sel: number) {
   return i >= 0 ? i : Math.max(0, Math.min(next.length - 1, sel));
 }
 
+/** `next` sorted and reselected; a changed ticket resets scroll and tree like a manual selection change. */
+export function refreshed(v: View, rs: Row[], next: Row[]): { rs: Row[]; view: View } {
+  const prev = key(rs[v.sel]);
+  const sorted = sortRows(next);
+  const sel = reselect(prev, sorted, v.sel);
+  const same = prev === key(sorted[sel]);
+  const tree = v.tree && (same ? { ...v.tree, sel: Math.min(v.tree.sel, sorted[sel]?.phases?.items.length ?? 0) } : { sel: 0, detail: false });
+  return { rs: sorted, view: { ...v, sel, tree, back: same ? v.back : 0 } };
+}
+
 /** tmux argv to show window `win` of `session`: a client switch inside tmux, else an attach the dashboard suspends for. */
 export function attachCmd(session: string, win: string | null, inTmux: boolean) {
   if (!win || !/^@\d+$/.test(win)) return undefined;
@@ -241,11 +251,7 @@ export async function dashboard(cfg: Config, io: Io, interval: number) {
   const refresh = exclusive(async () => {
     try {
       const next = await snapshot(cfg, io);
-      const prev = key(rs[view.sel]);
-      rs = sortRows(next);
-      const sel = reselect(prev, rs, view.sel);
-      const tree = view.tree ? { ...view.tree, sel: prev === key(rs[sel]) ? Math.min(view.tree.sel, rs[sel]?.phases?.items.length ?? 0) : 0 } : undefined;
-      view = { ...view, sel, tree };
+      ({ rs, view } = refreshed(view, rs, next));
       at = new Date().toTimeString().slice(0, 8);
       note = reviewLimit(cfg);
     } catch (e) {

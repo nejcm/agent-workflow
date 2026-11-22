@@ -63,6 +63,25 @@ test("collect: content must really be the type; HTML is not SVG, a bare ftyp or 
   expect(logs.filter((l) => l.includes("content is not")).length).toBe(4);
 });
 
+test("collect: SVG needs an svg root and rejects hostile preambles fast; WebM needs the header's DocType to be exactly webm", () => {
+  const clone = join(root, "clone");
+  const comments = "<!--a-->".repeat(8000);
+  put(join(clone, "s/wrapped.svg"), '<!--lead--><html><body><!--note--><svg xmlns="http://www.w3.org/2000/svg"/></body></html>');
+  put(join(clone, "s/hostile.svg"), comments + "<html>");
+  put(join(clone, "s/unclosed.svg"), "<!--" + "-".repeat(60_000));
+  put(join(clone, "s/bom.svg"), "\ufeff" + SVG);
+  put(join(clone, "s/long.svg"), `<!--${"x".repeat(5000)}-->\n<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "x.dtd">\n<svg/>`);
+  // An EBML Void element hiding a webm DocType inside a matroska header.
+  put(join(clone, "w/void.webm"), Buffer.from("1a45dfa3954282886d6174726f736b61ec874282847765626d", "hex"));
+  put(join(clone, "w/webmx.webm"), Buffer.from("1a45dfa3874282857765626d78", "hex"));
+  put(join(clone, "w/late.webm"), Buffer.from("1a45dfa38e4286810142f781014282847765626d", "hex"));
+  const t = performance.now();
+  const { b } = collect(clone, ["s/*.svg", "w/*.webm"]);
+  expect(performance.now() - t).toBeLessThan(200);
+  expect(b.files).toEqual(["e2e-1.svg", "e2e-2.svg", "e2e-3.webm"]);
+  expect(b.skipped).toBe(5);
+});
+
 test("collect: literal dirs match case-insensitively like the glob; each check gets its own copy of the same path", () => {
   const clone = join(root, "clone");
   put(join(clone, "shots/screen.png"), PNG);

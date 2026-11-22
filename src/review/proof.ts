@@ -14,16 +14,53 @@ const MAX_ENTRIES = 10_000;
 const UPLOAD_SECS = 300;
 
 const ascii = (b: Buffer, from: number, to: number) => b.toString("latin1", from, to);
+
+// Linear on purpose: a backtracking regex took seconds per hostile file, inside the verifier's deadline.
+function isSvg(b: Buffer) {
+  const s = b.toString("utf8", 0, 64 * 1024);
+  let i = 0;
+  for (let first = true; ; first = false) {
+    while (/\s/.test(s[i] ?? "")) i++;
+    if (s.startsWith("<svg", i)) return /[\s>/]/.test(s[i + 4] ?? "");
+    const end = s.startsWith("<!--", i) ? s.indexOf("-->", i + 4) + 3 : (first && s.startsWith("<?xml", i)) || s.startsWith("<!DOCTYPE svg", i) ? s.indexOf(">", i) + 1 : -1;
+    if (end <= i) return false;
+    i = end;
+  }
+}
+
+// An EBML vint at b[i] as [value, length]; ids keep their length marker, sizes drop it.
+function vint(b: Buffer, i: number, id: boolean): [number, number] {
+  const first = b[i] ?? 0;
+  const len = Math.clz32(first) - 23;
+  if (len > 8) return [-1, 1];
+  let v = id ? first : first & (0xff >> len);
+  for (let k = 1; k < len; k++) v = v * 256 + (b[i + k] ?? 0);
+  return [v, len];
+}
+
+function isWebm(b: Buffer) {
+  const [id, a] = vint(b, 0, true);
+  const [size, c] = vint(b, a, false);
+  if (id !== 0x1a45dfa3 || size < 0) return false;
+  for (let i = a + c, end = Math.min(i + size, b.length); i < end; ) {
+    const [eid, n] = vint(b, i, true);
+    const [len, m] = vint(b, i + n, false);
+    if (eid < 0 || len < 0) return false;
+    if (eid === 0x4282) return ascii(b, i + n + m, i + n + m + len) === "webm";
+    i += n + m + len;
+  }
+  return false;
+}
+
 const MEDIA: Record<string, (b: Buffer) => boolean> = {
   png: (b) => ascii(b, 0, 8) === "\x89PNG\r\n\x1a\n",
   jpg: (b) => ascii(b, 0, 3) === "\xff\xd8\xff",
   gif: (b) => /^GIF8[79]a$/.test(ascii(b, 0, 6)),
   webp: (b) => ascii(b, 0, 4) === "RIFF" && ascii(b, 8, 12) === "WEBP",
-  // The root element must be <svg>: only an XML declaration, comments and a doctype may come before it.
-  svg: (b) => /^\s*(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*|<!DOCTYPE svg[^>]*>\s*)*<svg[\s>/]/.test(b.toString("utf8", 0, 4096)),
+  svg: isSvg,
   mp4: (b) => ascii(b, 4, 8) === "ftyp" && /^(iso[m2-9]|mp4[12]|avc1|dash|M4VP?|mmp4|MSNV)$/.test(ascii(b, 8, 12).trimEnd()),
   mov: (b) => ascii(b, 4, 12) === "ftypqt  ",
-  webm: (b) => ascii(b, 0, 4) === "\x1a\x45\xdf\xa3" && /\x42\x82[\x81-\x88]webm/.test(ascii(b, 4, 64)),
+  webm: isWebm,
 };
 const kind = (name: string) => name.toLowerCase().replace(/^.*\./, "").replace(/^jpeg$/, "jpg");
 

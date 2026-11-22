@@ -92,7 +92,7 @@ Same steps on the VM (Tailscale for access), except: run `scripts/setup.sh --san
 
 ## First-run checklist
 
-Prove the sandbox boundaries on a throwaway repo first.
+Prove the sandbox boundaries on a throwaway repo first. Not yet exercised live, so try them there too: Linear, auto-merge (`shadow` included), an SSH `origin`, a model turn with the `setup-token` token, and failed checks outside GitHub Actions.
 
 - [ ] Inside a sandboxed session, `cat ~/.ssh/id_*`, `ls ~/Work/<other-repo>`, `ls ~/.config` fail.
 - [ ] Writing `~/.claude/CLAUDE.md`, `~/.claude/settings.json` or anything in `~/.claude-tender` fails, and so does reading `~/.claude/.credentials.json`; your CLAUDE.md, AGENTS.md and skills load.

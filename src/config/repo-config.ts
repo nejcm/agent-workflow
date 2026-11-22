@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { AUTO_MERGE, GLOB_RULES, INTAKE_NAME, validGlob } from "./config";
 import { agentConfig, defaultProfile, mergeTypes, parseTypes } from "./profile";
@@ -168,7 +168,11 @@ function parseIntake(raw: unknown, check: Check): IntakeRule[] {
 }
 
 /** The prompt template for a ticket of type `t`: tender's header, the type's instruction file, then tender's protocol. */
-export const promptFor = (t: TaskType) => [join(TENDER_DIR, "prompts/header.md"), t.instructions, join(TENDER_DIR, "prompts/protocol.md")].map((f) => readFileSync(f, "utf8").trim()).join("\n\n") + "\n";
+export function promptFor(t: TaskType) {
+  // Stored as a realpath inside the profile, so an unchanged realpath means no symlink was swapped in since.
+  if (realpathSync(t.instructions) !== t.instructions || !statSync(t.instructions).isFile()) throw new Error(`${t.instructions}: changed since the profile was read; restore it or restart tender`);
+  return [join(TENDER_DIR, "prompts/header.md"), t.instructions, join(TENDER_DIR, "prompts/protocol.md")].map((f) => readFileSync(f, "utf8").trim()).join("\n\n") + "\n";
+}
 
 /** `.tender/` entries at commit `sha` of the clone at `path`. */
 export async function gitEntries(io: Io, path: string, sha: string): Promise<Entry[]> {
@@ -200,20 +204,29 @@ export function dirEntries(dir: string): Entry[] {
   return [...at("config.yaml"), ...at("verify.yaml")];
 }
 
-export const configCache = new Map<string, { sha: string; config?: RepoConfig; error?: string; logged?: boolean }>();
+export const configCache = new Map<string, { sha: string; own?: string; config?: RepoConfig; error?: string; logged?: boolean }>();
 
-/** The repo's `.tender/` at `origin/<base>` in its clone, never a worktree; re-read only when that commit moves. */
+/** A git-ignored `.tender/config.yaml` in the host's own checkout: personal, outside git, so no PR changes it. */
+async function personalConfig(io: Io, path: string) {
+  const ignored = (await io.run([...GIT, "-C", path, "check-ignore", "--", ".tender/config.yaml"])).out.trim() === ".tender/config.yaml";
+  return ignored ? dirEntries(path).find((e) => e.name === "config.yaml") : undefined;
+}
+
+/** The repo's `.tender/` at `origin/<base>` in its clone, never a worktree, with a personal config.yaml when that commit has none; re-read when either changes. */
 export async function repoConfig(io: Io, r: Repo, base: string) {
   const sha = (await read(io, [...GIT, "-C", r.path, "rev-parse", "--verify", `refs/remotes/origin/${base}^{commit}`])).trim();
   if (!/^[0-9a-f]{40,64}$/.test(sha)) throw new Error(`${r.key}: no origin/${base} in ${r.path}`);
+  const mine = await personalConfig(io, r.path);
+  const own = mine && JSON.stringify(mine);
   const hit = configCache.get(r.key);
-  if (hit?.sha === sha) return hit;
-  const entries = await gitEntries(io, r.path, sha);
+  if (hit?.sha === sha && hit.own === own) return hit;
+  const committed = await gitEntries(io, r.path, sha);
+  const entries = mine && !committed.some((e) => e.name === "config.yaml") ? [...committed, mine] : committed;
   let c: NonNullable<typeof hit>;
   try {
-    c = { sha, config: parseRepoConfig(entries, r.profile) };
+    c = { sha, own, config: parseRepoConfig(entries, r.profile) };
   } catch (e) {
-    c = { sha, error: (e as Error).message };
+    c = { sha, own, error: (e as Error).message };
   }
   configCache.set(r.key, c);
   return c;

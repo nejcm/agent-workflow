@@ -15,6 +15,14 @@ const REPO = /^[A-Za-z0-9_][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+$/;
 export const validRepo = (s: unknown) => typeof s === "string" && REPO.test(s) && !s.includes("..") && !s.endsWith("/.") && !/\.git$/i.test(s);
 /** Canonical allowlist key for an untrusted repo string, or undefined. */
 export const allowedRepo = (cfg: Config, raw: unknown) => (validRepo(raw) ? Object.keys(cfg.repos).find((k) => k.toLowerCase() === (raw as string).toLowerCase()) : undefined);
+
+const originRepo = (dir: string) => {
+  try {
+    return /[:/]([^/:]+\/[^/]+?)(?:\.git)?\/?$/.exec(Bun.spawnSync(["git", "-C", dir, "remote", "get-url", "origin"], { stderr: "ignore" }).stdout.toString().trim())?.[1];
+  } catch {}
+};
+/** The profile a check of the clone at `dir` validates against: its repo entry's, found by `origin`, else the top-level one. */
+export const checkProfile = (cfg: Config, dir: string) => ((key) => (key ? cfg.repos[key]!.profile : cfg.profile))(allowedRepo(cfg, originRepo(dir)));
 const LANE_KEYS = ["repo", "repoPath", "baseBranch", "agent", "sandbox", "maxConcurrent"];
 const MOVED_KEYS = ["agent", "testPaths"];
 const TOP_KEYS = ["host", "defaultHost", "pollIntervalMs", "workspaceRoot", "reposRoot", "tmuxSession", "maxConcurrent", "maxInReview", "stallMinutes", "profile", "lanes", "defaults", "repos", "sources", "intake", "judge", "prs"];

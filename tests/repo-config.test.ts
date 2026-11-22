@@ -1,13 +1,14 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cloneAll } from "../src/session/launcher";
 import { mergeDecision, type PrFacts } from "../src/review/merge";
 import { pass } from "../src/pass";
+import { checkProfile } from "../src/config/config";
 import { defaultProfile, loadProfile, typeFor } from "../src/config/profile";
-import { combine, configCache, dirEntries, type Entry, gitEntries, loadSession, parseRepoConfig, promptFor } from "../src/config/repo-config";
+import { combine, configCache, dirEntries, type Entry, gitEntries, loadSession, parseRepoConfig, promptFor, repoConfig } from "../src/config/repo-config";
 import { GIT, TENDER_DIR } from "../src/util";
-import { check, checkProfile, parseArgs } from "../tender";
+import { check, parseArgs } from "../tender";
 import { config, fakeIo, fakeTracker, noPr, repoFiles, root, setBaseSha, ticket, useTempRoot, web, windowsOut } from "./helpers";
 
 useTempRoot();
@@ -242,6 +243,43 @@ test("gitEntries parses real git trees: symlinks and oversize files come back as
   expect(errors(await gitEntries(io, repo, "HEAD"))).toBe(".tender: must be a directory");
   expect(errors(dirEntries(repo))).toBe(".tender: must be a directory");
   expect(await gitEntries(io, repo, "HEAD~1")).toHaveLength(2);
+  sh("git", "-C", repo, "rm", "-q", ".tender");
+  mkdirSync(join(repo, ".tender"));
+  writeFileSync(join(repo, ".tender/config.yaml"), "agent: codex\n");
+  sh("git", "-C", repo, "add", "-A");
+  sh("git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "valid");
+  expect((await gitEntries(io, repo, "HEAD")).map((e) => [e.name, e.regular, e.text])).toEqual([["config.yaml", true, "agent: codex\n"]]);
+});
+
+test("repoConfig reads a git-ignored config.yaml from the host's checkout when the base commit has none, and re-reads it when it changes", async () => {
+  const repo = join(root, "own");
+  const sh = (...a: string[]) => expect(Bun.spawnSync(a, { stdout: "pipe", stderr: "pipe" }).exitCode).toBe(0);
+  const commit = (m: string) => (sh("git", "-C", repo, "add", "-A"), sh("git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", m), sh("git", "-C", repo, "update-ref", "refs/remotes/origin/main", "HEAD"));
+  sh("git", "init", "-q", "-b", "main", repo);
+  mkdirSync(join(repo, ".tender"));
+  writeFileSync(join(repo, ".tender/verify.yaml"), "checks:\n  - { name: test, run: bun test }\n");
+  writeFileSync(join(repo, ".gitignore"), ".tender/config.yaml\n");
+  commit("c");
+  const { io } = fakeIo((x) => {
+    if (x[0] !== "git") return;
+    const r = Bun.spawnSync([...GIT, ...x.slice(1)], { stdout: "pipe", stderr: "pipe" });
+    return { code: r.exitCode, out: r.stdout.toString() };
+  });
+  const r = config({ repos: [{ name: "acme/web", path: repo }] }).repos["acme/web"]!;
+  const read = async () => (await repoConfig(io, r, "main")).config;
+  expect((await read())?.agent).toBe("claude");
+  writeFileSync(join(repo, ".tender/config.yaml"), "agent: codex\ncriticalPaths: [src/**]\n");
+  expect(await read()).toMatchObject({ agent: "codex", criticalPaths: ["src/**"], verify: { checks: [{ name: "test" }] } });
+  writeFileSync(join(repo, ".tender/config.yaml"), "agent: claude\nautoMerge: shadow\n");
+  expect(await read()).toMatchObject({ agent: "claude", autoMerge: "shadow" });
+  writeFileSync(join(repo, ".gitignore"), "");
+  expect((await read())?.autoMerge).toBeUndefined();
+  writeFileSync(join(repo, ".gitignore"), ".tender/config.yaml\n");
+  sh("git", "-C", repo, "add", "-f", ".tender/config.yaml");
+  sh("git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "tracked");
+  sh("git", "-C", repo, "update-ref", "refs/remotes/origin/main", "HEAD");
+  writeFileSync(join(repo, ".tender/config.yaml"), "agent: codex\n");
+  expect(await read()).toMatchObject({ agent: "claude", autoMerge: "shadow" });
 });
 
 test("an invalid repo config starts nothing: logged once and commented once per base commit", async () => {
@@ -253,7 +291,7 @@ test("an invalid repo config starts nothing: logged once and commented once per 
   await pass(c, io, () => tr, "/tender");
   const invalid = (sha: string) => `[web] acme/web: .tender/ on main at ${sha.slice(0, 12)} is invalid, so no tickets start:\n  agent: "claude" | "codex" or { name, model, effort }`;
   expect(logs.filter((l) => l.includes("is invalid"))).toEqual([invalid("a".repeat(40))]);
-  expect(calls).toEqual([`comment gh-1 not started: acme/web's .tender/ at ${"a".repeat(12)} is invalid; run \`bun tender.ts check <repo>\` for details`]);
+  expect(calls).toEqual([`comment gh-1 not started: acme/web's .tender/ at ${"a".repeat(12)} is invalid; run \`bun tender.ts check <repo> --config <tender.json>\` for details`]);
   expect(cmds.some((x) => / clone -q | new-window /.test(x))).toBe(false);
   setBaseSha("c".repeat(40));
   await pass(c, io, () => tr, "/tender");
@@ -268,7 +306,7 @@ test("an invalid repo config starts nothing: logged once and commented once per 
   expect(logs.some((l) => l.includes("rate limited"))).toBe(true);
   tr.comment = async (t, b) => void calls.push(`comment ${t.id} ${b}`);
   await pass(c, io, () => tr, "/tender");
-  expect(calls.at(-1)).toBe(`comment gh-1 not started: acme/web's .tender/ at ${"f".repeat(12)} is invalid; run \`bun tender.ts check <repo>\` for details`);
+  expect(calls.at(-1)).toBe(`comment gh-1 not started: acme/web's .tender/ at ${"f".repeat(12)} is invalid; run \`bun tender.ts check <repo> --config <tender.json>\` for details`);
   repoFiles["config.yaml"] = "agent: claude\n";
   setBaseSha("d".repeat(40));
   await pass(c, fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : a[5] === "--quiet" ? { code: 1 } : noPr(a))).io, () => tr, "/tender");
@@ -294,9 +332,39 @@ test("a start uses the type the base branch's types pick from the host's profile
   expect(JSON.parse(readFileSync(join(root, "acme/web/gh-1.type"), "utf8"))).toEqual({ name: "bug", instructions: join(realpathSync(dir), "instructions/bug.md") });
   repoFiles["verify.yaml"] = "checks:\n  - { name: test, run: bun test }\n  - { name: e2e, run: make e2e }\n";
   setBaseSha("b".repeat(40));
-  expect(await start({ ...ticket(2), labels: ["bug"] })).toContain("\n\nBUG gh-2 `bun test`, `make e2e`\n\n");
+  expect(await start({ ...ticket(2), labels: ["bug"] })).toContain("\n\nBUG gh-2 the commands in `.tender/verify.yaml` (checks `test`, `e2e`)\n\n");
   expect(await start(ticket(3))).toContain("\n\nDEFAULT\n\n");
   expect(JSON.parse(readFileSync(join(root, "acme/web/gh-3.type"), "utf8")).name).toBe("default");
+  // Near the 64 KiB file cap: 16 checks of 4000-char commands, named rather than inlined.
+  repoFiles["verify.yaml"] = `checks:\n${Array.from({ length: 16 }, (_, i) => `  - name: c${i}\n    run: ${"x".repeat(4000)}\n`).join("")}`;
+  setBaseSha("c".repeat(40));
+  const big = await start({ ...ticket(4), labels: ["bug"] });
+  expect(big).not.toContain("xxxx");
+  expect(Buffer.byteLength(big)).toBeLessThan(32 * 1024);
+});
+
+test("the type is recorded before the tmux window opens, so a failed window still leaves it", async () => {
+  const { tr } = fakeTracker({ ready: [ticket(1)] });
+  const { io } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : a[1] === "new-window" ? { code: 1, err: "no server" } : a[5] === "--quiet" ? { code: 1 } : noPr(a)));
+  await pass(config(), io, () => tr, "/tender");
+  expect(JSON.parse(readFileSync(join(root, "acme/web/gh-1.type"), "utf8")).name).toBe("default");
+});
+
+test("promptFor refuses an instruction file swapped for a symlink, or moved under one, after the profile was read", () => {
+  const dir = join(root, "swap");
+  mkdirSync(join(dir, "instructions"), { recursive: true });
+  mkdirSync(join(root, "outside"));
+  writeFileSync(join(root, "outside/default.md"), "OUTSIDE");
+  writeFileSync(join(dir, "instructions/default.md"), "D");
+  writeFileSync(join(dir, "types.yaml"), "types:\n  - { name: default, instructions: instructions/default.md }\n");
+  const [t] = loadProfile(dir).types;
+  expect(promptFor(t!)).toContain("\n\nD\n\n");
+  rmSync(join(dir, "instructions/default.md"));
+  symlinkSync(join(root, "outside/default.md"), join(dir, "instructions/default.md"));
+  expect(() => promptFor(t!)).toThrow("changed since the profile was read");
+  rmSync(join(dir, "instructions"), { recursive: true });
+  symlinkSync(join(root, "outside"), join(dir, "instructions"));
+  expect(() => promptFor(t!)).toThrow("changed since the profile was read");
 });
 
 test("cloneAll clones every allowlisted repo that still resolves to itself; one failure does not stop the rest", async () => {

@@ -974,7 +974,7 @@ test("dry-run logs side effects and executes none", async () => {
   const { tr } = fakeTracker({ ready: [ticket(1)], inProgress: [ticket(2)], done: ["gh-5"] });
   const { io, cmds, logs } = fakeIo((a) => (a[1] === "has-session" ? { code: 1 } : a[1] === "pr" && a.includes("agent/gh-2") ? { out: '[{"url":"https://pr/2","state":"OPEN"}]' } : noPr(a)), true);
   await pass(c, io, () => tr, "/tender");
-  expect(cmds.every((x) => /has-session|list-windows|list-panes|list-units|rev-parse|ls-tree|cat-file|remote get-url|gh pr list|gh repo view/.test(x))).toBe(true);
+  expect(cmds.every((x) => /has-session|list-windows|list-panes|list-units|rev-parse|ls-tree|cat-file|check-ignore|remote get-url|gh pr list|gh repo view/.test(x))).toBe(true);
   expect(logs.some((l) => l.includes("dry: tmux new-session -d -s tender"))).toBe(true);
   expect(logs.some((l) => l.startsWith("[web] dry: nono run --no-rollback-prompt --profile /tender/nono/tender-check.json ") && l.endsWith(`-C ${root}/acme/web/gh-5 status --porcelain --ignore-submodules=none`))).toBe(true);
   expect(logs.some((l) => l.startsWith("[web] dry: nono run ") && l.endsWith(`-C ${root}/acme/web/gh-5 rev-list --ignore-missing --all --not --glob=refs/remotes/*`))).toBe(true);

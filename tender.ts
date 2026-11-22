@@ -3,7 +3,7 @@ import { mkdirSync, openSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { hostLogin } from "./src/session/claude-auth";
-import { allowedRepo, parseConfig } from "./src/config/config";
+import { checkProfile, parseConfig } from "./src/config/config";
 import { dashboard, watch } from "./src/ui/dash";
 import { events } from "./src/db";
 import { handoff, shellLine, ticketClone, type Tool, TOOLS } from "./src/session/handoff";
@@ -118,13 +118,6 @@ const ghVersion = () => {
 };
 export const ghAttaches = (version: string) => ((m) => !!m && (Number(m[1]) > 2 || (Number(m[1]) === 2 && Number(m[2]) >= 99)))(/gh version (\d+)\.(\d+)/.exec(version));
 
-// The repo whose origin is `dir`'s, so `check --config` validates against that repo's profile.
-const originRepo = (dir: string) => {
-  try {
-    return /[:/]([^/:]+\/[^/]+?)(?:\.git)?\/?$/.exec(Bun.spawnSync(["git", "-C", dir, "remote", "get-url", "origin"], { stderr: "ignore" }).stdout.toString().trim())?.[1];
-  } catch {}
-};
-export const checkProfile = (cfg: Config, dir: string) => ((key) => (key ? cfg.repos[key]!.profile : cfg.profile))(allowedRepo(cfg, originRepo(dir)));
 
 /** Validates `<dir>/.tender/` from the working tree against `profile` and prints the repo's settings with defaults filled in; false if invalid. */
 export function check(dir: string, print = console.log, fail = console.error, profile: Profile = defaultProfile()) {

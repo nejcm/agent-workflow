@@ -41,15 +41,17 @@ function vint(b: Buffer, i: number, id: boolean): [number, number] {
 function isWebm(b: Buffer) {
   const [id, a] = vint(b, 0, true);
   const [size, c] = vint(b, a, false);
-  if (id !== 0x1a45dfa3 || size < 0) return false;
-  for (let i = a + c, end = Math.min(i + size, b.length); i < end; ) {
+  const end = a + c + size;
+  if (id !== 0x1a45dfa3 || size < 0 || end > b.length) return false;
+  let webm = false;
+  for (let i = a + c; i < end; ) {
     const [eid, n] = vint(b, i, true);
     const [len, m] = vint(b, i + n, false);
     if (eid < 0 || len < 0 || i + n + m + len > end) return false;
-    if (eid === 0x4282) return ascii(b, i + n + m, i + n + m + len) === "webm";
+    if (eid === 0x4282) webm = ascii(b, i + n + m, i + n + m + len) === "webm";
     i += n + m + len;
   }
-  return false;
+  return webm;
 }
 
 const MEDIA: Record<string, (b: Buffer) => boolean> = {

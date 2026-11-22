@@ -12,7 +12,7 @@ const PNG = Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.from("
 const JPG = Buffer.concat([Buffer.from("ffd8ffe0", "hex"), Buffer.from("jpeg body")]);
 const SVG = '<?xml version="1.0"?>\n<!-- drawn -->\n<svg xmlns="http://www.w3.org/2000/svg"/>';
 const box = (type: string, brand: string) => Buffer.concat([Buffer.from("00000018", "hex"), Buffer.from(type + brand + "rest", "latin1")]);
-const WEBM = Buffer.concat([Buffer.from("1a45dfa3a34286810142f7810142f2810442f381084282847765626d", "hex"), Buffer.from("rest")]);
+const WEBM = Buffer.concat([Buffer.from("1a45dfa3974286810142f7810142f2810442f381084282847765626d", "hex"), Buffer.from("rest")]);
 const HEAD = "a".repeat(40);
 const PR = "https://github.com/acme/web/pull/7";
 const put = (p: string, data: string | Buffer) => (mkdirSync(join(p, ".."), { recursive: true }), writeFileSync(p, data));
@@ -76,12 +76,13 @@ test("collect: SVG needs an svg root and rejects hostile preambles fast; WebM ne
   put(join(clone, "w/webmx.webm"), Buffer.from("1a45dfa3874282857765626d78", "hex"));
   put(join(clone, "w/short.webm"), Buffer.from("1a45dfa388428240057765626d", "hex"));
   put(join(clone, "w/cut-id.webm"), Buffer.from("1a45dfa38142", "hex"));
+  for (const [i, hex] of ["894282847765626dec81", "894282847765626dec8100", "884282847765626d", "814282847765626d"].entries()) put(join(clone, `w/bound${i}.webm`), Buffer.from("1a45dfa3" + hex, "hex"));
   put(join(clone, "w/late.webm"), Buffer.from("1a45dfa38f4286810142f781014282847765626d", "hex"));
   const t = performance.now();
   const { b } = collect(clone, ["s/*.svg", "w/*.webm"]);
   expect(performance.now() - t).toBeLessThan(200);
   expect(b.files).toEqual(["e2e-1.svg", "e2e-2.svg", "e2e-3.webm"]);
-  expect(b.skipped).toBe(7);
+  expect(b.skipped).toBe(11);
 });
 
 test("collect: literal dirs match case-insensitively like the glob; each check gets its own copy of the same path", () => {

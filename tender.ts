@@ -11,6 +11,7 @@ import { intake } from "./src/intake";
 import { prs } from "./src/prs";
 import { DEFAULT_DAYS, stats, statsTable } from "./src/stats";
 import { cloned, cloneAll, resume } from "./src/session/launcher";
+import { landlockAbi, landlockProblem } from "./src/session/needs";
 import { CRITICAL_PATHS, TEST_PATHS } from "./src/review/merge";
 import { makeTracker, pass } from "./src/pass";
 import { defaultProfile } from "./src/config/profile";
@@ -116,11 +117,18 @@ const ghVersion = () => {
     return "";
   }
 };
+const hasCompose = () => {
+  try {
+    return Bun.spawnSync(["docker", "compose", "version"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+  } catch {
+    return false;
+  }
+};
 export const ghAttaches = (version: string) => ((m) => !!m && (Number(m[1]) > 2 || (Number(m[1]) === 2 && Number(m[2]) >= 99)))(/gh version (\d+)\.(\d+)/.exec(version));
 
 
-/** Validates `<dir>/.tender/` from the working tree against `profile` and prints the repo's settings with defaults filled in; false if invalid. */
-export function check(dir: string, print = console.log, fail = console.error, profile: Profile = defaultProfile()) {
+/** Validates `<dir>/.tender/` from the working tree against `profile` and prints the repo's settings with defaults filled in; false if invalid or its `needs` cannot run on this host. */
+export function check(dir: string, print = console.log, fail = console.error, profile: Profile = defaultProfile(), host = { abi: landlockAbi, compose: hasCompose }) {
   let c: RepoConfig;
   try {
     if (!statSync(dir, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`${dir}: not a directory`);
@@ -131,7 +139,15 @@ export function check(dir: string, print = console.log, fail = console.error, pr
   }
   print(JSON.stringify({ ...c, tracker: c.tracker ?? null, autoMerge: c.autoMerge ? `${c.autoMerge} (capped by the host's autoMerge)` : "unset (the host's autoMerge)", criticalPaths: [...CRITICAL_PATHS, ...c.criticalPaths], testPaths: [...TEST_PATHS, ...c.testPaths], verify: c.verify ?? "none: medium and large changes never auto-merge", profile: profile.dir }, null, 2));
   if (c.verify?.checks.some((x) => x.proof.length) && !ghAttaches(ghVersion())) fail("warning: proof needs gh 2.99 or newer for `gh pr comment --attach`; verify comments fail until gh is upgraded");
-  return true;
+  const needs = [...c.types, ...(c.verify?.checks ?? [])].flatMap((x) => x.needs ?? []);
+  const files = [...new Set(needs.flatMap((n) => n.compose ?? []))];
+  const problems = [
+    ...(needs.length ? [landlockProblem(host.abi())] : []),
+    ...(files.length && !host.compose() ? ["`docker compose` is not installed, and a compose file is declared"] : []),
+    ...files.map((f) => (statSync(join(dir, f), { throwIfNoEntry: false })?.isFile() ? undefined : `${f}: no such compose file in ${dir}`)),
+  ].filter(Boolean);
+  if (problems.length) fail(`${join(dir, ".tender")}: needs cannot run on this host:\n  ${problems.join("\n  ")}`);
+  return !problems.length;
 }
 
 /** Command, ticket target and option values, or the reason the arguments are invalid. */

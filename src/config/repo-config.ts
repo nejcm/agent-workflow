@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { AUTO_MERGE, GLOB_RULES, INTAKE_NAME, validGlob } from "./config";
-import { agentConfig, defaultProfile, mergeTypes, parseTypes } from "./profile";
+import { agentConfig, defaultProfile, mergeTypes, parseNeeds, parseTypes, repoPath } from "./profile";
 import { baseBranch } from "../github";
 import type { AutoMerge, Check, IntakeRule, Io, Profile, Repo, RepoConfig, Session, TaskType, VerifyContract } from "../types";
 import { GIT, read, TENDER_DIR, write } from "../util";
@@ -85,6 +85,9 @@ export function parseRepoConfig(entries: Entry[], profile: Profile = defaultProf
   if (obj(lt)) check(str(lt.project), "tracker.linear.project: non-empty string, the Linear project's name");
   if (obj(lt)) check(lt.team === undefined || (str(lt.team) && /^[A-Z0-9]+$/.test(lt.team)), "tracker.linear.team: Linear team key, e.g. ENG");
   if (errs.length) throw new Error(errs.join("\n  "));
+  // tender runs it through the Docker daemon, which is host root, so a change to it never auto-merges.
+  const compose = [...c.types, ...(c.verify?.checks ?? [])].flatMap((x) => x.needs?.compose ?? []);
+  c.criticalPaths = [...new Set([...c.criticalPaths, ...compose])];
   return c;
 }
 
@@ -109,13 +112,14 @@ function parseVerify(yaml: string, check: Check): VerifyContract {
     const at = `verify.checks[${i}]${obj(c) && typeof c.name === "string" ? ` (${c.name})` : ""}`;
     check(obj(c), `${at}: mapping`);
     const x: Record<string, any> = obj(c) ? c : {};
-    for (const k of Object.keys(x)) check(["name", "run", "timeout", "proof"].includes(k), `${at}.${k}: unknown key`);
+    for (const k of Object.keys(x)) check(["name", "run", "timeout", "proof", "needs"].includes(k), `${at}.${k}: unknown key`);
     const v = { name: x.name, run: x.run, timeout: x.timeout ?? 600, proof: x.proof ?? [] };
     check(typeof v.name === "string" && INTAKE_NAME.test(v.name), `${at}.name: required, [a-z0-9-]`);
     check(typeof v.run === "string" && v.run.trim().length > 0 && v.run.length <= 4000 && !v.run.includes("\0"), `${at}.run: required, a shell command of at most 4000 chars`);
     check(Number.isInteger(v.timeout) && v.timeout >= 1 && v.timeout <= 1800, `${at}.timeout: seconds, integer 1-1800`);
     check(Array.isArray(v.proof) && v.proof.length <= 20 && v.proof.every((g: unknown) => validGlob(g) && PROOF.test(g)), `${at}.proof: at most 20 globs (${GLOB_RULES}) ending in .png, .gif, .jpg, .jpeg, .webp, .svg, .mp4, .mov or .webm`);
-    return v;
+    const needs = parseNeeds(x.needs, `${at}.needs`, check);
+    return needs ? { ...v, needs } : v;
   });
   check(new Set(checks.map((c: { name: string }) => c.name)).size === checks.length, "verify.checks: names must be unique");
   return { checks, maxRounds, digest: createHash("sha256").update(yaml).digest("hex") };
@@ -132,7 +136,6 @@ const DOMAIN = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}
 const FACT = /^[A-Za-z][A-Za-z0-9_]{0,39}$/;
 // No comma (gh --label splits on it) and no colon, so never host:<host>.
 const LABEL = /^(?=.{1,50}$)[\w./-]+( [\w./-]+)*$/;
-const repoPath = (p: unknown) => typeof p === "string" && p.length <= 200 && p.split("/").every((x) => /^[A-Za-z0-9_.-]+$/.test(x) && x !== "." && x !== "..") && !p.startsWith("-");
 
 function parseIntake(raw: unknown, check: Check): IntakeRule[] {
   if (raw === undefined) return [];

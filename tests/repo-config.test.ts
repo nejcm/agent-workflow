@@ -86,7 +86,9 @@ test("repo config: types replace the profile's by name in place, new ones go bef
   expect(err(`types:\n${t("c", "", "instructions/a.md")}`)).toBe("types[0] (c).match: { labels: [label, …] }, 1-20 labels");
   for (const md of ["instructions/nope.md", "../outside.md", "instructions/out.md", "/etc/passwd.md", "instructions/a.txt", "instructions"])
     expect(err(`types:\n${t("c", "x", md)}`)).toBe(`types[0] (c).instructions: ${JSON.stringify(md)} is not a .md file in the profile ${dir}`);
-  expect(err(`types:\n${t("c", "x", "instructions/a.md", ", needs: { ports: 1 }")}`)).toBe("types[0] (c).needs: unknown key");
+  expect(parse(`types:\n${t("c", "x", "instructions/a.md", ", needs: { ports: 2, compose: dev/compose.yaml }")}`)[1]!.needs).toEqual({ ports: 2, compose: "dev/compose.yaml" });
+  expect(err(`types:\n${t("c", "x", "instructions/a.md", ", needs: { ports: 0 }")}`)).toBe("types[0] (c).needs.ports: integer 1-10");
+  expect(err(`types:\n${t("c", "x", "instructions/a.md", ", needs: { ports: 11, compose: ../x.yaml, port: 1 }")}`)).toBe("types[0] (c).needs: mapping with ports and compose\n  types[0] (c).needs.ports: integer 1-10\n  types[0] (c).needs.compose: a path inside the repo");
   expect(err(`types:\n${t("c", "x", "instructions/a.md", ", output: issue")}`)).toBe('types[0] (c).output: "pr"');
   expect(err(`types:\n${t("c", "x", "instructions/a.md")}${t("c", "y", "instructions/a.md")}`)).toBe("types: names must be unique");
   expect(err("types: { a: 1 }\n")).toBe("types: list of at most 50 types");

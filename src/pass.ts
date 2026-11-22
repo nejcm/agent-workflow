@@ -9,6 +9,7 @@ import { authStamp, claim, cloned, CODEX_AUTH, codexIdentity, codexLogin, codexR
 import { autoMerge, checkState, policyBlocked, PR_FIELDS, prMode, prReady, viewPr } from "./review/merge";
 import { syncPhases } from "./review/phases";
 import { readVerified, reconcileVerify, startVerify, stopVerify, verifiedAt } from "./review/verify";
+import { composeError, composeTeardown } from "./session/needs";
 import { agentPane, deliverAnswer, liveStates, syncQuestion } from "./session/question";
 import { atTip, combine, loadSession, parseRepoConfig } from "./config/repo-config";
 import { lastSay, transcript } from "./ui/tail";
@@ -216,7 +217,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
           return io.log(`${key}/${t.id}: session ended, ticket still in progress; ${tr.restartHint()} to start it again`);
         }
         if (await tr.closed(t.id, key)) return;
-        await tr.comment(w, endedNotice(lastMessage(dir, t.id)));
+        await tr.comment(w, endedNotice(lastMessage(dir, t.id) ?? composeError(join(dir, `${t.id}.compose`))));
         put(io, ended, new Date().toISOString());
       });
   });
@@ -528,6 +529,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
           await stopVerify(cfg, x.io, join(dir, `${id}.verify`));
           throw new Kept(`${r.key}/${id}: waiting for its verify run to stop`);
         }
+        await composeTeardown(x.io, join(dir, `${id}.compose`)).catch((e) => Promise.reject(new Kept(`${r.key}/${id}: services not taken down, so everything is kept: ${e.message}`)));
         if (end === "canceled") {
           if (existsSync(join(dir, `${id}.ended`))) return;
           put(x.io, join(dir, `${id}.ended`), new Date().toISOString());

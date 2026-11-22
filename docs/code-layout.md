@@ -40,6 +40,7 @@ Agent sessions: launch, live state, questions and feedback.
 - `src/session/agents.ts`: the Claude and Codex adapters: launch env and command (with quoted model and effort flags), the session's recorded agent config, valid model names and efforts, config dirs and transcript files, live state (Claude's session records, read as untrusted files; the Codex hook state file).
 - `src/session/claude-auth.ts`: the host Claude login: finding the host `claude` and `bun`, reading and checking the login, the refresher that keeps it fresh.
 - `src/session/launcher.ts`: base clone, session clone, prompt and launcher script, tmux window, stop and resume.
+- `src/session/needs.ts`: `needs`: the Landlock probe, port allocation and grants, and Compose up and down from the base commit.
 - `src/session/handoff.ts`: `open`: ticket lookup, transcript copy into your own store, the command per tool.
 - `src/session/state.ts`: live state types and precedence.
 

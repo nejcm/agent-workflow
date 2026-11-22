@@ -55,7 +55,7 @@ Done when: existing tests pass with the renamed `readRun` and the new comment te
 
 ### 5. Prompt, status, docs
 
-- `prompts/header.md` and the `clarify` step: write `.tender/run/question.md` and stop when blocked at any point; answers arrive in `.tender/run/answer.md`, from the operator, and may change the plan.
+- `prompts/header.md` and the clarify step of tender's instruction files: write `.tender/run/question.md` and stop when blocked at any point; answers arrive in `.tender/run/answer.md`, from the operator, and may change the plan.
 - `src/ui/status.ts` / `src/session/state.ts`: state `question` when the sidecar has no `answerId` and there is no `<ID>.pr`, taking precedence over `idle` only; dashboard tone in `src/ui/dash-view.ts`.
 - `docs/lifecycle.md`: lifecycle diagram line, `feedbackAuthors` config, the `tender:` prefix, the `.tender/run/question.md` / `.tender/run/answer.md` contract.
 - Tests: `status.test.ts` / `state.test.ts` for `question`.

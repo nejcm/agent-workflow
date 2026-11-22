@@ -3,7 +3,7 @@ import { mkdirSync, openSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { hostLogin } from "./src/session/claude-auth";
-import { parseConfig } from "./src/config/config";
+import { allowedRepo, parseConfig } from "./src/config/config";
 import { dashboard, watch } from "./src/ui/dash";
 import { events } from "./src/db";
 import { handoff, shellLine, ticketClone, type Tool, TOOLS } from "./src/session/handoff";
@@ -13,10 +13,11 @@ import { DEFAULT_DAYS, stats, statsTable } from "./src/stats";
 import { cloned, cloneAll, resume } from "./src/session/launcher";
 import { CRITICAL_PATHS, TEST_PATHS } from "./src/review/merge";
 import { makeTracker, pass } from "./src/pass";
-import { dirEntries, parseRepoConfig, STEPS } from "./src/config/repo-config";
+import { defaultProfile } from "./src/config/profile";
+import { dirEntries, parseRepoConfig } from "./src/config/repo-config";
 import { reviewLimit, snapshot, table } from "./src/ui/status";
 import { tail } from "./src/ui/tail";
-import type { Config, Io, PromptText, RepoConfig, Run } from "./src/types";
+import type { Config, Io, Profile, RepoConfig, Run } from "./src/types";
 import { passLocked, TENDER_DIR } from "./src/util";
 
 async function status(cfg: Config, io: Io) {
@@ -90,7 +91,7 @@ const USAGE = `usage: bun tender.ts <command> [--config tender.json]
   intake [owner/repo:rule | rule] [--dry-run]
   prs [--dry-run]
   stats [--days 90] [--json]
-  check [path]`;
+  check [path] [--config tender.json]`;
 const VALUED = ["--config", "--interval", "-n", "--tool", "--days"];
 const CMD_FLAGS: Record<string, string[]> = {
   run: ["--dry-run"],
@@ -117,21 +118,25 @@ const ghVersion = () => {
 };
 export const ghAttaches = (version: string) => ((m) => !!m && (Number(m[1]) > 2 || (Number(m[1]) === 2 && Number(m[2]) >= 99)))(/gh version (\d+)\.(\d+)/.exec(version));
 
-/** Validates `<dir>/.tender/` from the working tree and prints the repo's settings with defaults filled in; false if invalid. */
-export function check(dir: string, print = console.log, fail = console.error) {
+// The repo whose origin is `dir`'s, so `check --config` validates against that repo's profile.
+const originRepo = (dir: string) => {
+  try {
+    return /[:/]([^/:]+\/[^/]+?)(?:\.git)?\/?$/.exec(Bun.spawnSync(["git", "-C", dir, "remote", "get-url", "origin"], { stderr: "ignore" }).stdout.toString().trim())?.[1];
+  } catch {}
+};
+export const checkProfile = (cfg: Config, dir: string) => ((key) => (key ? cfg.repos[key]!.profile : cfg.profile))(allowedRepo(cfg, originRepo(dir)));
+
+/** Validates `<dir>/.tender/` from the working tree against `profile` and prints the repo's settings with defaults filled in; false if invalid. */
+export function check(dir: string, print = console.log, fail = console.error, profile: Profile = defaultProfile()) {
   let c: RepoConfig;
   try {
     if (!statSync(dir, { throwIfNoEntry: false })?.isDirectory()) throw new Error(`${dir}: not a directory`);
-    c = parseRepoConfig(dirEntries(dir));
+    c = parseRepoConfig(dirEntries(dir), profile);
   } catch (e) {
     fail(`${join(dir, ".tender")}: invalid:\n  ${(e as Error).message}`);
     return false;
   }
-  const { files, prompt, byLabel, ...rest } = c;
-  const from = (t?: PromptText) => (t === undefined ? undefined : typeof t !== "string" ? `.tender/prompts/${t.file}` : t.trim() ? "inline" : "disabled");
-  const steps = { steps: Object.fromEntries(STEPS.map((n) => [n, from(prompt.steps[n]) ?? "tender's"])), append: from(prompt.append) ?? null };
-  const labels = Object.fromEntries(Object.entries(byLabel).map(([l, e]) => [l, { prompt: e.prompt && { steps: Object.fromEntries(Object.entries(e.prompt.steps).map(([n, t]) => [n, from(t)])), append: from(e.prompt.append) }, agent: e.agent }]));
-  print(JSON.stringify({ ...rest, testCmd: c.testCmd ?? null, tracker: c.tracker ?? null, autoMerge: c.autoMerge ? `${c.autoMerge} (capped by the host's autoMerge)` : "unset (the host's autoMerge)", criticalPaths: [...CRITICAL_PATHS, ...c.criticalPaths], testPaths: [...TEST_PATHS, ...c.testPaths], verify: c.verify ?? "none: medium and large changes never auto-merge", prompt: steps, byLabel: labels }, null, 2));
+  print(JSON.stringify({ ...c, tracker: c.tracker ?? null, autoMerge: c.autoMerge ? `${c.autoMerge} (capped by the host's autoMerge)` : "unset (the host's autoMerge)", criticalPaths: [...CRITICAL_PATHS, ...c.criticalPaths], testPaths: [...TEST_PATHS, ...c.testPaths], verify: c.verify ?? "none: medium and large changes never auto-merge", profile: profile.dir }, null, 2));
   if (c.verify?.checks.some((x) => x.proof.length) && !ghAttaches(ghVersion())) fail("warning: proof needs gh 2.99 or newer for `gh pr comment --attach`; verify comments fail until gh is upgraded");
   return true;
 }
@@ -153,7 +158,7 @@ export function parseArgs(argv: string[]) {
   if (!cmd) return fail("missing <command>");
   const allowed = CMD_FLAGS[cmd];
   if (!allowed) return fail(`unknown command ${cmd}`);
-  const wrong = [...vals.keys()].find((f) => !allowed.includes(f) && (f !== "--config" || cmd === "check"));
+  const wrong = [...vals.keys()].find((f) => !allowed.includes(f) && f !== "--config");
   if (wrong) return fail(`${cmd} does not take ${wrong}`);
   if (TARGETED.includes(cmd) && id === undefined) return fail(`${cmd} needs an <ID>`);
   const stray = cmd === "check" || cmd === "intake" || TARGETED.includes(cmd) ? extra[0] : id;
@@ -166,7 +171,7 @@ export function parseArgs(argv: string[]) {
   if (!Number.isInteger(n) || n < 1 || n > 10_000) return fail("-n must be an integer from 1 to 10000");
   const days = Number(vals.get("--days") ?? DEFAULT_DAYS);
   if (!Number.isInteger(days) || days < 1 || days > 3650) return fail("--days must be an integer from 1 to 3650");
-  return { cmd, id, interval, n, days, tool: tool as Tool | undefined, path: resolve(vals.get("--config") ?? "tender.json") };
+  return { cmd, id, interval, n, days, tool: tool as Tool | undefined, path: resolve(vals.get("--config") ?? "tender.json"), configured: vals.has("--config") };
 }
 
 async function main(argv: string[]) {
@@ -176,8 +181,8 @@ async function main(argv: string[]) {
     console.error(`${args.error}\n${USAGE}`);
     process.exit(2);
   }
-  const { cmd, id, interval, n, days, tool, path } = args;
-  if (cmd === "check") process.exit(check(resolve(id ?? ".")) ? 0 : 1);
+  const { cmd, id, interval, n, days, tool, path, configured } = args;
+  if (cmd === "check" && !configured) process.exit(check(resolve(id ?? ".")) ? 0 : 1);
   let cfg: Config;
   try {
     cfg = parseConfig(JSON.parse(readFileSync(path, "utf8")), dirname(path));
@@ -186,6 +191,7 @@ async function main(argv: string[]) {
     console.error(missing ? `${path}: not found; run from the directory with tender.json or pass --config <path>` : `${path}: ${(e as Error).message}`);
     process.exit(1);
   }
+  if (cmd === "check") process.exit(check(resolve(id ?? "."), console.log, console.error, checkProfile(cfg, resolve(id ?? "."))) ? 0 : 1);
   const dry = argv.includes("--dry-run");
   const log = (m: string) => console.log(`${new Date().toISOString()} ${m}`);
   const io: Io = { run: spawnRun, fetch, dry, log, home: homedir(), event: events(cfg, dry, log) };

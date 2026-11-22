@@ -51,7 +51,7 @@ reassigned to someone else (in progress / in review) ──► same as canceled 
 
 ## Phases
 
-The prompt has the agent plan as instructed by the plan step (default: plan and implement the ticket after reading the relevant code, smallest change that fully solves it, see [Prompt](config.md#prompt)). Its fixed header forbids any attribution (`Co-Authored-By`, "Generated with ...", emoji signatures) in commits, PR titles/bodies and ticket comments. When it splits the work into phases it writes them to `.tender/run/phases.json` in its worktree (git-ignored via `.tender/run/.gitignore`): an array of `{ key, title, body, status }`, status `todo` → `in-progress` → `done`. The agent never talks to the tracker; on every poll, for each of its in-progress and in-review tickets, `tender` mirrors the file:
+The prompt has the agent plan as its type's instruction file says (default: plan and implement the ticket after reading the relevant code, smallest change that fully solves it, see [Profile](config.md#profile)). Its fixed header forbids any attribution (`Co-Authored-By`, "Generated with ...", emoji signatures) in commits, PR titles/bodies and ticket comments. When it splits the work into phases it writes them to `.tender/run/phases.json` in its worktree (git-ignored via `.tender/run/.gitignore`): an array of `{ key, title, body, status }`, status `todo` → `in-progress` → `done`. The agent never talks to the tracker; on every poll, for each of its in-progress and in-review tickets, `tender` mirrors the file:
 
 - a new `key` → a sub-ticket of the parent titled `<ID>: <title>`, with no labels (GitHub: `gh issue create --parent`; Linear: child issue in `Todo`, same team);
 - `in-progress` → the `in-progress` label / `In Progress` state;

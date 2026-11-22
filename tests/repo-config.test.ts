@@ -1,12 +1,13 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cloneAll } from "../src/session/launcher";
 import { mergeDecision, type PrFacts } from "../src/review/merge";
 import { pass } from "../src/pass";
+import { defaultProfile, loadProfile, typeFor } from "../src/config/profile";
 import { combine, configCache, dirEntries, type Entry, gitEntries, loadSession, parseRepoConfig, promptFor } from "../src/config/repo-config";
 import { GIT, TENDER_DIR } from "../src/util";
-import { check, parseArgs } from "../tender";
+import { check, checkProfile, parseArgs } from "../tender";
 import { config, fakeIo, fakeTracker, noPr, repoFiles, root, setBaseSha, ticket, useTempRoot, web, windowsOut } from "./helpers";
 
 useTempRoot();
@@ -22,41 +23,26 @@ const errors = (entries: Entry[]) => {
 };
 
 test("repo config: no files means built-in defaults", () => {
-  expect(parseRepoConfig([])).toEqual({ agent: "claude", testCmd: undefined, autoMerge: undefined, criticalPaths: [], testPaths: [], trust: [], escapeHatches: [], prompt: { steps: {} }, byLabel: {}, intake: [], files: {} });
+  expect(parseRepoConfig([])).toEqual({ agent: "claude", autoMerge: undefined, criticalPaths: [], testPaths: [], trust: [], escapeHatches: [], types: defaultProfile().types, intake: [] });
   expect(parseRepoConfig([file("config.yaml", "")]).agent).toBe("claude");
 });
 
 test("repo config: every key parsed, every problem listed", () => {
-  const yaml = 'agent: codex\ntestCmd: make test\nautoMerge: shadow\ncriticalPaths: ["src/billing/**"]\ntestPaths: [qa/**]\nprompt:\n  steps:\n    plan: Use X.\n    review: ""\n  append: { file: main.md }\nbyLabel:\n  "type:bug":\n    prompt: { steps: { verify: { file: bug.md } } }\n';
-  expect(parseRepoConfig([file("config.yaml", yaml), file("prompts/main.md", "M"), file("prompts/bug.md", "B")])).toMatchObject({
-    agent: "codex", testCmd: "make test", autoMerge: "shadow", criticalPaths: ["src/billing/**"], testPaths: ["qa/**"],
-    prompt: { steps: { plan: "Use X.", review: "" }, append: { file: "main.md" } }, byLabel: { "type:bug": { prompt: { steps: { verify: { file: "bug.md" } } } } }, files: { "main.md": "M", "bug.md": "B" },
-  });
-  const bad = errors([file("config.yaml", 'agent: gpt\ntestCmd: ""\nplanStep: Use X.\nautoMerge: yes\ncriticalPaths: x\ntestPaths: [1]\nsandbox: none\nprompts:\n  default: main.md\nprompt:\n  steps:\n    implement: x\n    plan: 7\n    verify: { file: nope.md }\n    review: bug.md\n  append: [x]\nbyLabel:\n  bug: bug.md\n  ui:\n    prompt: { steps: { test: { path: x } } }\n')]);
-  for (const k of [
-    'agent: "claude" | "codex"', "testCmd: non-empty string", "planStep: moved to prompt.steps.plan", "autoMerge:", "criticalPaths: list", "testPaths: list", "sandbox: unknown key",
-    "prompts: replaced by prompt and byLabel", "prompt.steps.implement: unknown step; steps are clarify, plan, test, verify, review, commit", 'prompt.steps.plan: text, "" to drop the step, or { file: <name>.md }',
-    'prompt.steps.verify: "nope.md" is not a file in .tender/prompts/', 'prompt.steps.review: "bug.md" is a file name; write { file: <name>.md } to use a file in .tender/prompts/', 'prompt.append: text, "" to drop the step, or { file: <name>.md }',
-    "byLabel.bug: mapping with prompt and agent", 'byLabel.ui.prompt.steps.test: text, "" to drop the step, or { file: <name>.md }',
-  ])
-    expect(bad).toContain(k);
-  expect(bad).not.toContain("planStep: unknown key");
-  expect(errors([file("config.yaml", 'byLabel:\n  bug:\n    prompt: { append: " bug.md " }\n')])).toBe('byLabel.bug.prompt.append: " bug.md " is a file name; write { file: <name>.md } to use a file in .tender/prompts/');
+  const yaml = 'agent: codex\nautoMerge: shadow\ncriticalPaths: ["src/billing/**"]\ntestPaths: [qa/**]\n';
+  expect(parseRepoConfig([file("config.yaml", yaml)])).toMatchObject({ agent: "codex", autoMerge: "shadow", criticalPaths: ["src/billing/**"], testPaths: ["qa/**"] });
+  const bad = errors([file("config.yaml", "agent: gpt\ntestCmd: make\nautoMerge: yes\ncriticalPaths: x\ntestPaths: [1]\nsandbox: none\nprompt: {}\nbyLabel: {}\n")]);
+  for (const k of ['agent: "claude" | "codex"', "testCmd: unknown key", "autoMerge:", "criticalPaths: list", "testPaths: list", "sandbox: unknown key", "prompt: unknown key", "byLabel: unknown key"]) expect(bad).toContain(k);
   expect(errors([file("config.yaml", "agent: [")])).toContain("config.yaml: YAML Parse error");
   expect(errors([file("config.yaml", "- a\n- b\n")])).toContain("config.yaml: must be a mapping");
   expect(errors([file("config.yaml", "agent: codex\n---\nagent: claude\n")])).toContain("config.yaml: must be a mapping");
-  expect(errors([file("config.yaml", "prompt: [a]\n")])).toBe("prompt: mapping with steps and append");
-  expect(errors([file("config.yaml", "prompt:\n  steps: x\n")])).toBe("prompt: mapping with steps and append");
-  expect(errors([file("config.yaml", "byLabel: [a]\n")])).toBe("byLabel: mapping of label to { prompt, agent }");
-  expect(errors([file("config.yaml", "byLabel:\n  bug: { prompt: x }\n")])).toBe("byLabel.bug.prompt: mapping with steps and append");
 });
 
 test("repo config: agent is a name or { name, model, effort }, checked per agent; feedback.maxRounds is 1-10", () => {
   expect(parseRepoConfig([file("config.yaml", "agent: codex\n")])).toMatchObject({ agent: "codex", model: undefined, effort: undefined });
   expect(parseRepoConfig([file("config.yaml", "agent: { name: claude, model: \"opus[1m]\", effort: max }\nfeedback: { maxRounds: 10 }\n")])).toMatchObject({ agent: "claude", model: "opus[1m]", effort: "max", feedbackRounds: 10 });
   expect(parseRepoConfig([file("config.yaml", "agent: { name: codex, effort: minimal }\n")])).toMatchObject({ agent: "codex", effort: "minimal" });
-  const c = parseRepoConfig([file("config.yaml", "byLabel:\n  big:\n    agent: { name: codex, model: gpt-5, effort: xhigh }\n  quick:\n    agent: claude\n")]);
-  expect(c.byLabel).toEqual({ big: { agent: { name: "codex", model: "gpt-5", effort: "xhigh" } }, quick: { agent: { name: "claude" } } });
+  const c = parseRepoConfig([file("config.yaml", "types:\n  - name: big\n    match: { labels: [big] }\n    instructions: instructions/default.md\n    agent: { name: codex, model: gpt-5, effort: xhigh }\n  - name: quick\n    match: { labels: [quick] }\n    instructions: instructions/default.md\n    agent: claude\n")]);
+  expect(c.types.filter((t) => t.agent).map((t) => [t.name, t.agent])).toEqual([["big", { name: "codex", model: "gpt-5", effort: "xhigh" }], ["quick", { name: "claude" }]]);
   const err = (y: string) => errors([file("config.yaml", y)]);
   expect(err("agent:\n")).toBe('agent: "claude" | "codex" or { name, model, effort }');
   expect(err("agent: [claude]\n")).toBe('agent: "claude" | "codex" or { name, model, effort }');
@@ -65,9 +51,45 @@ test("repo config: agent is a name or { name, model, effort }, checked per agent
   for (const m of ["a b", "$(x)", "-m", "x".repeat(101)]) expect(err(`agent: { name: claude, model: ${JSON.stringify(m)} }\n`)).toBe("agent.model: model name like sonnet or gpt-5 ([A-Za-z0-9._:[]/-], at most 100 chars)");
   expect(err("agent: { name: claude, effort: minimal }\n")).toBe("agent.effort: low | medium | high | xhigh | max for claude");
   expect(err("agent: { name: codex, effort: max }\n")).toBe("agent.effort: minimal | low | medium | high | xhigh for codex");
-  expect(err("byLabel:\n  big:\n    agent: gpt\n")).toBe('byLabel.big.agent: "claude" | "codex" or { name, model, effort }');
+  expect(err("types:\n  - name: big\n    match: { labels: [big] }\n    instructions: instructions/default.md\n    agent: gpt\n")).toBe('types[0] (big).agent: "claude" | "codex" or { name, model, effort }');
   for (const y of ["feedback: 3\n", "feedback: { rounds: 3 }\n"]) expect(err(y)).toStartWith("feedback: mapping with maxRounds");
   for (const n of [0, 11, 1.5, '"3"']) expect(err(`feedback: { maxRounds: ${n} }\n`)).toBe("feedback.maxRounds: integer 1-10");
+});
+
+test("repo config: types replace the profile's by name in place, new ones go before default, instructions stay in the profile", () => {
+  const dir = join(root, "profile");
+  mkdirSync(join(dir, "instructions"), { recursive: true });
+  for (const n of ["a", "b", "default"]) writeFileSync(join(dir, "instructions", `${n}.md`), n.toUpperCase());
+  writeFileSync(join(dir, "types.yaml"), "types:\n  - { name: a, match: { labels: [x] }, instructions: instructions/a.md }\n  - { name: default, instructions: instructions/default.md }\n");
+  writeFileSync(join(root, "outside.md"), "O");
+  symlinkSync(join(root, "outside.md"), join(dir, "instructions/out.md"));
+  const profile = loadProfile(dir);
+  const parse = (y: string) => parseRepoConfig([file("config.yaml", y)], profile).types;
+  const t = (name: string, labels: string, md: string, more = "") => `  - { name: ${name}, ${labels ? `match: { labels: [${labels}] }, ` : ""}instructions: ${md}${more} }\n`;
+  const types = parse(`types:\n${t("new", "y", "instructions/b.md")}${t("a", "z", "instructions/b.md", ", agent: codex")}`);
+  expect(types).toEqual([
+    { name: "a", match: { labels: ["z"] }, instructions: join(realpathSync(dir), "instructions/b.md"), agent: { name: "codex" }, output: "pr" },
+    { name: "new", match: { labels: ["y"] }, instructions: join(realpathSync(dir), "instructions/b.md"), output: "pr" },
+    { name: "default", instructions: join(realpathSync(dir), "instructions/default.md"), output: "pr" },
+  ]);
+  expect(parse(`types:\n${t("default", "", "instructions/a.md")}`).map((x) => [x.name, readFileSync(x.instructions, "utf8")])).toEqual([["a", "A"], ["default", "A"]]);
+  const err = (y: string) => {
+    try {
+      parse(y);
+    } catch (e) {
+      return (e as Error).message;
+    }
+    return "";
+  };
+  expect(err(`types:\n${t("default", "x", "instructions/a.md")}`)).toBe("types[0] (default).match: default takes every ticket no other type matches, so it has no match");
+  expect(err(`types:\n${t("c", "", "instructions/a.md")}`)).toBe("types[0] (c).match: { labels: [label, …] }, 1-20 labels");
+  for (const md of ["instructions/nope.md", "../outside.md", "instructions/out.md", "/etc/passwd.md", "instructions/a.txt", "instructions"])
+    expect(err(`types:\n${t("c", "x", md)}`)).toBe(`types[0] (c).instructions: ${JSON.stringify(md)} is not a .md file in the profile ${dir}`);
+  expect(err(`types:\n${t("c", "x", "instructions/a.md", ", needs: { ports: 1 }")}`)).toBe("types[0] (c).needs: unknown key");
+  expect(err(`types:\n${t("c", "x", "instructions/a.md", ", output: issue")}`)).toBe('types[0] (c).output: "pr"');
+  expect(err(`types:\n${t("c", "x", "instructions/a.md")}${t("c", "y", "instructions/a.md")}`)).toBe("types: names must be unique");
+  expect(err("types: { a: 1 }\n")).toBe("types: list of at most 50 types");
+  expect(err("types:\n  - { name: Bad, match: { labels: [x] }, instructions: instructions/a.md }\n")).toBe("types[0] (Bad).name: required, [a-z0-9-]");
 });
 
 test("repo config: tracker.linear names the project, with an optional team key", () => {
@@ -101,58 +123,39 @@ test("repo config: trust rules and escapeHatches regexes, capped in count and le
   expect(parseRepoConfig([file("config.yaml", `escapeHatches: ${JSON.stringify(many.slice(2).concat("x".repeat(200)))}\n`)]).escapeHatches).toHaveLength(20);
 });
 
-test("repo config: size cap, prompt names, regular files only", () => {
+test("repo config: size cap, regular files only", () => {
   const big = "x".repeat(64 * 1024 + 1);
-  expect(errors([file("prompts/a.md", big)])).toBe("prompts/a.md: over 64 KiB");
-  expect(errors([{ name: "prompts/b.md", regular: true, size: big.length }])).toBe("prompts/b.md: over 64 KiB");
-  expect(parseRepoConfig([file("prompts/a.md", "x".repeat(64 * 1024))]).files["a.md"]).toHaveLength(64 * 1024);
-  for (const n of ["Bug.md", "a_b.md", "a.txt", ".md", "sub/a.md"]) expect(errors([file(`prompts/${n}`, "x")])).toBe(`prompts/${n}: prompt files must be named [a-z0-9-]+.md`);
+  expect(errors([file("config.yaml", big)])).toBe("config.yaml: over 64 KiB");
+  expect(errors([{ name: "verify.yaml", regular: true, size: big.length }])).toBe("verify.yaml: over 64 KiB");
   expect(errors([{ name: "config.yaml", regular: false, size: 0 }])).toBe("config.yaml: must be a regular file");
   expect(errors([file("other.yaml", "")])).toBe("other.yaml: not expected here");
-  expect(errors([file("prompts/default.md", "D")])).toBe("prompts/default.md: no longer replaces tender's prompt; move your changes into prompt.steps and prompt.append");
-  const half = "x".repeat(16 * 1024);
-  const capped = (yaml: string, ...more: Entry[]) => errors([file("config.yaml", yaml), file("prompts/half.md", half), ...more]);
-  expect(capped("prompt:\n  steps: { plan: { file: half.md } }\n  append: { file: half.md }\n")).toBe("");
-  expect(capped("prompt:\n  steps: { plan: { file: half.md }, test: x }\n  append: { file: half.md }\n")).toBe("prompt: steps and append over 32 KiB");
-  expect(capped("prompt:\n  steps: { plan: { file: half.md } }\nbyLabel:\n  bug:\n    prompt: { steps: { plan: '', test: { file: half.md } }, append: { file: half.md } }\n")).toBe("");
-  expect(capped("prompt:\n  steps: { plan: { file: half.md } }\nbyLabel:\n  bug:\n    prompt: { steps: { test: { file: half.md } }, append: x }\n")).toBe("byLabel.bug.prompt: steps and append over 32 KiB with prompt's");
 });
 
-test("prompt: tender's header, the steps (label over repo over tender's), the append, then tender's protocol", () => {
-  const tender = (n: string) => readFileSync(join(TENDER_DIR, "prompts", n), "utf8").trim();
-  const steps = ["clarify", "plan", "test", "verify", "review", "commit"];
-  const assemble = (over: Record<string, string> = {}, append?: string) =>
-    [tender("header.md"), ...steps.map((n) => [n, over[n] ?? tender(`steps/${n}.md`)]).filter(([, t]) => t).map(([n, t]) => `### ${n}\n\n${t}`), ...(append ? [append] : []), tender("protocol.md")].join("\n\n") + "\n";
-  expect(promptFor(parseRepoConfig([]))).toBe(assemble());
-  expect(promptFor(parseRepoConfig([]))).toContain("Do these steps in order:\n\n### clarify\n\nRead the ticket and the code it touches");
-  const yaml = 'prompt:\n  steps:\n    plan: Use X.\n    verify: { file: verify.md }\n    review: "  "\n  append: Notes.\nbyLabel:\n  "type:bug":\n    prompt: { steps: { plan: Reproduce first. }, append: { file: bug.md } }\n  ui:\n    prompt: { steps: { test: UI tests. } }\n  docs: {}\n';
-  const c = parseRepoConfig([file("config.yaml", yaml), file("prompts/verify.md", "V\n"), file("prompts/bug.md", "B")]);
-  expect(promptFor(c, [])).toBe(assemble({ plan: "Use X.", verify: "V", review: "" }, "Notes."));
-  expect(promptFor(c, ["ui", "Type:Bug"])).toBe(assemble({ plan: "Reproduce first.", verify: "V", review: "" }, "B"));
-  expect(promptFor(c, ["ui"])).toBe(assemble({ plan: "Use X.", test: "UI tests.", verify: "V", review: "" }, "Notes."));
-  expect(promptFor(c, ["docs"])).toBe(promptFor(c, []));
-  expect(promptFor(c, ["other"])).toBe(promptFor(c, []));
-  expect(promptFor(c, [])).not.toContain("### review");
-  const proto = parseRepoConfig([file("config.yaml", "byLabel:\n  __proto__:\n    prompt: { steps: { plan: Special. } }\n")]);
-  expect(Object.keys(proto.byLabel)).toEqual(["__proto__"]);
-  expect(promptFor(proto, ["__proto__"])).toContain("### plan\n\nSpecial.");
+test("prompt: tender's header, the type's instruction file, then tender's protocol, for each default type", () => {
+  const read = (f: string) => readFileSync(f, "utf8").trim();
+  const types = parseRepoConfig([]).types;
+  expect(types.map((t) => [t.name, t.match?.labels])).toEqual([["bug", ["type:bug"]], ["docs", ["type:docs"]], ["default", undefined]]);
+  for (const t of types) {
+    expect(t.instructions).toBe(join(TENDER_DIR, "profile/instructions", `${t.name}.md`));
+    expect(promptFor(t)).toBe([read(join(TENDER_DIR, "prompts/header.md")), read(t.instructions), read(join(TENDER_DIR, "prompts/protocol.md"))].join("\n\n") + "\n");
+    expect(promptFor(t)).toContain("{{verify}}");
+    expect(promptFor(t)).not.toContain("{{tests}}");
+  }
+  const [bug, docs, def] = types.map((t) => promptFor(t));
+  expect(bug).toContain("Reproduce the bug first with a test that fails for the reported reason");
+  expect(docs).toContain("Change docs only.");
+  expect(def).toContain("whatever the instructions below say:\n\n- Work in this clone only.");
+  expect(def).toContain("Do these steps in order:\n\n1. Clarify.");
+  for (const p of [def, docs]) expect(p).not.toContain("Reproduce the bug first");
 });
 
-test("prompt: a type:<name> label picks tender's type steps; repo steps and byLabel still win", () => {
-  const tender = (n: string) => readFileSync(join(TENDER_DIR, "prompts", n), "utf8").trim();
-  const step = (p: string, n: string) => p.split(`### ${n}\n\n`)[1]!.split("\n\n### ")[0];
-  const none = parseRepoConfig([]);
-  expect(step(promptFor(none, ["Type:BUG"]), "plan")).toBe(tender("types/bug/plan.md"));
-  expect(step(promptFor(none, ["Type:BUG"]), "test")).toBe(tender("steps/test.md"));
-  const docs = promptFor(none, ["type:docs"]);
-  expect([step(docs, "plan"), step(docs, "test")]).toEqual([tender("types/docs/plan.md"), tender("types/docs/test.md")]);
-  expect(promptFor(none, ["type:foo", "type:docs", "type:bug"])).toBe(docs);
-  expect(promptFor(none, ["type:foo"])).toBe(promptFor(none));
-  expect(promptFor(none, ["type:../steps"])).toBe(promptFor(none));
-  const c = parseRepoConfig([file("config.yaml", "prompt:\n  steps: { plan: Repo plan. }\nbyLabel:\n  ui:\n    prompt: { steps: { test: UI tests. } }\n")]);
-  expect(step(promptFor(c, ["type:docs"]), "plan")).toBe("Repo plan.");
-  expect(step(promptFor(c, ["type:docs"]), "test")).toBe(tender("types/docs/test.md"));
-  expect(step(promptFor(c, ["type:docs", "ui"]), "test")).toBe("UI tests.");
+test("typeFor: the first type in file order with a label the ticket has, case-insensitively; default otherwise", () => {
+  const types = parseRepoConfig([]).types;
+  expect(typeFor(types, ["Type:BUG"]).name).toBe("bug");
+  expect(typeFor(types, ["type:docs", "type:bug"]).name).toBe("bug");
+  expect(typeFor(types, ["type:docs"]).name).toBe("docs");
+  for (const l of [[], ["type:foo"], ["bug"]]) expect(typeFor(types, l).name).toBe("default");
+  expect(typeFor(types).name).toBe("default");
 });
 
 test("combine: autoMerge is the lower of the repo's request and the host's ceiling; critical paths only grow", () => {
@@ -185,12 +188,12 @@ test("combine: autoMerge is the lower of the repo's request and the host's ceili
 });
 
 test("loadSession reads .tender/ at origin/<base> of the base clone, cached per commit; a worktree's copy is ignored", async () => {
-  mkdirSync(join(root, "acme/web/gh-1/.tender/prompts"), { recursive: true });
+  mkdirSync(join(root, "acme/web/gh-1/.tender"), { recursive: true });
   writeFileSync(join(root, "acme/web/gh-1/.tender/config.yaml"), "agent: claude\nautoMerge: all\n");
-  repoFiles["config.yaml"] = "agent: codex\ntestCmd: make test\n";
+  repoFiles["config.yaml"] = "agent: codex\ntestPaths: [qa/**]\n";
   const c = config({ repos: [{ name: "acme/web", path: join(root, "src-web"), autoMerge: "all" }] });
   const { io, cmds } = fakeIo();
-  expect(await loadSession(io, web(c))).toMatchObject({ agent: "codex", testCmd: "make test", baseBranch: "main", autoMerge: "all" });
+  expect(await loadSession(io, web(c))).toMatchObject({ agent: "codex", testPaths: ["qa/**"], baseBranch: "main", autoMerge: "all" });
   repoFiles["config.yaml"] = "agent: claude\n";
   expect((await loadSession(io, web(c)))!.agent).toBe("codex");
   setBaseSha("b".repeat(40));
@@ -199,8 +202,8 @@ test("loadSession reads .tender/ at origin/<base> of the base clone, cached per 
   expect(git.every((x) => x.startsWith(`git -C ${root}/src-web `))).toBe(true);
   expect(git.slice(0, 2)).toEqual([`git -C ${root}/src-web fetch origin main`, `git -C ${root}/src-web rev-parse --verify refs/remotes/origin/main^{commit}`]);
   expect(git.filter((x) => x.includes(" ls-tree -r "))).toEqual([
-    `git -C ${root}/src-web ls-tree -r -z --long ${"a".repeat(40)} -- .tender/config.yaml .tender/verify.yaml .tender/prompts`,
-    `git -C ${root}/src-web ls-tree -r -z --long ${"b".repeat(40)} -- .tender/config.yaml .tender/verify.yaml .tender/prompts`,
+    `git -C ${root}/src-web ls-tree -r -z --long ${"a".repeat(40)} -- .tender/config.yaml .tender/verify.yaml`,
+    `git -C ${root}/src-web ls-tree -r -z --long ${"b".repeat(40)} -- .tender/config.yaml .tender/verify.yaml`,
   ]);
   expect(git).toContain(`git -C ${root}/src-web rev-parse --verify refs/remotes/origin/main^{commit}`);
   expect(cmds).toContain("gh repo view acme/web --json nameWithOwner,defaultBranchRef");
@@ -208,17 +211,15 @@ test("loadSession reads .tender/ at origin/<base> of the base clone, cached per 
   expect((await loadSession(io, web(pinned)))!.baseBranch).toBe("dev");
 });
 
-test("gitEntries parses real git trees: symlinks, oversize files and odd names come back as entries to reject", async () => {
+test("gitEntries parses real git trees: symlinks and oversize files come back as entries to reject; other files are not read", async () => {
   const repo = join(root, "r");
   const sh = (...a: string[]) => expect(Bun.spawnSync(a, { stdout: "pipe", stderr: "pipe" }).exitCode).toBe(0);
   sh("git", "init", "-q", "-b", "main", repo);
   mkdirSync(join(repo, ".tender/prompts"), { recursive: true });
-  writeFileSync(join(repo, ".tender/config.yaml"), "agent: codex\n");
+  writeFileSync(join(repo, ".tender/config.yaml"), "x".repeat(64 * 1024 + 1));
   writeFileSync(join(repo, ".tender/prompts/bug.md"), "B");
-  writeFileSync(join(repo, ".tender/prompts/big.md"), "x".repeat(64 * 1024 + 1));
-  writeFileSync(join(repo, ".tender/prompts/we ird\n.md"), "x");
   writeFileSync(join(repo, ".tender/ignored.txt"), "x");
-  symlinkSync("/etc/passwd", join(repo, ".tender/prompts/link.md"));
+  symlinkSync("/etc/passwd", join(repo, ".tender/verify.yaml"));
   sh("git", "-C", repo, "add", "-A");
   sh("git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "c");
   const { io } = fakeIo((x) => {
@@ -228,13 +229,10 @@ test("gitEntries parses real git trees: symlinks, oversize files and odd names c
   });
   const entries = await gitEntries(io, repo, "HEAD");
   expect(entries.map((e) => [e.name, e.regular, e.text?.length])).toEqual([
-    ["config.yaml", true, 13],
-    ["prompts/big.md", true, undefined],
-    ["prompts/bug.md", true, 1],
-    ["prompts/link.md", false, undefined],
-    ["prompts/we ird\n.md", true, undefined],
+    ["config.yaml", true, undefined],
+    ["verify.yaml", false, undefined],
   ]);
-  expect(errors(entries).split("\n  ")).toEqual(["prompts/big.md: over 64 KiB", "prompts/link.md: must be a regular file", "prompts/we ird\n.md: prompt files must be named [a-z0-9-]+.md"]);
+  expect(errors(entries).split("\n  ")).toEqual(["config.yaml: over 64 KiB", "verify.yaml: must be a regular file"]);
   sh("git", "-C", repo, "rm", "-rq", ".tender");
   mkdirSync(join(repo, "cfg"));
   writeFileSync(join(repo, "cfg/config.yaml"), "agent: codex\n");
@@ -243,7 +241,7 @@ test("gitEntries parses real git trees: symlinks, oversize files and odd names c
   sh("git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "link");
   expect(errors(await gitEntries(io, repo, "HEAD"))).toBe(".tender: must be a directory");
   expect(errors(dirEntries(repo))).toBe(".tender: must be a directory");
-  expect(await gitEntries(io, repo, "HEAD~1")).toHaveLength(5);
+  expect(await gitEntries(io, repo, "HEAD~1")).toHaveLength(2);
 });
 
 test("an invalid repo config starts nothing: logged once and commented once per base commit", async () => {
@@ -277,16 +275,28 @@ test("an invalid repo config starts nothing: logged once and commented once per 
   expect(calls.at(-1)).toBe("claim gh-2");
 });
 
-test("a start uses the label-chosen prompt from the base branch and records the agent", async () => {
-  repoFiles["config.yaml"] = "byLabel:\n  bug:\n    prompt: { steps: { plan: { file: bug.md } } }\n";
-  repoFiles["prompts/bug.md"] = "BUG {{id}} {{tests}}";
-  const { tr } = fakeTracker({ ready: [{ ...ticket(1), labels: ["Bug"] }] });
-  const { io } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : a[5] === "--quiet" ? { code: 1 } : noPr(a)));
-  await pass(config(), io, () => tr, "/tender");
-  const prompt = readFileSync(join(root, "acme/web/gh-1.prompt.md"), "utf8");
+test("a start uses the type the base branch's types pick from the host's profile, renders {{verify}} and records the type", async () => {
+  const dir = join(root, "prof");
+  mkdirSync(join(dir, "instructions"), { recursive: true });
+  writeFileSync(join(dir, "instructions/bug.md"), "BUG {{id}} {{verify}}");
+  writeFileSync(join(dir, "instructions/default.md"), "DEFAULT");
+  writeFileSync(join(dir, "types.yaml"), "types:\n  - { name: default, instructions: instructions/default.md }\n");
+  repoFiles["config.yaml"] = "types:\n  - { name: bug, match: { labels: [bug] }, instructions: instructions/bug.md }\n";
+  const start = async (t: ReturnType<typeof ticket>) => {
+    const { tr } = fakeTracker({ ready: [t] });
+    const { io } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : a[5] === "--quiet" ? { code: 1 } : noPr(a)));
+    await pass(config({ profile: dir }), io, () => tr, "/tender");
+    return readFileSync(join(root, `acme/web/${t.id}.prompt.md`), "utf8");
+  };
+  const prompt = await start({ ...ticket(1), labels: ["Bug"] });
   expect(prompt).toStartWith("You are working on ticket gh-1 for the GitHub repository acme/web.");
-  expect(prompt).toContain("### plan\n\nBUG gh-1 the project's tests (find how they run: README, CI config, package or build files)\n\n### test");
-  expect(readFileSync(join(root, "acme/web/gh-1.agent"), "utf8")).toBe("claude");
+  expect(prompt).toContain("\n\nBUG gh-1 the project's checks (find how they run: README, CI config, package or build files)\n\nWhen the work is done:");
+  expect(JSON.parse(readFileSync(join(root, "acme/web/gh-1.type"), "utf8"))).toEqual({ name: "bug", instructions: join(realpathSync(dir), "instructions/bug.md") });
+  repoFiles["verify.yaml"] = "checks:\n  - { name: test, run: bun test }\n  - { name: e2e, run: make e2e }\n";
+  setBaseSha("b".repeat(40));
+  expect(await start({ ...ticket(2), labels: ["bug"] })).toContain("\n\nBUG gh-2 `bun test`, `make e2e`\n\n");
+  expect(await start(ticket(3))).toContain("\n\nDEFAULT\n\n");
+  expect(JSON.parse(readFileSync(join(root, "acme/web/gh-3.type"), "utf8")).name).toBe("default");
 });
 
 test("cloneAll clones every allowlisted repo that still resolves to itself; one failure does not stop the rest", async () => {
@@ -341,22 +351,33 @@ test("in review with an invalid .tender/ or a failed fetch: no merge or comment,
   }
 });
 
-test("tender check validates a working tree's .tender/ and prints the effective settings", () => {
-  expect(parseArgs(["check"])).toMatchObject({ cmd: "check", id: undefined });
+test("tender check validates a working tree's .tender/ against a profile and prints the effective settings", () => {
+  expect(parseArgs(["check"])).toMatchObject({ cmd: "check", id: undefined, configured: false });
   expect(parseArgs(["check", "../repo"])).toMatchObject({ cmd: "check", id: "../repo" });
   expect(parseArgs(["check", "a", "b"])).toEqual({ error: "unexpected argument b" });
+  expect(parseArgs(["check", "--config", "x.json"])).toMatchObject({ cmd: "check", configured: true, path: join(process.cwd(), "x.json") });
   expect(check(join(root, "nope"), () => {}, () => {})).toBe(false);
   const out: string[] = [];
   expect(check(root, (s) => out.push(s), (s) => out.push(s))).toBe(true);
-  expect(JSON.parse(out[0]!)).toMatchObject({ agent: "claude", testCmd: null, tracker: null, criticalPaths: expect.arrayContaining([".tender/**", ".github/**"]), prompt: { steps: { clarify: "tender's", plan: "tender's", test: "tender's", verify: "tender's", review: "tender's", commit: "tender's" }, append: null }, byLabel: {} });
-  mkdirSync(join(root, ".tender/prompts"), { recursive: true });
-  writeFileSync(join(root, ".tender/config.yaml"), 'testCmd: make\ncriticalPaths: ["x/**"]\nprompt:\n  steps: { plan: Use X., review: "" }\nbyLabel:\n  bug:\n    prompt: { steps: { verify: { file: bug.md } }, append: Notes. }\n    agent: { name: codex, effort: high }\nfeedback: { maxRounds: 2 }\ntracker:\n  linear:\n    project: Web app\n');
-  writeFileSync(join(root, ".tender/prompts/bug.md"), "B");
+  expect(JSON.parse(out[0]!)).toMatchObject({ agent: "claude", tracker: null, criticalPaths: expect.arrayContaining([".tender/**", ".github/**"]), types: [{ name: "bug" }, { name: "docs" }, { name: "default", instructions: join(TENDER_DIR, "profile/instructions/default.md") }], profile: join(TENDER_DIR, "profile") });
+  mkdirSync(join(root, ".tender"), { recursive: true });
+  writeFileSync(join(root, ".tender/config.yaml"), 'criticalPaths: ["x/**"]\ntypes:\n  - name: ui\n    match: { labels: [ui] }\n    instructions: instructions/docs.md\n    agent: { name: codex, effort: high }\nfeedback: { maxRounds: 2 }\ntracker:\n  linear:\n    project: Web app\n');
   expect(check(root, (s) => out.push(s))).toBe(true);
-  expect(JSON.parse(out[1]!)).toMatchObject({ testCmd: "make", tracker: { linear: { project: "Web app" } }, criticalPaths: expect.arrayContaining(["x/**", ".tender/**"]), prompt: { steps: { clarify: "tender's", plan: "inline", review: "disabled" }, append: null }, byLabel: { bug: { prompt: { steps: { verify: ".tender/prompts/bug.md" }, append: "inline" }, agent: { name: "codex", effort: "high" } } }, feedbackRounds: 2 });
-  symlinkSync(join(root, ".tender/prompts/bug.md"), join(root, ".tender/prompts/evil.md"));
-  writeFileSync(join(root, ".tender/prompts/Bad.md"), "x");
-  expect(dirEntries(root).map((e) => e.name)).toEqual(["config.yaml", "prompts/Bad.md", "prompts/bug.md", "prompts/evil.md"]);
-  expect(check(root, (s) => out.push(s), (s) => out.push(s))).toBe(false);
-  expect(out[2]).toBe(`${join(root, ".tender")}: invalid:\n  prompts/Bad.md: prompt files must be named [a-z0-9-]+.md\n  prompts/evil.md: must be a regular file`);
+  expect(JSON.parse(out[1]!)).toMatchObject({ tracker: { linear: { project: "Web app" } }, criticalPaths: expect.arrayContaining(["x/**", ".tender/**"]), types: [{ name: "bug" }, { name: "docs" }, { name: "ui", match: { labels: ["ui"] }, instructions: join(TENDER_DIR, "profile/instructions/docs.md"), agent: { name: "codex", effort: "high" } }, { name: "default" }], feedbackRounds: 2 });
+  const dir = join(root, "prof");
+  mkdirSync(join(dir, "instructions"), { recursive: true });
+  writeFileSync(join(dir, "instructions/default.md"), "D");
+  writeFileSync(join(dir, "types.yaml"), "types:\n  - { name: default, instructions: instructions/default.md }\n");
+  expect(check(root, (s) => out.push(s), (s) => out.push(s), loadProfile(dir))).toBe(false);
+  expect(out[2]).toBe(`${join(root, ".tender")}: invalid:\n  types[0] (ui).instructions: "instructions/docs.md" is not a .md file in the profile ${dir}`);
+  const cfg = config({ profile: dir, repos: [{ name: "acme/web", path: join(root, "src-web"), profile: TENDER_DIR + "/profile" }, { name: "acme/api", path: join(root, "src-api") }] });
+  const origin = (url: string) => Bun.spawnSync(["sh", "-c", `rm -rf .git && git init -q && git remote add origin ${url}`], { cwd: root });
+  origin("git@github.com:ACME/web.git");
+  expect(checkProfile(cfg, root).dir).toBe(join(TENDER_DIR, "profile"));
+  origin("https://github.com/acme/api");
+  expect(checkProfile(cfg, root).dir).toBe(dir);
+  origin("https://github.com/acme/other.git");
+  expect(checkProfile(cfg, root).dir).toBe(dir);
+  symlinkSync("/etc/passwd", join(root, ".tender/verify.yaml"));
+  expect(dirEntries(root).map((e) => [e.name, e.regular])).toEqual([["config.yaml", true], ["verify.yaml", false]]);
 });

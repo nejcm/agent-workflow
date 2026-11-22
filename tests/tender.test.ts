@@ -67,7 +67,6 @@ test("parseArgs rejects unknown flags, stray args and out-of-range numbers", () 
     ["status", "--plain"],
     ["tail", "PER-1", "--exec"],
     ["run", "--no-follow"],
-    ["check", "--config", "x.json"],
   ])
     expect(parseArgs(argv)).toHaveProperty("error");
 });

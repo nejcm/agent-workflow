@@ -67,6 +67,15 @@ test("the PR comes from <ID>.pr for any agent; a forged or oversize one is ignor
   ]);
 });
 
+test("the type comes from <ID>.type; a malformed, oversize or symlinked one is ignored", () => {
+  for (const id of ["PER-1", "PER-2", "PER-3", "PER-4", "PER-5"]) worktree(id);
+  writeFileSync(join(dir(), "PER-1.type"), JSON.stringify({ name: "bug", instructions: "/p/instructions/bug.md" }));
+  writeFileSync(join(dir(), "PER-2.type"), "{not json");
+  writeFileSync(join(dir(), "PER-3.type"), JSON.stringify({ name: "bug", instructions: "x".repeat(5000) }));
+  symlinkSync(join(dir(), "PER-1.type"), join(dir(), "PER-4.type"));
+  expect(rows(config(), new Map(), root, T * 1000).map((r) => r.type)).toEqual([{ name: "bug", instructions: "/p/instructions/bug.md" }, null, null, null, null]);
+});
+
 test("dur", () => {
   expect([null, 5_000, 125_000, 3_725_000, 90_000_000].map(dur)).toEqual(["-", "5s", "2m", "1h02m", "1d1h"]);
 });

@@ -352,6 +352,7 @@ export function detail(r: Row | undefined, n: number, rows: number, ctx: DetailC
   ];
   const branch = kv("branch", val(`agent/${clean(r.id, 40)}`));
   const tree = kv("worktree", val(clean(home(ctx.wt, ctx.home), 300)));
+  const type = r.type && kv("type", [s(P, "fg", r.type.name), s(P, "dim", `  ${home(r.type.instructions, ctx.home)}`)]);
   const cols = (ls: Line[], k: number) => [...ls.slice(0, -1).flatMap((l) => clip(l, Math.floor(n / k))), ...ls.at(-1)!];
   const meta: Line[] =
     n >= 96
@@ -359,6 +360,7 @@ export function detail(r: Row | undefined, n: number, rows: number, ctx: DetailC
       : n >= 56
         ? [cols([kv(...pairs[0]!), kv(...pairs[1]!)], 2), cols([kv(...pairs[2]!), kv(...pairs[3]!)], 2), branch, tree]
         : [...pairs.map((p) => kv(...p)), branch, tree];
+  if (type) meta.push(type);
   const p = r.phases;
   const items = p?.items ?? [];
   const phHead: Line = p

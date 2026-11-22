@@ -122,6 +122,8 @@ test("detail shows title, meta, phase strip and checklist, and degrades to fit",
   expect(full.join("\n")).toContain("branch   agent/PER-1");
   expect(full.slice(-5)).toEqual(["PHASES  1/3  33%", expect.stringMatching(/^━+ ━+ ━+$/), "✓ Do a", "◐ Do b", "○ Do c"]);
   expect(detail(r, 120, Infinity, ctx, C).length).toBeLessThan(full.length);
+  expect(full.join("\n")).not.toContain("type ");
+  for (const n of [40, 80, 120]) expect(detail(row({ type: { name: "docs", instructions: "/home/u/agents/tender/instructions/docs.md" } }), n, Infinity, ctx, C).map(text)).toContain("type     docs  ~/agents/tender/instructions/docs.md");
   const small = detail(r, 80, 4, ctx, C).map(text);
   expect(small).toEqual([full[0], "PHASES  1/3  33%", expect.stringMatching(/^━/), "+3 more"]);
   expect(detail(r, 80, 0, ctx, C)).toEqual([]);

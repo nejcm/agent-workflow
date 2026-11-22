@@ -18,6 +18,8 @@ export interface Row {
   id: string;
   repo: string;
   agent: AgentName;
+  /** The task type chosen at start, from `<ID>.type`. */
+  type: { name: string; instructions: string } | null;
   /** tmux/marker view: `running` has a window, `ended` an `<ID>.ended`, `orphan` neither. */
   session: "running" | "ended" | "handoff" | "orphan";
   state: State;
@@ -57,6 +59,15 @@ function savedPr(dir: string, id: string) {
   return url && PR_URL.test(url) ? url : null;
 }
 
+function savedType(dir: string, id: string) {
+  const t = withFile(join(dir, `${id}.type`), (fd, st) => {
+    try {
+      return st.size <= 4096 ? JSON.parse(readFileSync(fd, "utf8")) : undefined;
+    } catch {}
+  });
+  return typeof t?.name === "string" && typeof t.instructions === "string" ? { name: clean(t.name, 40), instructions: clean(t.instructions, 300) } : null;
+}
+
 /** `feeds`: each agent's state lookup (missing: that agent's running rows are unknown). */
 export function rows(cfg: Config, wins: Map<string, string>, home = homedir(), now = Date.now(), feeds: Partial<Record<AgentName, Lookup>> = {}): Row[] {
   return Object.values(cfg.repos).flatMap((r) => {
@@ -77,6 +88,7 @@ export function rows(cfg: Config, wins: Map<string, string>, home = homedir(), n
         id,
         repo: r.key,
         agent,
+        type: savedType(dir, id),
         session,
         state: live.state,
         stateSince: live.since,

@@ -116,6 +116,12 @@ test("detail panel describes the selected phase with real session stats and avai
   expect(capture).toContain("[a Attach]");
   expect(capture).toContain("[o Open PR]");
   expect(capture).toContain("[Enter Close]");
+  const type = { name: "bug", instructions: "/p/instructions/bug.md" };
+  expect(ticketTree(row({ type })).subtitle).toBe("claude · bug");
+  const typed = treeScreen(model({ rs: [row({ type })] }), 120, 24, palette({}), { sel: 0, detail: true }).lines.map(text).join("\n");
+  expect(typed).toContain("claude · bug · Working");
+  expect(typed).toContain("Type bug · /p/instructions/bug.md");
+  expect(capture).not.toContain("Type ");
   const unavailable = treeScreen(model({ rs: [row({ window: null, pr: null })] }), 80, 20, palette({}), { sel: 0, detail: true }).lines.map(text).join("\n");
   expect(unavailable).not.toContain("[a Attach]");
   expect(unavailable).not.toContain("[o Open PR]");

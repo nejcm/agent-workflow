@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
-import { chmodSync, mkdirSync, readFileSync, symlinkSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseConfig } from "../src/config/config";
+import { defaultProfile } from "../src/config/profile";
 import { TENDER_DIR } from "../src/util";
 import { config, raw, root, src, useTempRoot, web } from "./helpers";
 
@@ -17,7 +18,7 @@ test("config: defaults applied and errors listed", () => {
   expect(c.reposRoot).toMatch(/\/agent-repos$/);
   expect(c.sources[0]).toEqual({ name: "web", tracker: "github", readyLabel: "agent", needsHumanLabel: "needs-human", inProgressLabel: "in-progress", inReviewLabel: "in-review", readyToMergeLabel: "ready-to-merge" });
   expect(config({ sources: [src({ tracker: "linear", team: "ENG" })] }).sources[0]).toEqual({ name: "web", tracker: "linear", readyLabel: "agent", needsHumanLabel: "needs-human", team: "ENG", todo: "Todo", inProgress: "In Progress", inReview: "In Review", done: ["Done"] });
-  expect(web(c)).toEqual({ key: "acme/web", path: join(root, "src-web"), baseBranch: undefined, sandbox: "nono", maxConcurrent: undefined, autoMerge: "off", criticalPaths: [], feedbackAuthors: [], stallMinutes: 30, feedbackRounds: 3 });
+  expect(web(c)).toEqual({ key: "acme/web", path: join(root, "src-web"), baseBranch: undefined, sandbox: "nono", maxConcurrent: undefined, autoMerge: "off", criticalPaths: [], feedbackAuthors: [], stallMinutes: 30, feedbackRounds: 3, profile: defaultProfile() });
   const c2 = config({ reposRoot: "/r", repos: ["acme/web", { name: "acme/api", maxConcurrent: 1, baseBranch: "dev" }] });
   expect(web(c2).path).toBe("/r/acme/web");
   expect(c2.repos["acme/api"]).toMatchObject({ path: "/r/acme/api", sandbox: "nono", maxConcurrent: 1, baseBranch: "dev" });
@@ -29,8 +30,8 @@ test("config: defaults applied and errors listed", () => {
     }
     return "";
   };
-  const e1 = err({ host: "a b", maxConcurrent: 0, sources: [{ name: "Bad Name", tracker: "jira", repo: "x", repoPath: "/x", testCmd: "t" }] });
-  for (const k of ["host:", "maxConcurrent:", "repos:", ".name:", ".tracker:", ".repo: moved", ".repoPath: moved", ".testCmd: moved"]) expect(e1).toContain(k);
+  const e1 = err({ host: "a b", maxConcurrent: 0, sources: [{ name: "Bad Name", tracker: "jira", repo: "x", repoPath: "/x" }] });
+  for (const k of ["host:", "maxConcurrent:", "repos:", ".name:", ".tracker:", ".repo: moved", ".repoPath: moved"]) expect(e1).toContain(k);
   const e2 = err(raw({ defaults: {}, repos: [{ name: "acme/web", sandbox: "vm" }, "../x", { name: "-x/y" }, "a/b/c", { path: "/p" }, 7] }));
   for (const k of [`repos[0] (acme/web).sandbox: "nono" | "none" (here or in defaults)`, `repos[1]: must be "owner/name"`, `repos[2].name: must be "owner/name"`, `repos[3]: must be`, `repos[4].name: must be`, `repos[5]: array of`])
     expect(e2).toContain(k);
@@ -92,7 +93,7 @@ test("config: stallMinutes per repo entry, else defaults, else the top level; fe
 });
 
 test("config: work keys moved to the repo's .tender/config.yaml are rejected", () => {
-  const keys = ["agent", "testCmd", "planStep", "prompt", "testPaths"];
+  const keys = ["agent", "testPaths"];
   const one = Object.fromEntries(keys.map((k) => [k, "x"]));
   let msg = "";
   try {
@@ -105,6 +106,33 @@ test("config: work keys moved to the repo's .tender/config.yaml are rejected", (
     expect(msg).toContain(`repos[0] (acme/web).${k}: moved to .tender/config.yaml in the repo`);
   }
   expect(msg).not.toContain("unknown key");
+});
+
+test("config: a profile at the top level, in defaults or on a repo entry, each validated once; tender's own by default", () => {
+  const mk = (name: string, types = "types:\n  - { name: default, instructions: instructions/d.md }\n") => {
+    mkdirSync(join(root, name, "instructions"), { recursive: true });
+    writeFileSync(join(root, name, "instructions/d.md"), "D");
+    writeFileSync(join(root, name, "types.yaml"), types);
+    return join(root, name);
+  };
+  const [a, b] = [mk("a"), mk("b")];
+  expect(config().profile).toBe(defaultProfile());
+  const c = parseConfig(raw({ profile: a, repos: [{ name: "acme/web", path: "/w", profile: "b" }, { name: "acme/api", path: "/x" }] }), root);
+  expect([c.profile.dir, c.repos["acme/web"]!.profile.dir, c.repos["acme/api"]!.profile]).toEqual([a, b, c.profile]);
+  expect(parseConfig(raw({ defaults: { sandbox: "nono", profile: b } }), root).repos["acme/web"]!.profile.dir).toBe(b);
+  expect(() => config({ profile: join(root, "none") })).toThrow(`profile: profile ${join(root, "none")}: ENOENT`);
+  expect(() => config({ profile: "" })).toThrow("profile: non-empty string, a profile directory");
+  const bad = mk("bad", "types:\n  - { name: default, instructions: instructions/d.md }\n  - { name: x, match: { labels: [x] }, instructions: instructions/nope.md, size: 1 }\n");
+  let msg = "";
+  try {
+    config({ repos: [{ name: "acme/web", path: "/w", profile: bad }] });
+  } catch (e) {
+    msg = (e as Error).message;
+  }
+  expect(msg).toBe(`invalid config:\n  repos[0] (acme/web).profile: profile ${bad} is invalid:\n  types[1] (x).size: unknown key\n  types[1] (x).instructions: "instructions/nope.md" is not a .md file in the profile ${bad}\n  types: default must be the last type`);
+  expect(() => config({ profile: mk("none-default", "types:\n  - { name: x, match: { labels: [x] }, instructions: instructions/d.md }\n") })).toThrow("types: default must be the last type");
+  expect(() => config({ profile: mk("not-list", "types: x\n") })).toThrow("types: list of at most 50 types");
+  expect(() => config({ profile: mk("extra", "types: []\nsteps: []\n") })).toThrow("types.yaml: mapping with types");
 });
 
 test("config: unknown keys at the top level, in defaults and in repos entries are rejected", () => {

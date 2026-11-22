@@ -134,18 +134,21 @@ test("starts ready tickets up to maxConcurrent", async () => {
 });
 
 test("a start cuts a long ticket body and keeps placeholders in it literal; a prompt over 120 KiB gets no session clone, window or claim", async () => {
-  const run = (body: string) => {
+  const run = (body: string, over: object = {}) => {
     const { tr, calls } = fakeTracker({ ready: [{ ...ticket(1), body }] });
     const { io, cmds, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : a[5] === "--quiet" ? { code: 1 } : noPr(a)));
-    return pass(config(), io, () => tr, "/tender").then(() => ({ calls, cmds, logs }));
+    return pass(config(over), io, () => tr, "/tender").then(() => ({ calls, cmds, logs }));
   };
   expect((await run(`{{id}} {{branch}} ${"x".repeat(24_000)}tail`)).calls).toEqual(["claim gh-1"]);
   const prompt = readFileSync(join(root, "acme/web/gh-1.prompt.md"), "utf8");
   expect(prompt.includes(`<body>\n{{id}} {{branch}} ${"x".repeat(23_982)}\n[truncated: read the full ticket at its URL]\n</body>`)).toBe(true);
   rmSync(join(root, "acme"), { recursive: true });
-  repoFiles["config.yaml"] = 'prompt:\n  append: "{{body}}"\n';
+  const profile = join(root, "profile");
+  mkdirSync(join(profile, "instructions"), { recursive: true });
+  writeFileSync(join(profile, "instructions/default.md"), "{{body}}");
+  writeFileSync(join(profile, "types.yaml"), "types:\n  - { name: default, instructions: instructions/default.md }\n");
   setBaseSha("c".repeat(40));
-  const big = await run("\u20ac".repeat(30_000));
+  const big = await run("\u20ac".repeat(30_000), { profile });
   expect(big.calls).toEqual([]);
   expect(big.logs.some((l) => /gh-1: prompt is 1\d\d KiB, over 120 KiB/.test(l))).toBe(true);
   expect(big.cmds.some((c) => c.startsWith("tmux new-window") || c.includes(" clone "))).toBe(false);
@@ -392,9 +395,9 @@ test("an unreadable template login never aborts the pass", async () => {
   expect(logs.filter((l) => l.startsWith("Codex login copies not refreshed")).length).toBe(1);
 });
 
-test("a label's agent replaces the repo's whole agent config, so a switch to codex drops claude's model and effort; resume keeps the recorded one", async () => {
+test("a type's agent replaces the repo's whole agent config, so a switch to codex drops claude's model and effort; resume keeps the recorded one", async () => {
   login(Date.now() + 5 * DAY);
-  repoFiles["config.yaml"] = 'agent:\n  name: claude\n  model: "opus[1m]"\n  effort: high\nbyLabel:\n  big:\n    agent: codex\n';
+  repoFiles["config.yaml"] = 'agent:\n  name: claude\n  model: "opus[1m]"\n  effort: high\ntypes:\n  - { name: big, match: { labels: [big] }, instructions: instructions/default.md, agent: codex }\n';
   const start = async (labels: string[]) => {
     const { tr } = fakeTracker({ ready: [{ ...ticket(1), labels }] });
     const { io } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : a[5] === "--quiet" ? { code: 1 } : noPr(a)));

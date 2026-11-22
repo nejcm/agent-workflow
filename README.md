@@ -82,6 +82,7 @@ Every poll (default 60 s), `tender` looks for ready tickets (the `agent` label p
 - [Watching sessions](docs/watching.md): `status`, `watch`, `tail`, live state
 - [Config reference](docs/config.md): `tender.json` and `.tender/config.yaml`
 - [Clones, sandbox and cleanup](docs/sandbox.md): isolation details
+- [Factory](docs/factory.md): what only tender does, the verification ladder, what is left to skills, and the research behind it
 - [Intake](docs/intake.md): scripts that file tickets from signals
 - [PR sweep](docs/prs.md): `tender prs`, orphan agent PRs and the weekly report
 - [Trust signals](docs/stats.md): `tender stats`, per-path merge, revert and shadow numbers and recommendations

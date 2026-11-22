@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { parseConfig } from "../src/config/config";
 import { TENDER_DIR } from "../src/util";
@@ -46,6 +46,28 @@ test("config: defaults applied and errors listed", () => {
   for (const k of ["sources[0] (gh).team: not a github source key", "sources[0] (gh).done: not a github source key", "sources[0] (gh).bogus: not a github source key", "sources[1] (lin).inProgressLabel: not a linear source key"]) expect(e3).toContain(k);
   expect(err(raw({ sources: [src({ repos: ["acme/web"] })] }))).not.toContain("not a github source key");
   expect(err(raw({ defaultHost: "yes" }))).toMatch(/defaultHost/);
+});
+
+test("a base clone inside a repo's workspace dir is rejected, also through a symlink", () => {
+  const msg = "repos[0] (acme/web).path: must be outside every repo's <workspaceRoot>/<owner>/<name>";
+  for (const p of ["acme/web", "acme/web/gh-12.base", "acme/api/x"]) expect(() => config({ repos: [{ name: "acme/web", path: join(root, p) }, { name: "acme/api", path: "/b" }] })).toThrow(msg);
+  mkdirSync(join(root, "acme/web/gh-12.base"), { recursive: true });
+  symlinkSync(join(root, "acme/web/gh-12.base"), join(root, "alias"));
+  expect(() => config({ repos: [{ name: "acme/web", path: join(root, "alias") }] })).toThrow(msg);
+  symlinkSync(root, join(root, "ws-alias"));
+  expect(() => config({ repos: [{ name: "acme/web", path: join(root, "ws-alias/acme/web/gh-12.claude") }] })).toThrow(msg);
+  expect(web(config({ repos: [{ name: "acme/web", path: join(root, "acme/other") }] })).path).toBe(join(root, "acme/other"));
+  expect(web(config()).path).toBe(join(root, "src-web"));
+});
+
+test.skipIf(process.getuid?.() === 0)("a repo path that cannot be resolved for a reason other than missing segments is rejected", () => {
+  mkdirSync(join(root, "locked/x"), { recursive: true });
+  chmodSync(join(root, "locked"), 0);
+  try {
+    expect(() => config({ repos: [{ name: "acme/web", path: join(root, "locked/x/clone") }] })).toThrow("repos[0] (acme/web).path: cannot resolve: EACCES");
+  } finally {
+    chmodSync(join(root, "locked"), 0o755);
+  }
 });
 
 test("example config validates", () => {

@@ -763,6 +763,24 @@ test("done: kills window, removes the session clone, files and config dir; keeps
   db.close();
 });
 
+test("done: removes every <ID>.* sidecar, not another ticket's whose ID it prefixes", async () => {
+  for (const id of ["gh-12", "gh-123"]) {
+    worktree(id);
+    writeFileSync(join(root, "acme/web", `${id}.sh`), "");
+  }
+  writeFileSync(join(root, "acme/web/gh-12.new-sidecar"), "");
+  mkdirSync(join(root, "src-web"), { recursive: true });
+  symlinkSync(join(root, "src-web"), join(root, "acme/web/gh-12.x"));
+  const { tr } = fakeTracker({ done: ["gh-12"] });
+  await pass(config(), fakeIo().io, () => tr, "/tender");
+  expect(existsSync(join(root, "src-web"))).toBe(true);
+  expect(lstatSync(join(root, "acme/web/gh-12.x")).isSymbolicLink()).toBe(true);
+  expect(existsSync(join(root, "acme/web/gh-12.new-sidecar"))).toBe(false);
+  expect(existsSync(join(root, "acme/web/gh-12.sh"))).toBe(false);
+  expect(existsSync(join(root, "acme/web/gh-123.sh"))).toBe(true);
+  expect(existsSync(join(root, "acme/web/gh-123"))).toBe(true);
+});
+
 test("canceled: kills the window once, keeps the clone and files, posts nothing; Done later cleans up", async () => {
   const c = config();
   for (const id of ["gh-1", "gh-2"]) {

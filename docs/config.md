@@ -53,7 +53,7 @@ A `repos` entry is `"owner/name"` or `{ "name": "owner/name", …settings }`. Ea
 
 | key | type | default | |
 |---|---|---|---|
-| `path` | path (entry only) | `<reposRoot>/<owner>/<name>` | an existing `tender`-only clone; never your working clone |
+| `path` | path (entry only) | `<reposRoot>/<owner>/<name>` | an existing `tender`-only clone; never your working clone, nor inside any repo's `<workspaceRoot>/<owner>/<name>` (symlinks resolved), where cleanup deletes `<ID>.*` |
 | `baseBranch` | branch name | the remote's default branch | where `.tender/` is read and PRs target |
 | `sandbox` | `nono` \| `none` | required in the entry or `defaults` | see [Sandbox](sandbox.md) |
 | `maxConcurrent` | positive integer | unlimited | sessions for this repo, within the global `maxConcurrent` |

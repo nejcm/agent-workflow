@@ -6,7 +6,7 @@ Every setting tender reads, with its type, allowed values and default:
 - [Repo config](#repo-config) (`.tender/config.yaml`): how the agent works on one repo; committed to that repo.
 - [Environment](#environment) and [CLI](#cli).
 
-Unknown keys are errors in both files. Upgrading from older layouts is in [upgrading.md](upgrading.md).
+Unknown keys are errors in both files.
 
 ## Host config
 

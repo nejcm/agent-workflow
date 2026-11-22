@@ -34,8 +34,8 @@ test("repo config: every key parsed, every problem listed", () => {
   });
   const bad = errors([file("config.yaml", 'agent: gpt\ntestCmd: ""\nplanStep: Use X.\nautoMerge: yes\ncriticalPaths: x\ntestPaths: [1]\nsandbox: none\nprompts:\n  default: main.md\nprompt:\n  steps:\n    implement: x\n    plan: 7\n    verify: { file: nope.md }\n    review: bug.md\n  append: [x]\nbyLabel:\n  bug: bug.md\n  ui:\n    prompt: { steps: { test: { path: x } } }\n')]);
   for (const k of [
-    'agent: "claude" | "codex"', "testCmd: non-empty string", "planStep: moved to prompt.steps.plan (see docs/upgrading.md)", "autoMerge:", "criticalPaths: list", "testPaths: list", "sandbox: unknown key",
-    "prompts: replaced by prompt and byLabel (see docs/upgrading.md)", "prompt.steps.implement: unknown step; steps are clarify, plan, test, verify, review, commit", 'prompt.steps.plan: text, "" to drop the step, or { file: <name>.md }',
+    'agent: "claude" | "codex"', "testCmd: non-empty string", "planStep: moved to prompt.steps.plan", "autoMerge:", "criticalPaths: list", "testPaths: list", "sandbox: unknown key",
+    "prompts: replaced by prompt and byLabel", "prompt.steps.implement: unknown step; steps are clarify, plan, test, verify, review, commit", 'prompt.steps.plan: text, "" to drop the step, or { file: <name>.md }',
     'prompt.steps.verify: "nope.md" is not a file in .tender/prompts/', 'prompt.steps.review: "bug.md" is a file name; write { file: <name>.md } to use a file in .tender/prompts/', 'prompt.append: text, "" to drop the step, or { file: <name>.md }',
     "byLabel.bug: mapping with prompt and agent", 'byLabel.ui.prompt.steps.test: text, "" to drop the step, or { file: <name>.md }',
   ])
@@ -109,7 +109,7 @@ test("repo config: size cap, prompt names, regular files only", () => {
   for (const n of ["Bug.md", "a_b.md", "a.txt", ".md", "sub/a.md"]) expect(errors([file(`prompts/${n}`, "x")])).toBe(`prompts/${n}: prompt files must be named [a-z0-9-]+.md`);
   expect(errors([{ name: "config.yaml", regular: false, size: 0 }])).toBe("config.yaml: must be a regular file");
   expect(errors([file("other.yaml", "")])).toBe("other.yaml: not expected here");
-  expect(errors([file("prompts/default.md", "D")])).toBe("prompts/default.md: no longer replaces tender's prompt; move your changes into prompt.steps and prompt.append (see docs/upgrading.md)");
+  expect(errors([file("prompts/default.md", "D")])).toBe("prompts/default.md: no longer replaces tender's prompt; move your changes into prompt.steps and prompt.append");
   const half = "x".repeat(16 * 1024);
   const capped = (yaml: string, ...more: Entry[]) => errors([file("config.yaml", yaml), file("prompts/half.md", half), ...more]);
   expect(capped("prompt:\n  steps: { plan: { file: half.md } }\n  append: { file: half.md }\n")).toBe("");

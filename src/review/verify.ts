@@ -4,11 +4,12 @@ import { join } from "node:path";
 import { repoDir } from "../config/config";
 import { nonoRun, scopePrefix } from "../session/launcher";
 import type { Config, Io, Session, VerifyCheck, VerifyContract } from "../types";
+import { budget, collectProof, postProof } from "./proof";
 import { GIT, Kept, put, read, SAFE_ID, SLOW_SECS, strip, subdirs, write } from "../util";
 
 /** `<ID>.verified`: the last verify result tender recorded, for one PR head and contract digest. */
 export type Verified = { head: string; digest: string } & ({ pass: true } | { pass: false; check: string; tail: string });
-type Job = { base: string; head: string; digest: string; checks: VerifyCheck[]; tenderDir: string };
+type Job = { base: string; head: string; digest: string; checks: VerifyCheck[]; tenderDir: string; pr?: string };
 
 const LOG_LINES = 80;
 // Whole in one feedback item, and under MAX_FILE once serialized even as 4-byte UTF-8.
@@ -88,7 +89,7 @@ export async function startVerify(cfg: Config, io: Io, r: Session, id: string, p
   if (io.dry) return;
   const head = (await read(io, [...GIT, "-C", r.path, "rev-parse", "--verify", "FETCH_HEAD^{commit}"])).trim();
   if (head !== pr.headRefOid) return io.log(`verify ${id}: fetched ${head.slice(0, 12) || "nothing"} for PR #${pr.number}, not the head ${pr.headRefOid.slice(0, 12)} it was judged at; retried next poll`);
-  put(io, join(vdir, "job.json"), JSON.stringify({ base: r.path, head, digest: c.digest, checks: c.checks, tenderDir } satisfies Job));
+  put(io, join(vdir, "job.json"), JSON.stringify({ base: r.path, head, digest: c.digest, checks: c.checks, tenderDir, pr: pr.url } satisfies Job));
   verifier.busy = true;
   // A backstop only: each check has its own deadline, and stopping the unit kills everything a check left behind.
   const secs = c.checks.reduce((n, x) => n + x.timeout + 10, SLOW_SECS);
@@ -102,13 +103,16 @@ const lastLines = (text: string) => {
   return lines.slice(-LOG_LINES).join("\n").slice(-TAIL_CHARS) || "(no output)";
 };
 
-/** The verifier: a `--shared` clone of the base clone at the fetched head, each check in order under nono, then `result`. */
+/** The verifier: a `--shared` clone of the base clone at the fetched head, each check in order under nono and its proof copied out, then `result`. */
 export async function runVerify(vdir: string, io: Io) {
   const job: Job = JSON.parse(readFileSync(join(vdir, "job.json"), "utf8"));
   const clone = join(vdir, "clone");
   const tmp = join(vdir, "tmp");
   const finish = (r: object) => put(io, join(vdir, "result"), JSON.stringify({ head: job.head, digest: job.digest, ...r }));
+  const proof = join(vdir, "proof");
   mkdirSync(join(tmp, "cache"), { recursive: true });
+  mkdirSync(proof, { recursive: true });
+  const b = budget();
   const [nono, run, ...rest] = nonoRun("tender-verify", job.tenderDir, [["--allow", clone], ["--allow", tmp], ["--read", join(job.base, ".git", "objects")]]);
   // Silent: nono's banner would push the check's own output out of the tail.
   const box = [nono!, run!, "--silent", ...rest];
@@ -122,11 +126,15 @@ export async function runVerify(vdir: string, io: Io) {
     for (const c of job.checks) {
       const res = await io.run(["bash", "-c", TAIL, "bash", ...box, "sh", "-c", c.run], clone, c.timeout, { env, max: 128 * 1024 });
       if (res.code !== 0) return finish({ pass: false, check: c.name, tail: / timed out after \d+s/.test(res.err) ? `${c.name} timed out after ${c.timeout}s` : lastLines(`${res.out}\n${res.err}`) });
+      // Outside the sandbox, right after its own check, before a later one can change the files.
+      collectProof(clone, proof, c, b, io.log);
     }
     finish({ pass: true });
   } catch (e) {
-    finish({ pass: false, check: "(setup)", tail: lastLines((e as Error).message) });
+    return finish({ pass: false, check: "(setup)", tail: lastLines((e as Error).message) });
   }
+  // Here rather than in the poll, so a slow upload never holds it; tender's own gh login, never the sandbox's.
+  if (job.pr) await postProof(io, job.pr, job.head, job.checks.map((c) => c.name), proof, b);
 }
 
 if (import.meta.main) {

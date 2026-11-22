@@ -108,6 +108,15 @@ const CMD_FLAGS: Record<string, string[]> = {
 const FLAGS = ["--config", ...Object.values(CMD_FLAGS).flat()];
 const TARGETED = ["tail", "open", "resume"];
 
+const ghVersion = () => {
+  try {
+    return Bun.spawnSync(["gh", "--version"], { stderr: "ignore" }).stdout.toString();
+  } catch {
+    return "";
+  }
+};
+export const ghAttaches = (version: string) => ((m) => !!m && (Number(m[1]) > 2 || (Number(m[1]) === 2 && Number(m[2]) >= 99)))(/gh version (\d+)\.(\d+)/.exec(version));
+
 /** Validates `<dir>/.tender/` from the working tree and prints the repo's settings with defaults filled in; false if invalid. */
 export function check(dir: string, print = console.log, fail = console.error) {
   let c: RepoConfig;
@@ -123,6 +132,7 @@ export function check(dir: string, print = console.log, fail = console.error) {
   const steps = { steps: Object.fromEntries(STEPS.map((n) => [n, from(prompt.steps[n]) ?? "tender's"])), append: from(prompt.append) ?? null };
   const labels = Object.fromEntries(Object.entries(byLabel).map(([l, e]) => [l, { prompt: e.prompt && { steps: Object.fromEntries(Object.entries(e.prompt.steps).map(([n, t]) => [n, from(t)])), append: from(e.prompt.append) }, agent: e.agent }]));
   print(JSON.stringify({ ...rest, testCmd: c.testCmd ?? null, tracker: c.tracker ?? null, autoMerge: c.autoMerge ? `${c.autoMerge} (capped by the host's autoMerge)` : "unset (the host's autoMerge)", criticalPaths: [...CRITICAL_PATHS, ...c.criticalPaths], testPaths: [...TEST_PATHS, ...c.testPaths], verify: c.verify ?? "none: medium and large changes never auto-merge", prompt: steps, byLabel: labels }, null, 2));
+  if (c.verify?.checks.some((x) => x.proof.length) && !ghAttaches(ghVersion())) fail("warning: proof needs gh 2.99 or newer for `gh pr comment --attach`; verify comments fail until gh is upgraded");
   return true;
 }
 

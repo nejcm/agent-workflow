@@ -1,14 +1,15 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { repoDir } from "../config/config";
 import { nonoRun, scopePrefix } from "../session/launcher";
 import type { Config, Io, Session, VerifyCheck, VerifyContract } from "../types";
+import { budget, collectProof, type Pending } from "./proof";
 import { GIT, Kept, put, read, SAFE_ID, SLOW_SECS, strip, subdirs, write } from "../util";
 
 /** `<ID>.verified`: the last verify result tender recorded, for one PR head and contract digest. */
 export type Verified = { head: string; digest: string } & ({ pass: true } | { pass: false; check: string; tail: string });
-type Job = { base: string; head: string; digest: string; checks: VerifyCheck[]; tenderDir: string };
+type Job = { base: string; head: string; digest: string; checks: VerifyCheck[]; tenderDir: string; pr?: string };
 
 const LOG_LINES = 80;
 // Whole in one feedback item, and under MAX_FILE once serialized even as 4-byte UTF-8.
@@ -54,6 +55,14 @@ export async function reconcileVerify(cfg: Config, io: Io) {
       const lost = job && !verifiedAt(readVerified(dir, id), job.head, job) ? { head: job.head, digest: job.digest, pass: false as const, check: "(verifier)", tail: "the run ended without a result: killed, out of memory or past its deadline" } : undefined;
       const res = readFile(join(dir, d, "result")) ?? lost;
       if (res) put(io, join(dir, `${id}.verified`), JSON.stringify(res));
+      // The newest pass's staging replaces an older one still waiting to be posted.
+      if (res?.pass && existsSync(join(dir, d, "proof", "pending.json")) && !io.dry)
+        try {
+          rmSync(join(dir, `${id}.proof`), { recursive: true, force: true });
+          renameSync(join(dir, d, "proof"), join(dir, `${id}.proof`));
+        } catch (e) {
+          io.log(`verify ${r.key}/${id}: proof not staged: ${(e as Error).message}`);
+        }
       io.log(`verify ${r.key}/${id}: ${res ? `${res.pass ? "passed" : `${res.check} failed`} at ${res.head.slice(0, 12)}` : "ended without a result or a job, so it runs again"}`);
       // A check can leave read-only dirs, which rm cannot empty; chmod -R skips symlinks.
       await write(io, ["chmod", "-R", "u+rwX", "--", join(dir, d)], undefined, SLOW_SECS).catch(() => {});
@@ -88,7 +97,7 @@ export async function startVerify(cfg: Config, io: Io, r: Session, id: string, p
   if (io.dry) return;
   const head = (await read(io, [...GIT, "-C", r.path, "rev-parse", "--verify", "FETCH_HEAD^{commit}"])).trim();
   if (head !== pr.headRefOid) return io.log(`verify ${id}: fetched ${head.slice(0, 12) || "nothing"} for PR #${pr.number}, not the head ${pr.headRefOid.slice(0, 12)} it was judged at; retried next poll`);
-  put(io, join(vdir, "job.json"), JSON.stringify({ base: r.path, head, digest: c.digest, checks: c.checks, tenderDir } satisfies Job));
+  put(io, join(vdir, "job.json"), JSON.stringify({ base: r.path, head, digest: c.digest, checks: c.checks, tenderDir, pr: pr.url } satisfies Job));
   verifier.busy = true;
   // A backstop only: each check has its own deadline, and stopping the unit kills everything a check left behind.
   const secs = c.checks.reduce((n, x) => n + x.timeout + 10, SLOW_SECS);
@@ -102,13 +111,16 @@ const lastLines = (text: string) => {
   return lines.slice(-LOG_LINES).join("\n").slice(-TAIL_CHARS) || "(no output)";
 };
 
-/** The verifier: a `--shared` clone of the base clone at the fetched head, each check in order under nono, then `result`. */
+/** The verifier: a `--shared` clone of the base clone at the fetched head, each check in order under nono and its proof copied out, then `result`. */
 export async function runVerify(vdir: string, io: Io) {
   const job: Job = JSON.parse(readFileSync(join(vdir, "job.json"), "utf8"));
   const clone = join(vdir, "clone");
   const tmp = join(vdir, "tmp");
   const finish = (r: object) => put(io, join(vdir, "result"), JSON.stringify({ head: job.head, digest: job.digest, ...r }));
+  const proof = join(vdir, "proof");
   mkdirSync(join(tmp, "cache"), { recursive: true });
+  mkdirSync(proof, { recursive: true });
+  const b = budget();
   const [nono, run, ...rest] = nonoRun("tender-verify", job.tenderDir, [["--allow", clone], ["--allow", tmp], ["--read", join(job.base, ".git", "objects")]]);
   // Silent: nono's banner would push the check's own output out of the tail.
   const box = [nono!, run!, "--silent", ...rest];
@@ -122,7 +134,10 @@ export async function runVerify(vdir: string, io: Io) {
     for (const c of job.checks) {
       const res = await io.run(["bash", "-c", TAIL, "bash", ...box, "sh", "-c", c.run], clone, c.timeout, { env, max: 128 * 1024 });
       if (res.code !== 0) return finish({ pass: false, check: c.name, tail: / timed out after \d+s/.test(res.err) ? `${c.name} timed out after ${c.timeout}s` : lastLines(`${res.out}\n${res.err}`) });
+      // Outside the sandbox, right after its own check, before a later one can change the files.
+      collectProof(clone, proof, c, b, io.log);
     }
+    if (job.pr) put(io, join(proof, "pending.json"), JSON.stringify({ pr: job.pr, head: job.head, checks: job.checks.map((c) => c.name), files: b.files, skipped: b.skipped } satisfies Pending));
     finish({ pass: true });
   } catch (e) {
     finish({ pass: false, check: "(setup)", tail: lastLines((e as Error).message) });

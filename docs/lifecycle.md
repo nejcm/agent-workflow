@@ -19,6 +19,7 @@ in review, window open   ──► feedbackAuthor PR comments, failed checks, co
 in review, PR clean, no pane output for 5 min or window gone, nothing to deliver, not auto-merged ──► Ready to merge + comment; new commits, failed check, conflict or new feedback ──► back to In Review + comment
 session ended, no PR     ──► one comment "tender: session ended without a PR"
 in review, done for now, verify contract, no result at the head ──► background verify run in <ID>.verify ──► <ID>.verified
+verify pass              ──► <ID>.proof ──► one `tender: verified <sha>: <checks>` PR comment with the proof files
 feedback or verify rounds used up, or verify failed with the window gone ──► `needs-human` label + one comment; feedback, auto-merge, start, the move to Ready to merge and the ended comment pause until a human removes it (a move back still happens)
 `working`, quiet stallMinutes ──► `needs-human` label + one comment with the last pane lines; the session keeps running
 ticket done / deleted    ──► kill session; nothing uncommitted or unpushed ──► delete the session clone (else keep it; each keep reason is logged once per dir while tender runs, a failed command every poll)

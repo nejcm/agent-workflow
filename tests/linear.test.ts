@@ -98,6 +98,18 @@ test("linear repo resolution: label, then the first repo: line of the descriptio
   expect(allowedRepo(c, "ACME/Web")).toBe("acme/web");
 });
 
+test("linear repo line: Markdown escapes before punctuation are undone, nothing else", () => {
+  expect(linearRepo([], "repo: acme/my\\_repo")).toBe("acme/my_repo");
+  expect(linearRepo([], "repo: my\\-org/a\\.b")).toBe("my-org/a.b");
+  expect(linearRepo([], "repo: acme/a\\b")).toBe("acme/a\\b");
+  expect(linearRepo(["repo:acme/my\\_repo"])).toBe("acme/my\\_repo");
+  const c = two();
+  for (const bad of ["acme/a\\/b", "acme/\\.\\.", "\\.\\./x", "acme/\\.", "acme/\\w\\e\\b", "acme/web\\.git", "acme\\\\/web"])
+    expect(allowedRepo(c, linearRepo([], `repo: ${bad}`))).toBeUndefined();
+  expect(allowedRepo(c, linearRepo([], "repo: acme/w\\eb"))).toBeUndefined();
+  expect(allowedRepo(c, linearRepo([], "repo: acme\\/web"))).toBe("acme/web");
+});
+
 const issue = (identifier: string, labels: object[], description: string | null, project: object | null) => ({ id: identifier, identifier, title: "t", description, url: "u", labels: { nodes: labels }, project });
 const named = (...names: string[]) => names.map((name) => ({ name }));
 

@@ -13,7 +13,8 @@ export function parseLinear(r: Record<string, any>, at: string, check: Check) {
 const REPO_LINE = /^repo:[ \t]*([^\r\n]*?)[ \t\r]*$/im;
 
 const repoLabel = (labels: string[]) => labels.find((x) => /^repo:/i.test(x))?.slice(5).trim();
-const repoLine = (t?: string | null) => REPO_LINE.exec(t ?? "")?.[1];
+// Linear stores descriptions as Markdown, so `my_repo` may arrive as `my\_repo` (CommonMark backslash escape).
+const repoLine = (t?: string | null) => REPO_LINE.exec(t ?? "")?.[1].replace(/\\([!-/:-@[-`{-~])/g, "$1");
 
 /** Untrusted repo string named by the ticket itself: its `repo:` label, else the first `repo:` line of its description. */
 export const linearRepo = (labels: string[], description?: string | null) => repoLabel(labels) ?? repoLine(description);

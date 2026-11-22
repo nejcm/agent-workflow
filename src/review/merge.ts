@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { AUTO_MERGE, repoDir } from "../config/config";
 import { canonical, findPr, sameRepo } from "../github";
 import { hatchInWorker } from "./hatch";
+import { readVerified, type Verified, verifiedAt } from "./verify";
 import type { AutoMerge, Config, Io, Session, Ticket, Tracker } from "../types";
 import { put, read, readRun, remove, write } from "../util";
 
@@ -10,7 +11,6 @@ const MAX_MERGE_BYTES = 4 * 1024;
 const MAX_DIFF_BYTES = 2 * 1024 * 1024;
 
 export interface Assessment {
-  tested: boolean;
   confidence: "high" | "medium" | "low";
   critical: boolean;
   reviewed: boolean;
@@ -23,11 +23,11 @@ export function parseAssessment(raw: string): Assessment {
   const a = JSON.parse(raw);
   const line = (v: unknown, max: number) => typeof v === "string" && v.trim().length > 0 && v.length <= max && !/[\x00-\x1f\x7f]/.test(v);
   const ok =
-    a && typeof a === "object" && !Array.isArray(a) && Object.keys(a).every((k) => ["tested", "confidence", "critical", "reviewed", "reviewer", "reason"].includes(k)) &&
-    typeof a.tested === "boolean" && typeof a.critical === "boolean" && ["high", "medium", "low"].includes(a.confidence) &&
+    a && typeof a === "object" && !Array.isArray(a) && Object.keys(a).every((k) => ["confidence", "critical", "reviewed", "reviewer", "reason"].includes(k)) &&
+    typeof a.critical === "boolean" && ["high", "medium", "low"].includes(a.confidence) &&
     (a.reviewed === undefined || typeof a.reviewed === "boolean") && (a.reviewer === undefined ? a.reviewed !== true : line(a.reviewer, 100)) && line(a.reason, 300);
   if (!ok) throw new Error("merge: invalid");
-  return { tested: a.tested, confidence: a.confidence, critical: a.critical, reviewed: a.reviewed === true, reviewer: a.reviewer?.trim(), reason: a.reason.trim() };
+  return { confidence: a.confidence, critical: a.critical, reviewed: a.reviewed === true, reviewer: a.reviewer?.trim(), reason: a.reason.trim() };
 }
 
 export const CRITICAL_PATHS = [
@@ -97,8 +97,8 @@ export const checkState = (c: any) =>
     ? c.state === "SUCCESS" ? "success" : ["PENDING", "EXPECTED"].includes(c.state) ? "pending" : "failed"
     : c?.status !== "COMPLETED" ? "pending" : c.conclusion === "SUCCESS" ? "success" : ["NEUTRAL", "SKIPPED"].includes(c.conclusion) ? "neutral" : "failed";
 
-/** Whether tender may merge the PR now. The assessment is agent-written and untrusted: it can only hold a merge back. */
-export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Session, "autoMerge" | "ceiling" | "trust" | "criticalPaths" | "testPaths" | "baseBranch" | "intake">, ticketLabels: string[] = []): { merge: boolean | "wait"; reason: string } {
+/** Whether tender may merge the PR now. The assessment is agent-written and untrusted: it can only hold a merge back. `verified` is tender's own last verify result. */
+export function mergeDecision(pr: PrFacts & { headRefOid?: string }, a: Assessment | undefined, s: Pick<Session, "autoMerge" | "ceiling" | "trust" | "criticalPaths" | "testPaths" | "baseBranch" | "intake" | "verify">, ticketLabels: string[] = [], verified?: Verified): { merge: boolean | "wait"; reason: string } {
   const no = (reason: string) => ({ merge: false, reason });
   const mode = prMode(s, pr.files);
   const offAt = pr.files?.flatMap(paths).find((p) => trustRule(s, p)?.autoMerge === "off");
@@ -132,12 +132,17 @@ export function mergeDecision(pr: PrFacts, a: Assessment | undefined, s: Pick<Se
     if (a?.confidence === "low") return no(`agent confidence is low: ${a.reason}`);
     if (tier === "medium") {
       if (!a) return no("medium change without a valid .tender/run/merge.json");
-      if (!a.tested || a.confidence !== "high") return no(`medium change needs tested + high confidence from the agent: ${a.reason}`);
+      if (a.confidence !== "high") return no(`medium change needs high confidence from the agent: ${a.reason}`);
       if (!a.reviewed) return no(`medium change not reviewed by a model from another family: ${a.reason}`);
       if (!checks.includes("success")) return no("medium change with no successful check");
     }
   }
+  // Even in `all`: only tender's own run of the base branch's contract stands in for tests on anything but a small change.
+  if (!s.verify && tier !== "small") return no(`${tier} change without a verify contract (.tender/verify.yaml)`);
   if (pr.hatch) return no(pr.hatch);
+  const v = verifiedAt(verified, pr.headRefOid, s.verify);
+  if (v && !v.pass) return no(`verify failed: ${v.check}`);
+  if (s.verify && !v) return { merge: "wait", reason: "verify pending for this head" };
   if (pr.mergeable !== "MERGEABLE" || checks.includes("pending")) return { merge: "wait", reason: "checks pending or mergeability unknown" };
   if (!checks.length && pr.updatedAt && Date.now() - Date.parse(pr.updatedAt) < CI_GRACE_MS) return { merge: "wait", reason: "no checks yet on a fresh head" };
   if (pr.mergeStateStatus === "BLOCKED") return no("blocked by branch protection");
@@ -190,7 +195,8 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
   }
   // Undefined skips the file gates and judges by the highest mode trust allows; only this pre-check may leave it unset.
   pr.files = undefined;
-  let d = mergeDecision(pr, a, r, t.labels);
+  const verified = readVerified(dir, t.id);
+  let d = mergeDecision(pr, a, r, t.labels, verified);
   // File gates only refuse, so the files are fetched only when everything else would merge.
   // A policy hold also fetches them when trust could resolve the PR to off, so a human still gets it as Ready to merge.
   const offPossible = rank(r.autoMerge) === 0 || r.trust.some((t) => t.autoMerge === "off");
@@ -199,10 +205,10 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
     // REST, not `gh pr view --json files`: it has a rename's old path and is not capped at 100 files.
     const out = await read(io, ["gh", "api", "--paginate", `repos/${r.key}/pulls/${n}/files?per_page=100`, "--jq", ".[] | {filename, previous_filename, status, additions, deletions}"]);
     pr.files = out.split("\n").filter(Boolean).map((l) => JSON.parse(l));
-    d = mergeDecision(pr, a, r, t.labels);
+    d = mergeDecision(pr, a, r, t.labels, verified);
     if (d.merge === true) {
       pr.hatch = await prHatch(io, r.key, pr, r.escapeHatches);
-      d = mergeDecision(pr, a, r, t.labels);
+      d = mergeDecision(pr, a, r, t.labels, verified);
     }
   }
   const mode = prMode(r, pr.files);
@@ -227,7 +233,7 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
     // A marker kept as `held` names the old head.
     if (now.headRefOid !== pr.headRefOid) return remove(io, f);
     if (now.baseRefOid !== pr.baseRefOid) return;
-    if (mergeDecision(now, a, r, t.labels).merge !== true) return;
+    if (mergeDecision(now, a, r, t.labels, readVerified(dir, t.id)).merge !== true) return;
     // The listing may predate a human parking it; a failed read throws, so no merge.
     if (await tr.parked(t)) return;
     const merge = (...del: string[]) => write(io, ["gh", "pr", "merge", n, "--repo", r.key, "--squash", ...del, "--match-head-commit", pr.headRefOid]);

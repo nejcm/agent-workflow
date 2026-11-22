@@ -18,7 +18,7 @@ const MAX_PROMPT_KIB = 120;
 export const nonoRun = (profile: string, tenderDir: string, grants: [string, string][], quote = (s: string) => s) =>
   ["nono", "run", "--no-rollback-prompt", "--profile", quote(join(tenderDir, "nono", `${profile}.json`)), ...grants.flatMap(([flag, path]) => [flag, quote(path)]), "--"];
 
-const scopePrefix = (cfg: Config) => `tender-${createHash("sha256").update(cfg.workspaceRoot).digest("hex").slice(0, 8)}`;
+export const scopePrefix = (cfg: Config) => `tender-${createHash("sha256").update(cfg.workspaceRoot).digest("hex").slice(0, 8)}`;
 
 /** The session's systemd user scope, prefixed per workspace; ':' is in no repo key or ticket id, so names never collide. */
 export const scopeUnit = (cfg: Config, key: string, id: string) => `${scopePrefix(cfg)}:${key.replace("/", ":")}:${id}.scope`;

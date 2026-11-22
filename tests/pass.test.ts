@@ -1545,7 +1545,7 @@ test("cleanup keeps work the session's own config or refs would hide: untracked 
   expect(logs.filter((l) => l.includes("cleanup acme/web/gh-") && l.includes(" failed: "))).toHaveLength(10);
 });
 
-test("cleanup keeps a clone holding a nested repository, node_modules included, or a .git file pointer, or one made during the git checks, once logged; a symlinked repo does not keep it", async () => {
+test("cleanup keeps a clone holding a nested repository, node_modules included, or a .git file pointer, a bare repo, or one made during the git checks, once logged; a symlinked repo does not keep it", async () => {
   const origin = join(root, "origin.git");
   const base = join(root, "src-web");
   const sh = (...a: string[]) => Bun.spawnSync(a, { stdout: "pipe", stderr: "pipe" });
@@ -1559,12 +1559,12 @@ test("cleanup keeps a clone holding a nested repository, node_modules included, 
     const r = sh(...argv);
     return { code: r.exitCode, out: r.stdout.toString(), err: r.stderr.toString() };
   };
-  const ids = [1, 2, 3, 4, 5, 6];
-  const [wt1, wt2, wt3, wt4, wt5, wt6] = ids.map((n) => join(root, `acme/web/gh-${n}`));
+  const ids = [1, 2, 3, 4, 5, 6, 7];
+  const [wt1, wt2, wt3, wt4, wt5, wt6, wt7] = ids.map((n) => join(root, `acme/web/gh-${n}`));
   const late = (x: string[]) => x.at(-1) === "verify" && x.includes(`--work-tree=${wt6}`) && !existsSync(join(wt6, "late")) && git(wt6, "init", "-q", "late");
   const run = async (t: ReturnType<typeof fakeTracker>) => {
     const { io, logs } = fakeIo((x) => (x[0] === "git" || x[0] === "nono" || x[0] === "rm" ? (late(x), real(x)) : noPr(x)));
-    await pass(config({ maxConcurrent: 6 }), io, () => t.tr, "/tender");
+    await pass(config({ maxConcurrent: 7 }), io, () => t.tr, "/tender");
     return logs.filter((l) => l.includes("left in place"));
   };
   await run(fakeTracker({ ready: ids.map((n) => ticket(n)) }));
@@ -1583,10 +1583,15 @@ test("cleanup keeps a clone holding a nested repository, node_modules included, 
   git(wt5, "init", "-q", "--separate-git-dir=.store", "project");
   git(join(wt5, "project"), "commit", "-q", "--allow-empty", "-m", "local only");
   writeFileSync(join(wt6, ".git/info/exclude"), "late\n");
+  writeFileSync(join(wt7, ".git/info/exclude"), "cache\n");
+  git(wt7, "init", "-q", "--bare", "cache/remote.git");
+  git(wt7, "commit", "-q", "--allow-empty", "-m", "local only");
+  git(wt7, "-c", "protocol.file.allow=always", "push", "-q", join(wt7, "cache/remote.git"), "HEAD:refs/heads/x");
+  git(wt7, "reset", "-q", "--hard", "origin/main");
   const done = fakeTracker({ done: ids.map((n) => `gh-${n}`) });
-  expect((await run(done)).sort()).toEqual([join(wt1, "sub/.git"), join(wt3, "node_modules/vendor/.git"), join(wt5, "project/.git"), join(wt6, "late/.git")].map((p) => expect.stringContaining(`${p}; left in place`)));
+  expect((await run(done)).sort()).toEqual([join(wt1, "sub/.git"), join(wt3, "node_modules/vendor/.git"), join(wt5, "project/.git"), join(wt6, "late/.git"), join(wt7, "cache/remote.git")].map((p) => expect.stringContaining(`${p}; left in place`)));
   expect(await run(done)).toEqual([]);
-  expect(ids.map((n) => [n, existsSync(join(root, `acme/web/gh-${n}`))])).toEqual([[1, true], [2, false], [3, true], [4, false], [5, true], [6, true]]);
+  expect(ids.map((n) => [n, existsSync(join(root, `acme/web/gh-${n}`))])).toEqual([[1, true], [2, false], [3, true], [4, false], [5, true], [6, true], [7, true]]);
   expect(existsSync(join(base, "elsewhere/.git"))).toBe(true);
 });
 

@@ -37,17 +37,21 @@ async function step(io: Io, what: string, fn: () => Promise<unknown>) {
 
 const SCAN_CAP = 100_000;
 
-// Old-form submodules, --separate-git-dir pointers and other nested repos hold commits no check here sees.
+// Old-form submodules, --separate-git-dir pointers, bare repos and other nested repos hold commits no check here sees.
 function nestedGit(wt: string) {
   const dirs = [wt];
   let seen = 0;
   while (dirs.length) {
     const d = dirs.pop()!;
+    const kinds = new Map<string, boolean>();
     for (const e of readdirSync(d, { withFileTypes: true })) {
       if (++seen > SCAN_CAP) return `more than ${SCAN_CAP} entries`;
       if (e.name === ".git" && d !== wt) return join(d, e.name);
+      kinds.set(e.name, e.isDirectory());
       if (e.isDirectory() && e.name !== ".git") dirs.push(join(d, e.name));
     }
+    // A bare repo has no .git.
+    if (d !== wt && kinds.get("HEAD") === false && kinds.get("objects") && kinds.get("refs")) return d;
   }
 }
 

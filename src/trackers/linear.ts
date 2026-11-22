@@ -13,7 +13,11 @@ export function parseLinear(r: Record<string, any>, at: string, check: Check) {
 const REPO_LINE = /^repo:[ \t]*([^\r\n]*?)[ \t\r]*$/im;
 
 const repoLabel = (labels: string[]) => labels.find((x) => /^repo:/i.test(x))?.slice(5).trim();
-const repoLine = (t?: string | null) => REPO_LINE.exec(t ?? "")?.[1];
+// Linear stores Markdown, so `my_repo` may arrive as `my\_repo`; with a code fence anywhere, escapes may be literal, so keep them.
+function repoLine(t?: string | null) {
+  const repo = REPO_LINE.exec(t ?? "")?.[1];
+  return repo === undefined || /```|~~~/.test(t!) ? repo : repo.replace(/\\([!-/:-@[-`{-~])/g, "$1");
+}
 
 /** Untrusted repo string named by the ticket itself: its `repo:` label, else the first `repo:` line of its description. */
 export const linearRepo = (labels: string[], description?: string | null) => repoLabel(labels) ?? repoLine(description);

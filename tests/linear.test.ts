@@ -98,6 +98,28 @@ test("linear repo resolution: label, then the first repo: line of the descriptio
   expect(allowedRepo(c, "ACME/Web")).toBe("acme/web");
 });
 
+test("linear repo line: Markdown escapes before punctuation are undone, nothing else", () => {
+  expect(linearRepo([], "repo: acme/my\\_repo")).toBe("acme/my_repo");
+  expect(linearRepo([], "repo: my\\-org/a\\.b")).toBe("my-org/a.b");
+  expect(linearRepo([], "repo: acme/a\\b")).toBe("acme/a\\b");
+  expect(linearRepo(["repo:acme/my\\_repo"])).toBe("acme/my\\_repo");
+  const c = two();
+  for (const bad of ["acme/a\\/b", "acme/\\.\\.", "\\.\\./x", "acme/\\.", "acme/\\w\\e\\b", "acme/web\\.git", "acme\\\\/web"])
+    expect(allowedRepo(c, linearRepo([], `repo: ${bad}`))).toBeUndefined();
+  expect(allowedRepo(c, linearRepo([], "repo: acme/w\\eb"))).toBeUndefined();
+  expect(allowedRepo(c, linearRepo([], "repo: acme\\/web"))).toBe("acme/web");
+});
+
+test("linear repo line: escapes stay literal when the description has a code fence anywhere", () => {
+  const c = two();
+  expect(linearRepo([], "```\nrepo: acme/my\\_repo\n```\nrepo: acme/api")).toBe("acme/my\\_repo");
+  expect(linearRepo([], "```\ncode\n```\nrepo: acme/my\\_repo")).toBe("acme/my\\_repo");
+  expect(linearRepo([], "repo: acme/my\\_repo\n\n~~~\nx\n~~~")).toBe("acme/my\\_repo");
+  expect(allowedRepo(c, linearRepo([], "~~~\n~~~\u00a0\nrepo: acme\\/web"))).toBeUndefined();
+  expect(allowedRepo(c, linearRepo([], "```js`x\nrepo: acme\\/web"))).toBeUndefined();
+  expect(linearRepo([], "use `x` here\r\nrepo: acme/my\\_repo \r\n")).toBe("acme/my_repo");
+});
+
 const issue = (identifier: string, labels: object[], description: string | null, project: object | null) => ({ id: identifier, identifier, title: "t", description, url: "u", labels: { nodes: labels }, project });
 const named = (...names: string[]) => names.map((name) => ({ name }));
 

@@ -1,6 +1,6 @@
 ---
 name: tender-setup
-description: Set up a repo for tender. Finds its checks in CI config and manifests, runs each once, writes .tender/config.yaml, type overrides and .tender/verify.yaml, validates them with tender check, hands off to create-verification when installed, and prints the tender.json repos entry. Use when the user asks to set up, onboard or configure a repo for tender.
+description: Set up a repo for tender. Checks that CI gates its PRs, writes .tender/config.yaml and type overrides, validates them with tender check, offers create-verification when installed, and prints the tender.json repos entry. Use when the user asks to set up, onboard or configure a repo for tender.
 ---
 
 # tender setup
@@ -9,19 +9,9 @@ Work in the root of the repo being set up. Write only under `.tender/`; the `cre
 
 tender reads `.tender/` only from `origin/<base branch>`, so nothing takes effect until it is committed and pushed there. The keys and their validation live in tender's `src/config/repo-config.ts`; `docs/config.md` documents them under "Repo config".
 
-## 1. Find the checks
+## 1. Check CI
 
-Take the commands CI already runs first: the `run:` steps of `.github/workflows/*.yml` (or `.gitlab-ci.yml`, `.circleci/config.yml`, `Jenkinsfile`) that test, typecheck or lint. Skip steps that deploy, publish, upload, need a CI secret (`${{ secrets.… }}`) or only set up the runner (checkout, toolchain install, cache).
-
-Only if CI has none, fall back to the manifests, in order:
-
-- `package.json` `scripts`: `test`, plus `typecheck` or `lint` if they are fast. Run them with the package manager that matches the lockfile: `bun.lock*` means `bun run`, `pnpm-lock.yaml` means `pnpm`, `yarn.lock` means `yarn`, and anything else means `npm run`.
-- `Makefile`: a `test` target, so `make test`.
-- `pyproject.toml`: `pytest`, or `uv run pytest` if there is a `uv.lock`.
-- `go.mod`: `go test ./...`.
-- `Cargo.toml`: `cargo test`.
-
-Run each command once from the repo root before writing it, and keep only those that pass; show the user the commands and their results. tender runs them in a fresh clone of the base branch with no network, no logins and no installed dependencies beyond what the clone holds, so a check that needs dependencies must get them without network (see "Verify contract" in `<tender>/docs/auto-merge.md`); step 6 proves each check under tender's own verifier. Each command becomes a check in `.tender/verify.yaml` (step 4). If nothing passes, write no `verify.yaml`: the agent will be told to find and run the project's checks, and medium and large changes never auto-merge.
+tender runs no tests itself: CI gates every merge, and a medium or large change auto-merges only with at least one CI status check on the PR. Find what runs on pull requests (`.github/workflows/*.yml` with a `pull_request` trigger, or the repo's other CI config) and tell the user which checks gate a PR. If none does, say that medium and large changes will never auto-merge until CI reports a check.
 
 ## 2. Ask the user
 
@@ -39,7 +29,7 @@ Without `types`, tender uses the host profile's types (the `profile` in `<tender
 
 Show each to the user and write only those they keep.
 
-## 4. Write `.tender/config.yaml` and `.tender/verify.yaml`
+## 4. Write `.tender/config.yaml`
 
 Write only the keys that differ from the defaults. An unknown key fails the check.
 
@@ -50,16 +40,6 @@ tracker:
   linear:
     project: Web app   # Linear project name; matched case-insensitively
     team: ENG          # optional; a team key, [A-Z0-9]+
-```
-
-`.tender/verify.yaml` holds the checks from step 1, one per command, in the order CI runs them; `docs/config.md` documents it under "Verify contract":
-
-```yaml
-checks:
-  - name: test
-    run: bun test
-  - name: typecheck
-    run: bun run typecheck
 ```
 
 Add these keys only if the user asks for them:
@@ -94,7 +74,7 @@ The check prints the settings with defaults filled in, or lists every problem an
 
 ## 6. Hand off
 
-If the `create-verification` skill is available to you (in your skills list, or under `~/.claude/skills/`, `~/.agents/skills/` or this repo's `.agents/skills/`) and the repo has a surface to drive (a web app, an API, a CLI), hand off to it now for interactive proof: it writes `.agents/skills/verify-<app>/`, which tender sessions use, and adds its smoke checks to `.tender/verify.yaml`. Run step 5 again afterwards. Without it, say that the repo has no verification skill yet and that `create-verification` writes one.
+If the repo has no verification skill (`.agents/skills/verify-*/` or `.claude/skills/*verif*/`) and a surface to drive (a web app, an API, a CLI), say that sessions would use one. If the `create-verification` skill is available to you (in your skills list, or under `~/.claude/skills/`, `~/.agents/skills/` or this repo's `.agents/skills/`), offer to hand off to it; it is optional, and tender works without it.
 
 Get `owner/name` from `git remote get-url origin`, and print the entry for the user to add to `repos` in `tender.json`:
 
@@ -102,5 +82,3 @@ Get `owner/name` from `git remote get-url origin`, and print the entry for the u
 - `{ "name": "owner/name", "autoMerge": "<mode>" }`, with the mode chosen in step 2, to set this repo's ceiling to that mode.
 
 Then tell the user to commit `.tender/` (and `.agents/skills/verify-*/`, if written) and push it to the base branch, through a PR if the branch is protected. tender never auto-merges changes to `.tender/**`.
-
-Once it is on the base branch and the entry is in `tender.json`, run `bun <tender>/tender.ts verify owner/name --config <tender.json>`. It runs the contract on the base commit under tender's own verifier, sandbox and ports, the way every PR will be checked, and exits non-zero naming the failed check and its output tail. A check that passed in step 1 but fails here usually needs network or dependencies the fresh clone lacks; fix it, push, and run it again until it passes.

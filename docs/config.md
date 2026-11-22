@@ -131,8 +131,6 @@ A key the source's tracker doesn't use (e.g. `team` on a GitHub source) is rejec
 ```
 .tender/
   config.yaml        # optional
-  verify.yaml        # optional verify contract, see below
-  checks/            # scripts verify.yaml runs, if any
   intake/            # intake scripts, if any
   run/               # the agent's scratch dir, git-ignored by its own .gitignore
 ```
@@ -179,31 +177,6 @@ intake:
 | `tracker.linear.team` | team key `[A-Z0-9]+` | none | only checked: a ticket routed here from another team's source is logged once |
 | `intake` | list of rules, ≤ 20 | `[]` | see below |
 
-### Verify contract
-
-`.tender/verify.yaml`: the checks `tender` runs itself, sandboxed, on a PR's head before Ready to merge and auto-merge, see [Verify contract](auto-merge.md#verify-contract). Without it, medium and large changes never auto-merge.
-
-```yaml
-maxRounds: 2
-checks:
-  - name: test
-    run: bun test
-    timeout: 600
-  - name: e2e
-    run: bash .tender/checks/e2e.sh
-    proof: ["proof/*.png"]
-```
-
-| key | type | default | |
-|---|---|---|---|
-| `checks` | list of 1–20 `{ name, run, timeout, proof, needs }` | required | run in order; the first failure stops the run |
-| `checks[].name` | `[a-z0-9][a-z0-9-]{0,31}`, unique | required | names the check in feedback and hold reasons |
-| `checks[].run` | string, ≤ 4000 chars | required | run with `sh -c` in the PR head's checkout, offline |
-| `checks[].timeout` | integer 1–1800 | `600` | seconds before the check is killed and fails |
-| `checks[].proof` | list of globs ending in `.png`, `.gif`, `.jpg`, `.jpeg`, `.webp`, `.svg`, `.mp4`, `.mov` or `.webm`, ≤ 20 | `[]` | files the check left in the checkout, attached to the `tender: verified` PR comment on a pass, see [Verify contract](auto-merge.md#verify-contract) |
-| `checks[].needs` | like `types[].needs` | none | the check's own ports and services, apart from the session's, see [Ports and services](sandbox.md#ports-and-services) |
-| `maxRounds` | integer 1–10 | `2` | failed runs sent to the agent before the ticket is parked, counted apart from `feedback.maxRounds` |
-
 ### Intake rules
 
 Each entry of `intake` is one rule. A rule runs only when `tender.json` lists it in `intake.enabled`. Durations are `<n>m`, `<n>h` or `<n>d`, with `n` from 1 to 9999.
@@ -229,7 +202,7 @@ The script's flags (e.g. the Sentry script's `--org`, `--min-events`, `--no-fixe
 
 ### How the repo config is read
 
-`tender` reads `.tender/` only from `origin/<base>` in its own clone (`git ls-tree` and `git cat-file` on that commit, fetched before each start and once per poll before merge decisions or Linear project routing), never from a session clone, which the agent can write. A repo's config changes only when a commit to the base branch changes it; it is cached per base commit. One exception: when that commit has no `config.yaml`, `tender` reads a personal one from its own checkout at the repo's `path` and re-reads it when it changes; it is outside the base commit, so no PR can change it. A missing file means no personal config; one that cannot be read or does not validate makes the repo's config invalid, which holds merges and Ready to merge. A checkout still holding a file from before the base commit deleted it keeps using that file until it is removed. `verify.yaml` is always read from the base commit. Each file must be a regular file of at most 64 KiB, and unknown keys are errors. If it is invalid, that repo starts no tickets: `tender` logs the errors once per base commit and posts one `tender: not started` comment per base commit on the next ticket that names that repo and would have started (recorded in `<workspaceRoot>/.invalid-config/<owner>/<name>`). Meanwhile Linear tickets that rely on their project wait, with no comment. `.tender` itself must be a directory, not a symlink. Run `bun tender.ts check [path]` (default `.`) before committing: it validates `<path>/.tender/` from the working tree against tender's own profile, or with `--config tender.json` against the profile of the repo whose name matches `<path>`'s `origin` remote (else the top-level `profile`), prints the repo's settings with defaults filled in (the host's `autoMerge` ceiling and `criticalPaths` from `tender.json` still apply on top) and its tracker target (`tracker`, `null` if none), and exits non-zero if it is invalid or a declared `needs` cannot run on this host (Landlock ABI below 4, no `docker compose`, a compose file missing from the working tree).
+`tender` reads `.tender/` only from `origin/<base>` in its own clone (`git ls-tree` and `git cat-file` on that commit, fetched before each start and once per poll before merge decisions or Linear project routing), never from a session clone, which the agent can write. A repo's config changes only when a commit to the base branch changes it; it is cached per base commit. One exception: when that commit has no `config.yaml`, `tender` reads a personal one from its own checkout at the repo's `path` and re-reads it when it changes; it is outside the base commit, so no PR can change it. A missing file means no personal config; one that cannot be read or does not validate makes the repo's config invalid, which holds merges and Ready to merge. A checkout still holding a file from before the base commit deleted it keeps using that file until it is removed. Only `config.yaml` is read: a `.tender/verify.yaml` left from an older tender is ignored, so delete it. Each file must be a regular file of at most 64 KiB, and unknown keys are errors. If it is invalid, that repo starts no tickets: `tender` logs the errors once per base commit and posts one `tender: not started` comment per base commit on the next ticket that names that repo and would have started (recorded in `<workspaceRoot>/.invalid-config/<owner>/<name>`). Meanwhile Linear tickets that rely on their project wait, with no comment. `.tender` itself must be a directory, not a symlink. Run `bun tender.ts check [path]` (default `.`) before committing: it validates `<path>/.tender/` from the working tree against tender's own profile, or with `--config tender.json` against the profile of the repo whose name matches `<path>`'s `origin` remote (else the top-level `profile`), prints the repo's settings with defaults filled in (the host's `autoMerge` ceiling and `criticalPaths` from `tender.json` still apply on top) and its tracker target (`tracker`, `null` if none), and exits non-zero if it is invalid or a declared `needs` cannot run on this host (Landlock ABI below 4, no `docker compose`, a compose file missing from the working tree).
 
 ## Profile
 
@@ -253,7 +226,7 @@ types:
 | `types[].instructions` | relative path to a `.md` file | required | resolved inside the profile, symlinks included; `..` or a path that leaves it is rejected |
 | `types[].agent` | like the repo's `agent` | the repo's `agent` | replaces the repo's `agent` whole, so a provider switch never keeps the repo's model or effort |
 | `types[].output` | `pr` | `pr` | |
-| `types[].needs` | `{ ports: 1-10, compose?: <path in the repo> }` | none | TCP ports the session may listen on and connect to, as `TENDER_PORT_0`…, and a Compose file `tender` starts for it from the base commit; nono grants a port on every host, so the session (which holds `GH_TOKEN`) or a check's head code can reach that port anywhere, see [Ports and services](sandbox.md#ports-and-services) |
+| `types[].needs` | `{ ports: 1-10, compose?: <path in the repo> }` | none | TCP ports the session may listen on and connect to, as `TENDER_PORT_0`…, and a Compose file `tender` starts for it from the base commit; nono grants a port on every host, so the session (which holds `GH_TOKEN`) can reach that port anywhere, see [Ports and services](sandbox.md#ports-and-services) |
 
 The last type must be `default`, with no `match`: it takes every ticket no other type matches. A repo's own `types` replace a profile type of the same name in place and add new ones just before `default`; their `instructions` still name files in the host's profile, so a repo cannot point the agent at a file of its own. A type never changes a merge decision: those stay per repo. `tender` reads `types.yaml` at startup (restart it after editing, or after fixing an instruction file a repo's `types` names) and each instruction file when a ticket starts, refusing the start if the file was replaced by a symlink or moved under one since; it records the chosen type and file in `<ID>.type` for `tender watch`.
 
@@ -263,7 +236,7 @@ A session's prompt is tender's `prompts/header.md` (the ticket and the rules tha
 
 ### Prompt placeholders
 
-`{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{verify}} {{repo}}`, in tender's prompt files and instruction files alike. The whole prompt is rendered once, so placeholders in ticket text stay literal. `{{verify}}` names the repo's [verify contract](#verify-contract) checks ("the commands in `.tender/verify.yaml` (checks `test`, `e2e`)"), never their commands, which could outgrow the prompt cap; it is "the project's checks (…)" when the repo has none.
+`{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{verify}} {{repo}}`, in tender's prompt files and instruction files alike. The whole prompt is rendered once, so placeholders in ticket text stay literal. `{{verify}}` is "the project's checks (find how they run: README, CI config, package or build files)".
 
 ## Environment
 
@@ -288,7 +261,6 @@ bun tender.ts <command> [--config tender.json]
   prs [--dry-run]
   stats [--days 90] [--json]
   check [path] [--config tender.json]
-  verify <owner/repo>
 ```
 
 | flag | | |

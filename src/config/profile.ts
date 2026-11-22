@@ -21,7 +21,7 @@ export function agentConfig(a: unknown, at: string, check: Check): AgentConfig {
 
 export const repoPath = (p: unknown) => typeof p === "string" && p.length <= 200 && p.split("/").every((x) => /^[A-Za-z0-9_.-]+$/.test(x) && x !== "." && x !== "..") && !p.startsWith("-");
 
-/** A type's or verify check's `needs`. */
+/** A type's `needs`. */
 export function parseNeeds(v: unknown, at: string, check: Check): Needs | undefined {
   if (v === undefined) return undefined;
   const o: Record<string, any> = obj(v) ? v : {};

@@ -28,6 +28,8 @@ Move a GitHub issue or Linear ticket to **ready**, and `tender` starts a Claude 
 - **Sandbox:** [nono](https://github.com/nolabs-ai/nono), or none on a VM where the VM is the boundary.
 - **Your config, read-only:** a fresh agent config dir per ticket. Agents use your `CLAUDE.md`, `AGENTS.md` and skills but cannot change them.
 - **Claude login:** the sandbox holds only a phantom token. `tender` refreshes the host login itself before it expires ([Claude auth](docs/auth.md#claude-auth)).
+- **[Task types](docs/config.md#profile):** a ticket's labels pick a type from your profile, and the type picks the one instruction file the session follows. How to plan, build, test, verify and review lives there and in your skills, not in `tender`.
+- **[Ports and services](docs/sandbox.md#ports-and-services):** a type can declare `needs`: assigned ports the sandbox allows, and a Compose file `tender` starts outside the sandbox and stops when the ticket ends.
 
 **While it works**
 - **[Phases](docs/lifecycle.md#phases):** a phased plan is mirrored into sub-tickets that track its status.
@@ -40,7 +42,7 @@ Move a GitHub issue or Linear ticket to **ready**, and `tender` starts a Claude 
 - **[PR feedback](docs/lifecycle.md#pr-feedback):**
   - Review comments, failed checks and merge conflicts are delivered to the live session.
   - After `feedback.maxRounds` rounds (default 3) the ticket is parked with `needs-human`.
-- **[Auto-merge](docs/auto-merge.md#auto-merge):** modes `off`, `all`, `shadow` and `intelligent`, set per path by the repo's `trust` rules. Critical paths and escape hatches (`@ts-ignore`, `eslint-disable`, …) on added lines hold back any mode; `intelligent` adds gates for deleted tests, PR size and the agent's own confidence.
+- **[Auto-merge](docs/auto-merge.md#auto-merge):** modes `off`, `all`, `shadow` and `intelligent`, set per path by the repo's `trust` rules. Critical paths and escape hatches (`@ts-ignore`, `eslint-disable`, …) on added lines hold back any mode, and a medium or large PR with no CI check never auto-merges; `intelligent` adds gates for deleted tests, PR size and the agent's own confidence.
 - **Cleanup:**
   - A done or deleted ticket ends its session, and its clone is deleted once nothing is unpushed.
   - A canceled ticket ends its session and keeps its clone.
@@ -52,6 +54,8 @@ Move a GitHub issue or Linear ticket to **ready**, and `tender` starts a Claude 
 - `tail <ID>`: follow one session's transcript.
 - `open <ID>`: take a session over in Claude Code, Codex, T3 Code or your editor, outside the sandbox ([Hand-off](docs/hand-off.md#hand-off)); `resume <ID>` gives it back.
 - `tmux attach -t tender`: the live terminals, where you can steer an agent directly.
+- [`stats`](docs/stats.md): merge, revert and shadow numbers per path, with trust recommendations.
+- `check [path]`: validates a repo's `.tender/` against your profile before you commit it.
 
 **[PR sweep](docs/prs.md)**
 - `prs`: weekly, closes open `agent/<ID>` PRs whose ticket is done or canceled, and reports conflicting, failing, stale and ready-but-unmerged PRs to the journal and an optional digest issue. Never touches other PRs.
@@ -82,7 +86,7 @@ Every poll (default 60 s), `tender` looks for ready tickets (the `agent` label p
 - [Watching sessions](docs/watching.md): `status`, `watch`, `tail`, live state
 - [Config reference](docs/config.md): `tender.json` and `.tender/config.yaml`
 - [Clones, sandbox and cleanup](docs/sandbox.md): isolation details
-- [Factory](docs/factory.md): what only tender does, the verification ladder, what is left to skills, and the research behind it
+- [Factory](docs/factory.md): what only tender does, the session environment rungs, what is left to skills, and the research behind it
 - [Intake](docs/intake.md): scripts that file tickets from signals
 - [PR sweep](docs/prs.md): `tender prs`, orphan agent PRs and the weekly report
 - [Trust signals](docs/stats.md): `tender stats`, per-path merge, revert and shadow numbers and recommendations

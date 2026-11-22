@@ -435,9 +435,7 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
   const promptFile = join(dir, `${id}.prompt.md`);
   const script = join(dir, `${id}.sh`);
   const nono = r.sandbox === "nono";
-  // Names, not commands: a contract's commands can add up to more than the prompt cap.
-  const verify = r.verify ? `the commands in \`.tender/verify.yaml\` (checks ${r.verify.checks.map((c) => `\`${c.name}\``).join(", ")})` : "the project's checks (find how they run: README, CI config, package or build files)";
-  const text = prompt({ id, branch, base: r.baseBranch, verify, repo: r.key });
+  const text = prompt({ id, branch, base: r.baseBranch, verify: "the project's checks (find how they run: README, CI config, package or build files)", repo: r.key });
   const kib = Buffer.byteLength(text) / 1024;
   if (kib > MAX_PROMPT_KIB) throw new Error(`${id}: prompt is ${Math.ceil(kib)} KiB, over ${MAX_PROMPT_KIB} KiB`);
   const token = join(io.home, CLAUDE_TOKEN);
@@ -480,7 +478,7 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
   if (type) put(io, join(dir, `${id}.type`), JSON.stringify({ name: type.name, instructions: type.instructions }));
   if (needs) put(io, needsFile, JSON.stringify(needs));
   const services = needs?.compose ? join(dir, `${id}.compose`) : undefined;
-  if (services) put(io, join(services, "job.json"), JSON.stringify({ project: composeProject(cfg, r.key, id, "session"), repo: r.path, sha: r.baseSha!, file: needs!.compose!, ports } satisfies ComposeJob));
+  if (services) put(io, join(services, "job.json"), JSON.stringify({ project: composeProject(cfg, r.key, id), repo: r.path, sha: r.baseSha!, file: needs!.compose!, ports } satisfies ComposeJob));
   const root = existsSync(wt) ? realpathSync(wt) : wt;
   seedCodex(io, codexHome(wt), login, root);
   if (r.agent === "claude" || nono) seedClaude(io, claudeHome(wt), root);

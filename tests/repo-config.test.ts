@@ -129,7 +129,6 @@ test("repo config: trust rules and escapeHatches regexes, capped in count and le
 test("repo config: size cap, regular files only", () => {
   const big = "x".repeat(64 * 1024 + 1);
   expect(errors([file("config.yaml", big)])).toBe("config.yaml: over 64 KiB");
-  expect(errors([{ name: "verify.yaml", regular: true, size: big.length }])).toBe("verify.yaml: over 64 KiB");
   expect(errors([{ name: "config.yaml", regular: false, size: 0 }])).toBe("config.yaml: must be a regular file");
   expect(errors([file("other.yaml", "")])).toBe("other.yaml: not expected here");
 });
@@ -205,8 +204,8 @@ test("loadSession reads .tender/ at origin/<base> of the base clone, cached per 
   expect(git.every((x) => x.startsWith(`git -C ${root}/src-web `))).toBe(true);
   expect(git.slice(0, 2)).toEqual([`git -C ${root}/src-web fetch origin main`, `git -C ${root}/src-web rev-parse --verify refs/remotes/origin/main^{commit}`]);
   expect(git.filter((x) => x.includes(" ls-tree -r "))).toEqual([
-    `git -C ${root}/src-web ls-tree -r -z --long ${"a".repeat(40)} -- .tender/config.yaml .tender/verify.yaml`,
-    `git -C ${root}/src-web ls-tree -r -z --long ${"b".repeat(40)} -- .tender/config.yaml .tender/verify.yaml`,
+    `git -C ${root}/src-web ls-tree -r -z --long ${"a".repeat(40)} -- .tender/config.yaml`,
+    `git -C ${root}/src-web ls-tree -r -z --long ${"b".repeat(40)} -- .tender/config.yaml`,
   ]);
   expect(git).toContain(`git -C ${root}/src-web rev-parse --verify refs/remotes/origin/main^{commit}`);
   expect(cmds).toContain("gh repo view acme/web --json nameWithOwner,defaultBranchRef");
@@ -214,7 +213,7 @@ test("loadSession reads .tender/ at origin/<base> of the base clone, cached per 
   expect((await loadSession(io, web(pinned)))!.baseBranch).toBe("dev");
 });
 
-test("gitEntries parses real git trees: symlinks and oversize files come back as entries to reject; other files are not read", async () => {
+test("gitEntries parses real git trees: an oversize config.yaml comes back as an entry to reject; other files, a stale verify.yaml too, are not read", async () => {
   const repo = join(root, "r");
   const sh = (...a: string[]) => expect(Bun.spawnSync(a, { stdout: "pipe", stderr: "pipe" }).exitCode).toBe(0);
   sh("git", "init", "-q", "-b", "main", repo);
@@ -231,11 +230,8 @@ test("gitEntries parses real git trees: symlinks and oversize files come back as
     return { code: r.exitCode, out: r.stdout.toString() };
   });
   const entries = await gitEntries(io, repo, "HEAD");
-  expect(entries.map((e) => [e.name, e.regular, e.text?.length])).toEqual([
-    ["config.yaml", true, undefined],
-    ["verify.yaml", false, undefined],
-  ]);
-  expect(errors(entries).split("\n  ")).toEqual(["config.yaml: over 64 KiB", "verify.yaml: must be a regular file"]);
+  expect(entries.map((e) => [e.name, e.regular, e.text?.length])).toEqual([["config.yaml", true, undefined]]);
+  expect(errors(entries)).toBe("config.yaml: over 64 KiB");
   sh("git", "-C", repo, "rm", "-rq", ".tender");
   mkdirSync(join(repo, "cfg"));
   writeFileSync(join(repo, "cfg/config.yaml"), "agent: codex\n");
@@ -244,7 +240,7 @@ test("gitEntries parses real git trees: symlinks and oversize files come back as
   sh("git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "link");
   expect(errors(await gitEntries(io, repo, "HEAD"))).toBe(".tender: must be a directory");
   expect(errors(dirEntries(repo))).toBe(".tender: must be a directory");
-  expect(await gitEntries(io, repo, "HEAD~1")).toHaveLength(2);
+  expect(await gitEntries(io, repo, "HEAD~1")).toHaveLength(1);
   sh("git", "-C", repo, "rm", "-q", ".tender");
   mkdirSync(join(repo, ".tender"));
   writeFileSync(join(repo, ".tender/config.yaml"), "agent: codex\n");
@@ -271,7 +267,7 @@ test("repoConfig reads the host checkout's config.yaml only when the base commit
   const load = () => repoConfig(io, r, "main");
   expect((await load()).config).toMatchObject({ agent: "claude", autoMerge: undefined, criticalPaths: [] });
   writeFileSync(own, "autoMerge: shadow\ncriticalPaths: [prompts/**]\n");
-  expect((await load()).config).toMatchObject({ autoMerge: "shadow", criticalPaths: ["prompts/**"], verify: { checks: [{ name: "test" }] } });
+  expect((await load()).config).toMatchObject({ autoMerge: "shadow", criticalPaths: ["prompts/**"] });
   writeFileSync(own, "autoMerge: [\n");
   expect((await load()).config).toBeUndefined();
   writeFileSync(own, "autoMerge: shadow\n");
@@ -339,17 +335,8 @@ test("a start uses the type the base branch's types pick from the host's profile
   expect(prompt).toStartWith("You are working on ticket gh-1 for the GitHub repository acme/web.");
   expect(prompt).toContain("\n\nBUG gh-1 the project's checks (find how they run: README, CI config, package or build files)\n\nWhen the work is done:");
   expect(JSON.parse(readFileSync(join(root, "acme/web/gh-1.type"), "utf8"))).toEqual({ name: "bug", instructions: join(realpathSync(dir), "instructions/bug.md") });
-  repoFiles["verify.yaml"] = "checks:\n  - { name: test, run: bun test }\n  - { name: e2e, run: make e2e }\n";
-  setBaseSha("b".repeat(40));
-  expect(await start({ ...ticket(2), labels: ["bug"] })).toContain("\n\nBUG gh-2 the commands in `.tender/verify.yaml` (checks `test`, `e2e`)\n\n");
   expect(await start(ticket(3))).toContain("\n\nDEFAULT\n\n");
   expect(JSON.parse(readFileSync(join(root, "acme/web/gh-3.type"), "utf8")).name).toBe("default");
-  // Near the 64 KiB file cap: 16 checks of 4000-char commands, named rather than inlined.
-  repoFiles["verify.yaml"] = `checks:\n${Array.from({ length: 16 }, (_, i) => `  - name: c${i}\n    run: ${"x".repeat(4000)}\n`).join("")}`;
-  setBaseSha("c".repeat(40));
-  const big = await start({ ...ticket(4), labels: ["bug"] });
-  expect(big).not.toContain("xxxx");
-  expect(Buffer.byteLength(big)).toBeLessThan(32 * 1024);
 });
 
 test("the type is recorded before the tmux window opens, so a failed window still leaves it", async () => {
@@ -456,5 +443,7 @@ test("tender check validates a working tree's .tender/ against a profile and pri
   origin("https://github.com/acme/other.git");
   expect(checkProfile(cfg, root).dir).toBe(dir);
   symlinkSync("/etc/passwd", join(root, ".tender/verify.yaml"));
-  expect(dirEntries(root).map((e) => [e.name, e.regular])).toEqual([["config.yaml", true], ["verify.yaml", false]]);
+  rmSync(join(root, ".tender/config.yaml"));
+  symlinkSync("/etc/passwd", join(root, ".tender/config.yaml"));
+  expect(dirEntries(root).map((e) => [e.name, e.regular])).toEqual([["config.yaml", false]]);
 });

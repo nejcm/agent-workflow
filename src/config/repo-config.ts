@@ -1,10 +1,9 @@
-import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { AUTO_MERGE, GLOB_RULES, INTAKE_NAME, validGlob } from "./config";
-import { agentConfig, defaultProfile, mergeTypes, parseNeeds, parseTypes, repoPath } from "./profile";
+import { agentConfig, defaultProfile, mergeTypes, parseTypes, repoPath } from "./profile";
 import { baseBranch } from "../github";
-import type { AutoMerge, Check, IntakeRule, Io, Profile, Repo, RepoConfig, Session, TaskType, VerifyContract } from "../types";
+import type { AutoMerge, Check, IntakeRule, Io, Profile, Repo, RepoConfig, Session, TaskType } from "../types";
 import { GIT, read, TENDER_DIR, write } from "../util";
 
 const MAX_FILE = 64 * 1024;
@@ -20,23 +19,21 @@ export interface Entry {
   text?: string;
 }
 
-const wanted = (name: string) => name === "config.yaml" || name === "verify.yaml";
+const wanted = (name: string) => name === "config.yaml";
 
-/** Validates a repo's `.tender/config.yaml` and `verify.yaml`, its `types` against `profile`; throws listing every problem. */
+/** Validates a repo's `.tender/config.yaml`, its `types` against `profile`; throws listing every problem. */
 export function parseRepoConfig(entries: Entry[], profile: Profile = defaultProfile()): RepoConfig {
   const errs: string[] = [];
   const check = (ok: unknown, msg: string) => ok || errs.push(msg);
   const str = (v: unknown): v is string => typeof v === "string" && v.length > 0;
   const obj = (v: unknown): v is Record<string, any> => !!v && typeof v === "object" && !Array.isArray(v);
   let yaml: string | undefined;
-  let verify: string | undefined;
   for (const e of entries) {
     if (e.name === ".") errs.push(".tender: must be a directory");
     else if (!wanted(e.name)) errs.push(`${e.name}: not expected here`);
     else if (!e.regular) errs.push(`${e.name}: must be a regular file`);
     else if (e.size > MAX_FILE || e.text === undefined) errs.push(`${e.name}: over 64 KiB`);
-    else if (e.name === "config.yaml") yaml = e.text;
-    else verify = e.text;
+    else yaml = e.text;
   }
   let raw: any = {};
   try {
@@ -64,7 +61,6 @@ export function parseRepoConfig(entries: Entry[], profile: Profile = defaultProf
     tracker: raw.tracker,
     intake: parseIntake(raw.intake, check),
     feedbackRounds: obj(fb) ? fb.maxRounds : undefined,
-    verify: verify === undefined ? undefined : parseVerify(verify, check),
   };
   const modes = AUTO_MERGE.map((m) => `"${m}"`).join(" | ");
   check(c.autoMerge === undefined || AUTO_MERGE.includes(c.autoMerge), `autoMerge: ${modes}`);
@@ -86,43 +82,9 @@ export function parseRepoConfig(entries: Entry[], profile: Profile = defaultProf
   if (obj(lt)) check(lt.team === undefined || (str(lt.team) && /^[A-Z0-9]+$/.test(lt.team)), "tracker.linear.team: Linear team key, e.g. ENG");
   if (errs.length) throw new Error(errs.join("\n  "));
   // tender runs it through the Docker daemon, which is host root, so a change to it never auto-merges.
-  const compose = [...c.types, ...(c.verify?.checks ?? [])].flatMap((x) => x.needs?.compose ?? []);
+  const compose = c.types.flatMap((x) => x.needs?.compose ?? []);
   c.criticalPaths = [...new Set([...c.criticalPaths, ...compose])];
   return c;
-}
-
-// What `gh --attach` uploads.
-const PROOF = /\.(png|gif|jpe?g|webp|svg|mp4|mov|webm)$/i;
-
-function parseVerify(yaml: string, check: Check): VerifyContract {
-  const obj = (v: unknown): v is Record<string, any> => !!v && typeof v === "object" && !Array.isArray(v);
-  let raw: any;
-  try {
-    raw = Bun.YAML.parse(yaml);
-  } catch (e) {
-    check(false, `verify.yaml: ${(e as Error).message}`);
-  }
-  check(obj(raw), "verify.yaml: must be a mapping with checks and maxRounds");
-  const o: Record<string, any> = obj(raw) ? raw : {};
-  for (const k of Object.keys(o)) check(["checks", "maxRounds"].includes(k), `verify.${k}: unknown key`);
-  const maxRounds = o.maxRounds ?? 2;
-  check(Number.isInteger(maxRounds) && maxRounds >= 1 && maxRounds <= 10, "verify.maxRounds: integer 1-10");
-  check(Array.isArray(o.checks) && o.checks.length > 0 && o.checks.length <= 20, "verify.checks: list of 1-20 checks");
-  const checks = (Array.isArray(o.checks) ? o.checks : []).map((c: unknown, i: number) => {
-    const at = `verify.checks[${i}]${obj(c) && typeof c.name === "string" ? ` (${c.name})` : ""}`;
-    check(obj(c), `${at}: mapping`);
-    const x: Record<string, any> = obj(c) ? c : {};
-    for (const k of Object.keys(x)) check(["name", "run", "timeout", "proof", "needs"].includes(k), `${at}.${k}: unknown key`);
-    const v = { name: x.name, run: x.run, timeout: x.timeout ?? 600, proof: x.proof ?? [] };
-    check(typeof v.name === "string" && INTAKE_NAME.test(v.name), `${at}.name: required, [a-z0-9-]`);
-    check(typeof v.run === "string" && v.run.trim().length > 0 && v.run.length <= 4000 && !v.run.includes("\0"), `${at}.run: required, a shell command of at most 4000 chars`);
-    check(Number.isInteger(v.timeout) && v.timeout >= 1 && v.timeout <= 1800, `${at}.timeout: seconds, integer 1-1800`);
-    check(Array.isArray(v.proof) && v.proof.length <= 20 && v.proof.every((g: unknown) => validGlob(g) && PROOF.test(g)), `${at}.proof: at most 20 globs (${GLOB_RULES}) ending in .png, .gif, .jpg, .jpeg, .webp, .svg, .mp4, .mov or .webm`);
-    const needs = parseNeeds(x.needs, `${at}.needs`, check);
-    return needs ? { ...v, needs } : v;
-  });
-  check(new Set(checks.map((c: { name: string }) => c.name)).size === checks.length, "verify.checks: names must be unique");
-  return { checks, maxRounds, digest: createHash("sha256").update(yaml).digest("hex") };
 }
 
 const INTAKE_KEYS = ["name", "run", "args", "every", "maxPerRun", "secrets", "network", "autoLabel", "labels", "recheck", "recheckAfter", "private", "loopback", "judge"];
@@ -181,7 +143,7 @@ export function promptFor(t: TaskType) {
 export async function gitEntries(io: Io, path: string, sha: string): Promise<Entry[]> {
   const top = await read(io, [...GIT, "-C", path, "ls-tree", "-z", sha, "--", ".tender"]);
   if (top && !top.startsWith("040000 tree ")) return [{ name: ".", regular: false, size: 0 }];
-  const out = await read(io, [...GIT, "-C", path, "ls-tree", "-r", "-z", "--long", sha, "--", ".tender/config.yaml", ".tender/verify.yaml"]);
+  const out = await read(io, [...GIT, "-C", path, "ls-tree", "-r", "-z", "--long", sha, "--", ".tender/config.yaml"]);
   const entries: Entry[] = [];
   for (const line of out.split("\0").filter(Boolean)) {
     const m = /^(\d+) (\w+) ([0-9a-f]+) +(-|\d+)\t\.tender\/(.+)$/s.exec(line);
@@ -195,7 +157,7 @@ export async function gitEntries(io: Io, path: string, sha: string): Promise<Ent
 }
 
 /** `.tender/` entries in a working tree, for `tender check`. */
-export function dirEntries(dir: string, names = ["config.yaml", "verify.yaml"]): Entry[] {
+export function dirEntries(dir: string, names = ["config.yaml"]): Entry[] {
   const top = lstatSync(join(dir, ".tender"), { throwIfNoEntry: false });
   if (top && !top.isDirectory()) return [{ name: ".", regular: false, size: 0 }];
   const at = (name: string): Entry[] => {
@@ -243,9 +205,6 @@ export function combine(r: Repo, base: string, c: RepoConfig): Session {
   const { baseBranch: _, ...host } = r;
   return { ...host, ...c, feedbackRounds: c.feedbackRounds ?? r.feedbackRounds, baseBranch: base, ceiling: r.autoMerge, criticalPaths: [...r.criticalPaths, ...c.criticalPaths], autoMerge: c.autoMerge !== undefined && rank(c.autoMerge) < rank(r.autoMerge) ? c.autoMerge : r.autoMerge };
 }
-
-/** Whether `origin/<base>` is still the commit `s` read `.tender/` at; a failed lookup throws. */
-export const atTip = async (io: Io, s: Session) => (await read(io, [...GIT, "-C", s.path, "ls-remote", "origin", `refs/heads/${s.baseBranch}`])).split("\t")[0] === s.baseSha;
 
 /** Fetches `origin/<base>` into the clone, then the settings there; undefined if the repo's config is invalid, logged once per commit. */
 export async function loadSession(io: Io, r: Repo, secs?: number): Promise<Session | undefined> {

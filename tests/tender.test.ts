@@ -21,7 +21,6 @@ test("parseArgs accepts known commands and flags", () => {
   expect(parseArgs(["prs", "--dry-run"])).toMatchObject({ cmd: "prs", id: undefined });
   expect(parseArgs(["stats", "--json"])).toMatchObject({ cmd: "stats", days: 90 });
   expect(parseArgs(["stats", "--days", "30"])).toMatchObject({ cmd: "stats", days: 30 });
-  expect(parseArgs(["verify", "acme/web", "--config", "x.json"])).toMatchObject({ cmd: "verify", id: "acme/web", path: resolve("x.json") });
 });
 
 test("parseArgs rejects unknown flags, stray args and out-of-range numbers", () => {
@@ -35,9 +34,7 @@ test("parseArgs rejects unknown flags, stray args and out-of-range numbers", () 
     ["tail", "PER-1", "PER-2"],
     ["open"],
     ["resume"],
-    ["verify"],
-    ["verify", "acme/web", "acme/api"],
-    ["verify", "acme/web", "--dry-run"],
+    ["verify", "acme/web"],
     ["open", "PER-1", "--tool", "vim"],
     ["open", "PER-1", "--tool"],
     ["resume", "PER-1", "--tool", "claude"],

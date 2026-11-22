@@ -11,7 +11,6 @@ import { intake } from "./src/intake";
 import { prs } from "./src/prs";
 import { DEFAULT_DAYS, stats, statsTable } from "./src/stats";
 import { cloned, cloneAll, resume } from "./src/session/launcher";
-import { verifyBase } from "./src/review/verify";
 import { landlockAbi, landlockProblem } from "./src/session/needs";
 import { CRITICAL_PATHS, TEST_PATHS } from "./src/review/merge";
 import { makeTracker, pass } from "./src/pass";
@@ -93,8 +92,7 @@ const USAGE = `usage: bun tender.ts <command> [--config tender.json]
   intake [owner/repo:rule | rule] [--dry-run]
   prs [--dry-run]
   stats [--days 90] [--json]
-  check [path] [--config tender.json]
-  verify <owner/repo>`;
+  check [path] [--config tender.json]`;
 const VALUED = ["--config", "--interval", "-n", "--tool", "--days"];
 const CMD_FLAGS: Record<string, string[]> = {
   run: ["--dry-run"],
@@ -108,18 +106,10 @@ const CMD_FLAGS: Record<string, string[]> = {
   prs: ["--dry-run"],
   stats: ["--days", "--json"],
   check: [],
-  verify: [],
 };
 const FLAGS = ["--config", ...Object.values(CMD_FLAGS).flat()];
-const TARGETED = ["tail", "open", "resume", "verify"];
+const TARGETED = ["tail", "open", "resume"];
 
-const ghVersion = () => {
-  try {
-    return Bun.spawnSync(["gh", "--version"], { stderr: "ignore" }).stdout.toString();
-  } catch {
-    return "";
-  }
-};
 const hasCompose = () => {
   try {
     return Bun.spawnSync(["docker", "compose", "version"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
@@ -127,8 +117,6 @@ const hasCompose = () => {
     return false;
   }
 };
-export const ghAttaches = (version: string) => ((m) => !!m && (Number(m[1]) > 2 || (Number(m[1]) === 2 && Number(m[2]) >= 99)))(/gh version (\d+)\.(\d+)/.exec(version));
-
 
 /** Validates `<dir>/.tender/` from the working tree against `profile` and prints the repo's settings with defaults filled in; false if invalid or its `needs` cannot run on this host. */
 export function check(dir: string, print = console.log, fail = console.error, profile: Profile = defaultProfile(), host = { abi: landlockAbi, compose: hasCompose }) {
@@ -140,9 +128,8 @@ export function check(dir: string, print = console.log, fail = console.error, pr
     fail(`${join(dir, ".tender")}: invalid:\n  ${(e as Error).message}`);
     return false;
   }
-  print(JSON.stringify({ ...c, tracker: c.tracker ?? null, autoMerge: c.autoMerge ? `${c.autoMerge} (capped by the host's autoMerge)` : "unset (the host's autoMerge)", criticalPaths: [...CRITICAL_PATHS, ...c.criticalPaths], testPaths: [...TEST_PATHS, ...c.testPaths], verify: c.verify ?? "none: medium and large changes never auto-merge", profile: profile.dir }, null, 2));
-  if (c.verify?.checks.some((x) => x.proof.length) && !ghAttaches(ghVersion())) fail("warning: proof needs gh 2.99 or newer for `gh pr comment --attach`; verify comments fail until gh is upgraded");
-  const needs = [...c.types, ...(c.verify?.checks ?? [])].flatMap((x) => x.needs ?? []);
+  print(JSON.stringify({ ...c, tracker: c.tracker ?? null, autoMerge: c.autoMerge ? `${c.autoMerge} (capped by the host's autoMerge)` : "unset (the host's autoMerge)", criticalPaths: [...CRITICAL_PATHS, ...c.criticalPaths], testPaths: [...TEST_PATHS, ...c.testPaths], profile: profile.dir }, null, 2));
+  const needs = c.types.flatMap((x) => x.needs ?? []);
   const files = [...new Set(needs.flatMap((n) => n.compose ?? []))];
   const problems = [
     ...(needs.length ? [landlockProblem(host.abi())] : []),
@@ -172,7 +159,7 @@ export function parseArgs(argv: string[]) {
   if (!allowed) return fail(`unknown command ${cmd}`);
   const wrong = [...vals.keys()].find((f) => !allowed.includes(f) && f !== "--config");
   if (wrong) return fail(`${cmd} does not take ${wrong}`);
-  if (TARGETED.includes(cmd) && id === undefined) return fail(`${cmd} needs ${cmd === "verify" ? "an <owner/repo>" : "an <ID>"}`);
+  if (TARGETED.includes(cmd) && id === undefined) return fail(`${cmd} needs an <ID>`);
   const stray = cmd === "check" || cmd === "intake" || TARGETED.includes(cmd) ? extra[0] : id;
   if (stray !== undefined) return fail(`unexpected argument ${stray}`);
   const tool = vals.get("--tool");
@@ -257,18 +244,6 @@ async function main(argv: string[]) {
     for (const key of new Set(cfg.intake?.host === cfg.host ? cfg.intake.enabled.map((e) => e.slice(0, e.lastIndexOf(":"))) : []))
       await cloned(cfg, io, cfg.repos[key]!).catch((e) => io.log(`clone ${key} failed: ${e.message}`));
     return intake(cfg, io, TENDER_DIR, { only: id });
-  }
-  if (cmd === "verify") {
-    const r = Object.hasOwn(cfg.repos, id!) ? cfg.repos[id!] : undefined;
-    const held = join(cfg.workspaceRoot, ".verify.lock");
-    if (!r) console.error(`${id}: not in tender.json repos`);
-    else if (!holdLock(held)) console.error(`another tender verify holds ${held}`);
-    else {
-      const v = await verifyBase(cfg, io, r, TENDER_DIR).catch((e) => (console.error(e.message), undefined));
-      if (v) console.log(v.pass ? `passed at ${v.head.slice(0, 12)}` : `${v.check} failed at ${v.head.slice(0, 12)}:\n${v.tail}`);
-      if (v?.pass) return;
-    }
-    process.exit(1);
   }
   if (cmd === "prs") {
     const held = join(cfg.workspaceRoot, ".prs.lock");

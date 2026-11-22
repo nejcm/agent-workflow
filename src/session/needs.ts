@@ -5,10 +5,10 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { repoDir } from "../config/config";
 import type { Config, Io } from "../types";
-import { GIT, Kept, read, SLOW_SECS, subdirs } from "../util";
+import { GIT, Kept, read, SLOW_SECS } from "../util";
 import { scopePrefix } from "./launcher";
 
-/** What `<ID>.compose/job.json` and a verify job record before `up`, so a crash still knows what to tear down. */
+/** What `<ID>.compose/job.json` records before `up`, so a crash still knows what to tear down. */
 export type ComposeJob = { project: string; repo: string; sha: string; file: string; ports: number[] };
 
 // Below Linux's ephemeral range (32768+), so an outgoing connection never takes one.
@@ -43,7 +43,7 @@ export const portGrants = (ports: number[]): [string, string][] => ports.map((p)
 
 const readJson = (f: string) => JSON.parse(readFileSync(f, "utf8"));
 
-// A file removed since the scan held nothing: `tender verify` removes its run outside the pass lock.
+// A file removed since the scan held nothing.
 const held = (f: string) => {
   try {
     return readJson(f).ports ?? [];
@@ -53,14 +53,13 @@ const held = (f: string) => {
   }
 };
 
-/** Every port a session (`<ID>.needs`) or a verify run (`<ID>.verify/job.json`) in this workspace holds; a file that cannot be read throws. */
+/** Every port a session (`<ID>.needs`) in this workspace holds; a file that cannot be read throws. */
 export function reservedPorts(cfg: Config) {
   const used = new Set<number>();
   for (const r of Object.values(cfg.repos)) {
     const dir = repoDir(cfg, r.key);
     if (!existsSync(dir)) continue;
     const files = [...new Bun.Glob("*.needs").scanSync({ cwd: dir, onlyFiles: true })].map((f) => join(dir, f));
-    for (const d of subdirs(dir)) if (d.endsWith(".verify")) files.push(join(dir, d, "job.json"));
     for (const f of files) for (const p of held(f)) used.add(p);
   }
   return used;
@@ -75,7 +74,7 @@ export function portFree(port: number) {
   }
 }
 
-/** `n` ports no session or verify run holds and nothing listens on now; call under the pass lock. */
+/** `n` ports no session holds and nothing listens on now; call under the pass lock. */
 export function allocatePorts(cfg: Config, n: number, free = portFree) {
   const used = reservedPorts(cfg);
   const out: number[] = [];
@@ -84,9 +83,8 @@ export function allocatePorts(cfg: Config, n: number, free = portFree) {
   return out;
 }
 
-/** Docker-safe and unique per workspace, repo, ticket and kind, with the ticket readable. */
-export const composeProject = (cfg: Config, key: string, id: string, kind: "session" | "verify") =>
-  `${scopePrefix(cfg)}-${id.toLowerCase()}-${createHash("sha256").update(`${key}\0${id}\0${kind}`).digest("hex").slice(0, 8)}${kind === "verify" ? "-verify" : ""}`;
+/** Docker-safe and unique per workspace, repo and ticket, with the ticket readable. */
+export const composeProject = (cfg: Config, key: string, id: string) => `${scopePrefix(cfg)}-${id.toLowerCase()}-${createHash("sha256").update(`${key}\0${id}\0session`).digest("hex").slice(0, 8)}`;
 
 const dockerEnv = (io: Io, ports: number[]) => ({ PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: io.home, ...Object.fromEntries(ENV.flatMap((k) => (process.env[k] ? [[k, process.env[k]!]] : []))), ...portEnv(ports) });
 

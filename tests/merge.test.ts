@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { addedLines, ESCAPE_HATCHES, escapeHatch, hatchInWorker } from "../src/review/hatch";
 import { type PrFacts, isCritical, isTest, mergeDecision, parseAssessment, prMode } from "../src/review/merge";
@@ -24,8 +23,6 @@ const prFacts = (over: Partial<PrFacts> = {}): PrFacts => {
 const assess = (over: object = {}) => ({ confidence: "high" as const, critical: false, reviewed: true, reviewer: "gpt-5", reason: "small fix, tests pass", ...over });
 const smart = { autoMerge: "intelligent" as const, ceiling: "all" as const, trust: [], escapeHatches: [], criticalPaths: [], testPaths: [], baseBranch: "main", intake: [] };
 const medium = { additions: 200, deletions: 100, changedFiles: 8 };
-const verify = { checks: [], maxRounds: 2, digest: "d" };
-const passed = { head: "h", digest: "d", pass: true as const };
 const filesOut = (pr: PrFacts) => ({ out: pr.files!.map((f) => JSON.stringify(f)).join("\n") });
 
 test("merge decision: hard blockers hold back any size and any mode but off", () => {
@@ -56,20 +53,29 @@ test("merge decision: all mode has no size, test or assessment gates; critical p
   const all = { ...smart, autoMerge: "all" as const };
   const big = { additions: 5000, statusCheckRollup: [] };
   const bigPr = prFacts({ ...big, files: [file("src/a.ts"), file("tests/a.test.ts", { deletions: 9 })] });
-  expect(mergeDecision(bigPr, assess({ critical: true, confidence: "low" }), all).reason).toBe("large change without a verify contract (.tender/verify.yaml)");
-  expect(mergeDecision({ ...bigPr, headRefOid: "h" }, assess({ critical: true, confidence: "low" }), { ...all, verify }, [], passed)).toEqual({ merge: true, reason: "autoMerge all" });
+  expect(mergeDecision(bigPr, assess({ critical: true, confidence: "low" }), all).reason).toBe("large change without a CI check");
+  expect(mergeDecision({ ...bigPr, statusCheckRollup: [ok] }, assess({ critical: true, confidence: "low" }), all)).toEqual({ merge: true, reason: "autoMerge all" });
   expect(mergeDecision(prFacts({ ...big, files: [file("package.json")] }), undefined, all).reason).toBe("touches critical path package.json");
 });
 
+test("merge decision: a medium or large change needs at least one CI check, in any mode; a small one does not", () => {
+  const all = { ...smart, autoMerge: "all" as const };
+  for (const [over, tier] of [[medium, "medium"], [{ additions: 5000 }, "large"]] as const) {
+    expect(mergeDecision(prFacts({ ...over, statusCheckRollup: [] }), assess(), all)).toEqual({ merge: false, reason: `${tier} change without a CI check` });
+    expect(mergeDecision(prFacts({ ...over, statusCheckRollup: [], updatedAt: new Date().toISOString() }), assess(), all).merge).toBe("wait");
+    expect(mergeDecision(prFacts({ ...over, statusCheckRollup: [{ status: "COMPLETED", conclusion: "NEUTRAL" }] }), assess(), all).merge).toBe(true);
+  }
+  expect(mergeDecision(prFacts({ statusCheckRollup: [] }), undefined, all).merge).toBe(true);
+});
+
 test("merge decision: size tiers and their boundaries", () => {
-  const m = (pr: Partial<PrFacts>, a?: object) => mergeDecision({ ...prFacts(pr), headRefOid: "h" }, a as any, { ...smart, verify }, [], passed);
+  const m = (pr: Partial<PrFacts>, a?: object) => mergeDecision(prFacts(pr), a as any, smart);
   expect(m({ additions: 150, deletions: 0, changedFiles: 5, statusCheckRollup: [] })).toEqual({ merge: true, reason: "small change" });
   expect(m({ additions: 100, deletions: 50, changedFiles: 5 }, assess()).reason).toBe("small change; agent: small fix, tests pass");
   expect(m({ additions: 100, changedFiles: 1 }, assess({ confidence: "medium" })).merge).toBe(true);
   expect(m({ additions: 151, deletions: 0, changedFiles: 1 }).reason).toBe("medium change without a valid .tender/run/merge.json");
   expect(m({ additions: 1, deletions: 0, changedFiles: 6 }).reason).toBe("medium change without a valid .tender/run/merge.json");
   expect(m({ additions: 500, deletions: 0, changedFiles: 15 }, assess())).toEqual({ merge: true, reason: "medium change; agent: small fix, tests pass" });
-  expect(mergeDecision(prFacts({ additions: 500, deletions: 0, changedFiles: 15 }), assess(), smart).reason).toBe("medium change without a verify contract (.tender/verify.yaml)");
   expect(m({ ...medium, statusCheckRollup: [ok, { status: "QUEUED" }] }, assess()).merge).toBe("wait");
   expect(m({ ...medium, statusCheckRollup: [] }, assess()).reason).toBe("medium change with no successful check");
   expect(m(medium, assess({ confidence: "medium" })).reason).toMatch(/^medium change needs high confidence/);
@@ -281,8 +287,6 @@ test("auto-merge pass: medium needs the agent's merge.json; a symlinked one is i
   const respond = (a: string[]) => (a[1] === "pr" && a[2] === "list" ? { out: '[{"url":"https://github.com/acme/web/pull/7","state":"OPEN"}]' } : a[2] === "view" && a[1] === "pr" ? { out: JSON.stringify(a.at(-1) === "state" ? { state: "MERGED" } : facts) }
     : a[1] === "api" ? { out: facts.files!.map((f) => JSON.stringify(f)).join("\n") } : undefined);
   worktree("gh-1");
-  repoFiles["verify.yaml"] = "checks:\n  - { name: test, run: bun test }\n";
-  writeFileSync(join(root, "acme/web/gh-1.verified"), JSON.stringify({ head: facts.headRefOid, digest: createHash("sha256").update(repoFiles["verify.yaml"]).digest("hex"), pass: true }));
   mkdirSync(join(root, "acme/web/gh-1/.tender/run"), { recursive: true });
   writeFileSync(join(root, "outside.json"), JSON.stringify(assess()));
   symlinkSync(join(root, "outside.json"), join(root, "acme/web/gh-1/.tender/run/merge.json"));
@@ -320,7 +324,7 @@ test("merge decision: renames, newline paths and skipped-only checks are held ba
   expect(mergeDecision(renamed("src/session.ts", "src/login.ts"), undefined, smart)).toEqual({ merge: true, reason: "small change" });
   expect(mergeDecision(renamed("src/login.ts", "src/auth/login.ts"), undefined, { ...smart, autoMerge: "all" }).merge).toBe(false);
   const skipped = { status: "COMPLETED", conclusion: "SKIPPED" };
-  const m = (statusCheckRollup: any[]) => mergeDecision({ ...prFacts({ ...medium, statusCheckRollup }), headRefOid: "h" }, assess(), { ...smart, verify }, [], passed);
+  const m = (statusCheckRollup: any[]) => mergeDecision(prFacts({ ...medium, statusCheckRollup }), assess(), smart);
   expect(m([skipped, { status: "COMPLETED", conclusion: "NEUTRAL" }]).reason).toBe("medium change with no successful check");
   expect(m([skipped, { state: "SUCCESS" }]).merge).toBe(true);
   expect(mergeDecision(prFacts({ statusCheckRollup: [skipped] }), undefined, smart).merge).toBe(true);
@@ -456,9 +460,8 @@ test("trust: a file takes its first matching rule's mode, else autoMerge; the PR
   expect(prMode({ ...s, ceiling: "intelligent" }, [file("docs/a.md")])).toBe("intelligent");
   expect(prMode({ autoMerge: "off", ceiling: "shadow", trust }, [file("docs/a.md")])).toBe("shadow");
   expect(prMode({ autoMerge: "off", ceiling: "off", trust })).toBe("off");
-  const d = (names: string[], over: object = {}) => mergeDecision({ ...prFacts({ files: names.map((n) => file(n)), additions: 5000 }), headRefOid: "h" }, undefined, { ...smart, trust, ...over }, [], passed);
-  expect(d(["docs/a.md"]).reason).toBe("large change without a verify contract (.tender/verify.yaml)");
-  expect(d(["docs/a.md"], { verify })).toEqual({ merge: true, reason: "autoMerge all" });
+  const d = (names: string[], over: object = {}) => mergeDecision(prFacts({ files: names.map((n) => file(n)), additions: 5000 }), undefined, { ...smart, trust, ...over });
+  expect(d(["docs/a.md"])).toEqual({ merge: true, reason: "autoMerge all" });
   expect(d(["docs/a.md", "src/a.ts"]).reason).toBe("too large (5005 lines, 2 files)");
   expect(d(["docs/a.md", "supabase/migrations/1.sql"]).reason).toBe("trust sets supabase/migrations/1.sql to off");
   expect(d(["docs/a.md"], { ceiling: "intelligent" }).reason).toBe("too large (5005 lines, 1 files)");

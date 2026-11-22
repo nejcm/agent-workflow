@@ -1,0 +1,10 @@
+# First match in file order wins; default takes every other ticket and stays last.
+types:
+  - name: bug
+    match: { labels: ["type:bug"] }
+    instructions: instructions/bug.md
+  - name: docs
+    match: { labels: ["type:docs"] }
+    instructions: instructions/docs.md
+  - name: default
+    instructions: instructions/default.md

@@ -5,8 +5,9 @@ import { AGENTS, CLAUDE_TOKEN, claudeHome, codexHome, recordedAgentConfig, tmpHo
 import { checkLogin, findBun, readLogin } from "./claude-auth";
 import { repoDir } from "../config/config";
 import { canonical, sameRepo } from "../github";
-import { configCache, labelFor, loadSession, promptFor } from "../config/repo-config";
-import type { AgentConfig, Config, Io, Repo, Session, Source, Ticket, Tracker } from "../types";
+import { typeFor } from "../config/profile";
+import { configCache, loadSession, promptFor } from "../config/repo-config";
+import type { AgentConfig, Config, Io, Repo, Session, Source, TaskType, Ticket, Tracker } from "../types";
 import { GIT, inDir, inRun, passLocked, put, quote, read, remove, SLOW_SECS, write } from "../util";
 
 export const render = (tpl: string, vars: Record<string, string>) => tpl.replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? m);
@@ -363,7 +364,7 @@ async function cloneSession(io: Io, r: Session, wt: string, branch: string) {
   if (!io.dry) renameSync(tmp, wt);
 }
 
-// The whole config, so a label that switches provider never inherits the repo's model or effort.
+// The whole config, so a type that switches provider never inherits the repo's model or effort.
 const withAgent = (r: Session, a?: AgentConfig): Session => (a ? { ...r, agent: a.name, model: a.model, effort: a.effort } : r);
 
 /** Starts a session for `t`; false, with one comment per commit, when the repo's config on its base branch is invalid. */
@@ -379,7 +380,7 @@ export async function start(cfg: Config, s: Source, host: Repo, t: Ticket, tr: T
     // Marked before posting: a crash loses the comment rather than repeating it; a failed post is retried.
     put(io, marker, sha);
     try {
-      await tr.comment(t, `not started: ${host.key}'s .tender/ at ${sha.slice(0, 12)} is invalid; run \`bun tender.ts check <repo>\` for details`);
+      await tr.comment(t, `not started: ${host.key}'s .tender/ at ${sha.slice(0, 12)} is invalid; run \`bun tender.ts check <repo> --config <tender.json>\` for details`);
     } catch (e) {
       remove(io, marker);
       throw e;
@@ -387,8 +388,9 @@ export async function start(cfg: Config, s: Source, host: Repo, t: Ticket, tr: T
     return false;
   }
   const body = t.body.length > MAX_BODY ? `${t.body.slice(0, MAX_BODY)}\n[truncated: read the full ticket at its URL]` : t.body;
-  const ses = withAgent(r, labelFor(r, t.labels)?.agent);
-  await launch(cfg, io, ses, t.id, (vars) => render(promptFor(r, t.labels), { ...vars, title: t.title, body, url: t.url }), tenderDir, s.name);
+  const type = typeFor(r.types, t.labels);
+  const ses = withAgent(r, type.agent);
+  await launch(cfg, io, ses, t.id, (vars) => render(promptFor(type), { ...vars, title: t.title, body, url: t.url }), tenderDir, s.name, type);
   io.event?.("start", host.key, t.id, { agent: ses.agent, source: s.name });
   await claim(io, tr, join(dir, `${t.id}.claim`), t).catch((e) => io.log(`${t.id}: claim failed, session left running and the claim retried next poll: ${e.message}`));
   return true;
@@ -409,7 +411,7 @@ async function resumeLocked(cfg: Config, io: Io, { key, id }: { key: string; id:
   if (!wins.listed) throw new Error("tmux windows unknown; not resumed");
   if (wins.has(winName(key, id))) throw new Error(`${key}/${id} already has a tmux window`);
   const r = await loadSession(io, host, SLOW_SECS);
-  if (!r) throw new Error(`${key}'s .tender/ on its base branch is invalid; run \`bun tender.ts check <repo>\` for details`);
+  if (!r) throw new Error(`${key}'s .tender/ on its base branch is invalid; run \`bun tender.ts check <repo> --config <tender.json>\` for details`);
   const old = readFileSync(join(dir, `${id}.prompt.md`), "utf8");
   await launch(cfg, io, withAgent(r, recordedAgentConfig(dir, id)), id, (vars) => {
     const head = render(CONTINUE, vars);
@@ -421,15 +423,16 @@ async function resumeLocked(cfg: Config, io: Io, { key, id }: { key: string; id:
 export const handedOff = (dir: string, id: string) => existsSync(join(dir, `${id}.handoff`));
 
 // `source` marks a fresh start: it records the owner, clears the end markers and the last question, and writes `<ID>.claim` for the caller's claim.
-async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars: Record<string, string>) => string, tenderDir: string, source?: string) {
+async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars: Record<string, string>) => string, tenderDir: string, source?: string, type?: TaskType) {
   const dir = repoDir(cfg, r.key);
   const wt = join(dir, id);
   const branch = `agent/${id}`;
   const promptFile = join(dir, `${id}.prompt.md`);
   const script = join(dir, `${id}.sh`);
   const nono = r.sandbox === "nono";
-  const tests = r.testCmd ? `\`${r.testCmd}\`` : "the project's tests (find how they run: README, CI config, package or build files)";
-  const text = prompt({ id, branch, base: r.baseBranch, testCmd: r.testCmd ?? "", tests, repo: r.key });
+  // Names, not commands: a contract's commands can add up to more than the prompt cap.
+  const verify = r.verify ? `the commands in \`.tender/verify.yaml\` (checks ${r.verify.checks.map((c) => `\`${c.name}\``).join(", ")})` : "the project's checks (find how they run: README, CI config, package or build files)";
+  const text = prompt({ id, branch, base: r.baseBranch, verify, repo: r.key });
   const kib = Buffer.byteLength(text) / 1024;
   if (kib > MAX_PROMPT_KIB) throw new Error(`${id}: prompt is ${Math.ceil(kib)} KiB, over ${MAX_PROMPT_KIB} KiB`);
   const token = join(io.home, CLAUDE_TOKEN);
@@ -461,6 +464,7 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
     remove(io, join(dir, `${id}.question`));
   }
   put(io, join(dir, `${id}.agent`), r.model || r.effort ? JSON.stringify({ name: r.agent, model: r.model, effort: r.effort }) : r.agent);
+  if (type) put(io, join(dir, `${id}.type`), JSON.stringify({ name: type.name, instructions: type.instructions }));
   const root = existsSync(wt) ? realpathSync(wt) : wt;
   seedCodex(io, codexHome(wt), login, root);
   if (r.agent === "claude" || nono) seedClaude(io, claudeHome(wt), root);

@@ -4,6 +4,7 @@ Every setting tender reads, with its type, allowed values and default:
 
 - [Host config](#host-config) (`tender.json`): this machine, which repos it may work on, which trackers it polls.
 - [Repo config](#repo-config) (`.tender/config.yaml`): how the agent works on one repo; committed to that repo.
+- [Profile](#profile) (`types.yaml` and instruction files): the task types and what the agent is told for each; on the host.
 - [Environment](#environment) and [CLI](#cli).
 
 Unknown keys are errors in both files.
@@ -40,6 +41,7 @@ Unknown keys are errors in both files.
 | `maxConcurrent` | positive integer | `2` | running sessions in total |
 | `maxInReview` | positive integer | unlimited | no new starts while this host has this many In Review plus Ready to merge tickets |
 | `stallMinutes` | positive integer | `30` | a session `working` with no transcript write for this long is parked, see [Stalled](lifecycle.md); a repo entry or `defaults` can override it |
+| `profile` | path | tender's `profile/` | the [profile](#profile) every repo uses unless its entry or `defaults` sets one; validated at startup |
 | `defaults` | object | `{}` | per-repo settings applied to every entry in `repos` (no `path`) |
 | `repos` | non-empty array | required | the allowlist; tickets for any other repo are skipped |
 | `sources` | non-empty array | required | the trackers to poll |
@@ -63,8 +65,9 @@ A `repos` entry is `"owner/name"` or `{ "name": "owner/name", …settings }`. Ea
 | `feedbackAuthors` | array of strings | `[]` | GitHub logins / Linear emails (case-insensitive) whose replies answer agent questions and whose PR reviews and comments go back to the session, see [Questions](lifecycle.md#questions) and [PR feedback](lifecycle.md#pr-feedback) |
 | `stallMinutes` | positive integer | the top-level `stallMinutes` | see [Stalled](lifecycle.md) |
 | `feedback` | `{ "maxRounds": 1-10 }` | `{ "maxRounds": 3 }` | PR feedback rounds before the ticket is parked; the repo's `feedback.maxRounds` overrides it whatever `autoMerge` is, see [PR feedback](lifecycle.md#pr-feedback) |
+| `profile` | path | the top-level `profile` | this repo's [profile](#profile) |
 
-`agent`, `testCmd`, `planStep`, `prompt` and `testPaths` are rejected here with `<key>: moved to .tender/config.yaml in the repo`.
+`agent` and `testPaths` are rejected here with `<key>: moved to .tender/config.yaml in the repo`.
 
 ### `sources`
 
@@ -130,16 +133,12 @@ A key the source's tracker doesn't use (e.g. `team` on a GitHub source) is rejec
   config.yaml        # optional
   verify.yaml        # optional verify contract, see below
   checks/            # scripts verify.yaml runs, if any
-  prompts/           # prompt text named by { file: <name>.md }
-    verify.md
-    bug.md
   intake/            # intake scripts, if any
   run/               # the agent's scratch dir, git-ignored by its own .gitignore
 ```
 
 ```yaml
 agent: { name: claude, model: sonnet, effort: high }
-testCmd: bun test
 autoMerge: intelligent
 criticalPaths: ["src/billing/**"]
 testPaths: ["spec/**"]
@@ -147,15 +146,10 @@ trust:
   - { paths: ["docs/**", "**/*.md"], autoMerge: all }
   - { paths: ["supabase/migrations/**"], autoMerge: off }
 escapeHatches: ["pragma: no cover"]
-prompt:
-  steps:
-    plan: Plan and implement the ticket. List the files you will change before editing.
-    verify: { file: verify.md }
-    review: ""
-  append: Never edit generated files under src/gen/.
-byLabel:
-  "type:bug":
-    prompt: { steps: { plan: { file: bug.md } } }
+types:
+  - name: bug
+    match: { labels: ["type:bug", "regression"] }
+    instructions: instructions/bug.md
     agent: { name: codex, effort: xhigh }
 feedback: { maxRounds: 5 }
 tracker:
@@ -175,15 +169,12 @@ intake:
 |---|---|---|---|
 | `agent` | `claude` \| `codex` or `{ name, model, effort }` | `claude` | which agent CLI the session runs; `model` is a model name (`[A-Za-z0-9._:[]/-]`, ≤ 100 chars), `effort` is `low`, `medium`, `high`, `xhigh` or `max` for Claude (`--model`, `--effort`) and `minimal`, `low`, `medium`, `high` or `xhigh` for Codex (`-m`, `-c model_reasoning_effort`); unset, the CLI's own default; quote a model with brackets: `model: "opus[1m]"` |
 | `feedback.maxRounds` | integer 1–10 | the host's `feedback.maxRounds` | PR feedback rounds before the ticket is parked |
-| `testCmd` | string | none | the agent must pass it before opening a PR; unset, the prompt tells it to find and run the project's tests |
 | `autoMerge` | `off` \| `shadow` \| `intelligent` \| `all` | the host's | the repo's request; the effective mode is the lower of it and the host's `autoMerge` (`off < shadow < intelligent < all`) |
 | `criticalPaths` | list of globs | `[]` | added to the built-in critical paths, `.tender/**` and the host's `criticalPaths`, see [Auto-merge](auto-merge.md#auto-merge) |
 | `testPaths` | list of globs | `[]` | added to the built-in test paths |
 | `trust` | list of `{ paths: [glob, …], autoMerge }` | `[]` | a changed file takes the mode of the first rule matching it, else `autoMerge`; capped by the host's `autoMerge` |
 | `escapeHatches` | list of regexes, ≤ 20, each ≤ 200 chars | `[]` | added lines matching one hold a merge back, on top of the built-in ones |
-| `prompt.steps.<step>` | text, `""` or `{ file: <name>.md }` | tender's `prompts/steps/<step>.md` | replaces one step; `""` drops it; steps are `clarify`, `plan`, `test`, `verify`, `review`, `commit`, see [Prompt](#prompt) |
-| `prompt.append` | text or `{ file: <name>.md }` | none | added after the steps, before tender's closing instructions |
-| `byLabel` | map of label to `{ prompt, agent }` | `{}` | only the first entry whose label the ticket has applies: it sets steps and `append` over `prompt`'s, and its `agent` replaces `agent` whole (a provider switch never keeps the repo's model or effort); a GitHub issue type counts as the label `type:<name>`; merge decisions never depend on it |
+| `types` | list of types, ≤ 50 | `[]` | added to the profile's types, or replacing the one of the same name; `instructions` paths name files in the host's profile, see [Profile](#profile) |
 | `tracker.linear.project` | Linear project name | none | the project whose tickets come here when they name no repo themselves, see [Which repo a ticket goes to](lifecycle.md#which-repo-a-ticket-goes-to) |
 | `tracker.linear.team` | team key `[A-Z0-9]+` | none | only checked: a ticket routed here from another team's source is logged once |
 | `intake` | list of rules, ≤ 20 | `[]` | see below |
@@ -237,28 +228,40 @@ The script's flags (e.g. the Sentry script's `--org`, `--min-events`, `--no-fixe
 
 ### How the repo config is read
 
-`tender` reads `.tender/` only from `origin/<base>` in its own clone (`git ls-tree` and `git cat-file` on that commit, fetched before each start and once per poll before merge decisions or Linear project routing), never from a session clone, which the agent can write. A repo's config changes only when a commit to the base branch changes it; it is cached per base commit. Each file must be a regular file of at most 64 KiB, prompt files must be named `[a-z0-9-]+.md`, and unknown keys are errors. If it is invalid, that repo starts no tickets: `tender` logs the errors once per base commit and posts one `tender: not started` comment per base commit on the next ticket that names that repo and would have started (recorded in `<workspaceRoot>/.invalid-config/<owner>/<name>`). Meanwhile Linear tickets that rely on their project wait, with no comment. `.tender` itself must be a directory, not a symlink. Run `bun tender.ts check [path]` (default `.`) before committing: it validates `<path>/.tender/` from the working tree, prints the repo's settings with defaults filled in (the host's `autoMerge` ceiling and `criticalPaths` from `tender.json` still apply on top) and its tracker target (`tracker`, `null` if none), and exits non-zero if it is invalid.
+`tender` reads `.tender/` only from `origin/<base>` in its own clone (`git ls-tree` and `git cat-file` on that commit, fetched before each start and once per poll before merge decisions or Linear project routing), never from a session clone, which the agent can write. A repo's config changes only when a commit to the base branch changes it; it is cached per base commit. One exception: when that commit has no `config.yaml`, `tender` reads a personal one from its own checkout at the repo's `path` and re-reads it when it changes; it is outside the base commit, so no PR can change it. A missing file means no personal config; one that cannot be read or does not validate makes the repo's config invalid, which holds merges and Ready to merge. A checkout still holding a file from before the base commit deleted it keeps using that file until it is removed. `verify.yaml` is always read from the base commit. Each file must be a regular file of at most 64 KiB, and unknown keys are errors. If it is invalid, that repo starts no tickets: `tender` logs the errors once per base commit and posts one `tender: not started` comment per base commit on the next ticket that names that repo and would have started (recorded in `<workspaceRoot>/.invalid-config/<owner>/<name>`). Meanwhile Linear tickets that rely on their project wait, with no comment. `.tender` itself must be a directory, not a symlink. Run `bun tender.ts check [path]` (default `.`) before committing: it validates `<path>/.tender/` from the working tree against tender's own profile, or with `--config tender.json` against the profile of the repo whose name matches `<path>`'s `origin` remote (else the top-level `profile`), prints the repo's settings with defaults filled in (the host's `autoMerge` ceiling and `criticalPaths` from `tender.json` still apply on top) and its tracker target (`tracker`, `null` if none), and exits non-zero if it is invalid.
+
+## Profile
+
+A profile is a directory with `types.yaml` and the instruction files it names. tender ships one in [`profile/`](../profile): types `bug` (label `type:bug`: reproduce the bug with a failing test first, fix the root cause, keep the test), `docs` (label `type:docs`: change docs only, add no tests, check every changed command, snippet and link) and `default` (clarify, plan and implement, test, verify, review by a model of another family, commit). Point `profile` in `tender.json` at your own to change what agents are told; an instruction file can name any skill the session's agent has (committed in the repo, or installed in `~/.claude/skills` or the template config dirs).
+
+```yaml
+types:
+  - name: bug
+    match: { labels: ["type:bug"] }
+    instructions: instructions/bug.md
+    agent: { name: codex, effort: high }
+  - name: default
+    instructions: instructions/default.md
+```
+
+| key | type | default | |
+|---|---|---|---|
+| `types` | list of types, ≤ 50 | required | matched in file order; the first with a label the ticket has is the ticket's type |
+| `types[].name` | `[a-z0-9][a-z0-9-]{0,31}`, unique | required | shown in the dashboard and tree |
+| `types[].match.labels` | list of 1–20 labels | required, except on `default` | labels match case-insensitively; a GitHub issue type adds the label `type:<name>` (lowercased) unless the ticket already has it, and a Linear label group `Type` gives `Type:<name>` |
+| `types[].instructions` | relative path to a `.md` file | required | resolved inside the profile, symlinks included; `..` or a path that leaves it is rejected |
+| `types[].agent` | like the repo's `agent` | the repo's `agent` | replaces the repo's `agent` whole, so a provider switch never keeps the repo's model or effort |
+| `types[].output` | `pr` | `pr` | |
+
+The last type must be `default`, with no `match`: it takes every ticket no other type matches. A repo's own `types` replace a profile type of the same name in place and add new ones just before `default`; their `instructions` still name files in the host's profile, so a repo cannot point the agent at a file of its own. A type never changes a merge decision: those stay per repo. `tender` reads `types.yaml` at startup (restart it after editing, or after fixing an instruction file a repo's `types` names) and each instruction file when a ticket starts, refusing the start if the file was replaced by a symlink or moved under one since; it records the chosen type and file in `<ID>.type` for `tender watch`.
 
 ### Prompt
 
-A session's prompt is tender's `prompts/header.md` (the ticket and the rules that always hold), then each step as `### <step>` in the order `clarify`, `plan`, `test`, `verify`, `review`, `commit`, then the repo's `append` (standing notes with no heading, not an extra step: it follows the commit step), then tender's `prompts/protocol.md` (push, merge file, `gh pr create`, and the phases, findings, question, feedback and merge files). The header and protocol are fixed, so every prompt keeps tender's required guidance; that is not an enforcement boundary, see [Auto-merge](auto-merge.md).
-
-| step | tender's default |
-|---|---|
-| `clarify` | read the ticket and code first; ask in the question file and stop only if the acceptance criteria are still missing or ambiguous |
-| `plan` | plan and implement: read the code first, fix a bug's root cause, smallest complete change, keep docs current |
-| `test` | add or update tests, run `{{tests}}` and make them pass by fixing the code, never by weakening tests |
-| `verify` | verify on the real surface, with the repo's verification skill if it has one, and record the command and output |
-| `review` | get an independent review against the ticket from a model of a different family, fix confirmed findings, at most 2 rounds |
-| `commit` | commit only the needed files, with a message in the repo's style that references `{{id}}` |
-
-A ticket's type is its first label of the form `type:<name>` (case-insensitive, in the ticket's label order) for which tender ships `prompts/types/<name>/`: `bug` (the plan step reproduces the bug with a test that fails for the reported reason, fixes the root cause and keeps the test as a regression test) and `docs` (the plan step changes docs only and checks them against the code; the test step adds no tests, runs `{{tests}}` and checks every changed command, snippet and link, running only read-only ones). Each type file replaces tender's step of the same name and never chooses the agent or the merge decision. A GitHub issue type adds the label `type:<name>` (lowercased) unless the ticket already has it, and that label counts everywhere labels are read: a `byLabel` entry `type:bug` also matches issue type Bug, its `agent` included. A Linear label group `Type` gives `Type:<name>` as is.
-
-A step is the label's text if the first matching `byLabel` entry sets it, else the repo's `prompt.steps`, else tender's type step if the ticket has a type that ships one, else tender's; a step that is empty or only whitespace is dropped, heading and all. A label's `append` replaces the repo's. Only the first `byLabel` entry whose label the ticket has applies (labels match case-insensitively, entries in file order, except that integer-like labels such as `"123"` come first); entries never stack. `{ file: <name>.md }` reads `.tender/prompts/<name>.md`; a bare `bug.md` is rejected as ambiguous. The repo's steps and append are capped at 32 KiB, and each label merged over them likewise. A ticket body over 24,000 characters is cut, with a note to read the full ticket at its URL; a prompt over 120 KiB stops the start before the ticket's clone, session or claim (the repo's base clone and fetch, needed to read `.tender/`, come first).
+A session's prompt is tender's `prompts/header.md` (the ticket and the rules that always hold), then the type's instruction file, then tender's `prompts/protocol.md` (push, merge file, `gh pr create`, and the phases, findings, question, feedback and merge files). The header and protocol are fixed, so every prompt keeps tender's required guidance; that is not an enforcement boundary, see [Auto-merge](auto-merge.md). A ticket body over 24,000 characters is cut, with a note to read the full ticket at its URL; a prompt over 120 KiB stops the start before the ticket's clone, session or claim (the repo's base clone and fetch, needed to read `.tender/`, come first).
 
 ### Prompt placeholders
 
-`{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{testCmd}} {{tests}} {{repo}}`, in tender's prompt files and the repo's steps and append alike. The whole prompt is rendered once, so placeholders in ticket text stay literal. `{{tests}}` is `` `<testCmd>` ``, or "the project's tests (…)" when `testCmd` is unset; `{{testCmd}}` is then empty.
+`{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{verify}} {{repo}}`, in tender's prompt files and instruction files alike. The whole prompt is rendered once, so placeholders in ticket text stay literal. `{{verify}}` names the repo's [verify contract](#verify-contract) checks ("the commands in `.tender/verify.yaml` (checks `test`, `e2e`)"), never their commands, which could outgrow the prompt cap; it is "the project's checks (…)" when the repo has none.
 
 ## Environment
 
@@ -282,12 +285,12 @@ bun tender.ts <command> [--config tender.json]
   intake [owner/repo:rule | rule] [--dry-run]
   prs [--dry-run]
   stats [--days 90] [--json]
-  check [path]
+  check [path] [--config tender.json]
 ```
 
 | flag | | |
 |---|---|---|
-| `--config` | every command but `check`, path | host config, default `./tender.json` |
+| `--config` | every command, path | host config, default `./tender.json`; `check` reads it only when given, for the repo's profile |
 | `--dry-run` | `run`, `once`, `intake`, `prs` | log what would happen; files, comments and writes nothing to trackers or `tender.db` |
 | `--json` | `status`, `stats` | machine-readable output |
 | `--interval` | `watch`, seconds ≥ 1 | refresh interval, default `2` |

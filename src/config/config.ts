@@ -1,7 +1,8 @@
 import { lstatSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import type { Config, Repo, Source } from "../types";
+import type { Config, Profile, Repo, Source } from "../types";
+import { defaultProfile, loadProfile } from "./profile";
 import { MODEL } from "../session/agents";
 import { TRACKERS } from "../trackers";
 import { validBranch } from "../util";
@@ -14,10 +15,18 @@ const REPO = /^[A-Za-z0-9_][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+$/;
 export const validRepo = (s: unknown) => typeof s === "string" && REPO.test(s) && !s.includes("..") && !s.endsWith("/.") && !/\.git$/i.test(s);
 /** Canonical allowlist key for an untrusted repo string, or undefined. */
 export const allowedRepo = (cfg: Config, raw: unknown) => (validRepo(raw) ? Object.keys(cfg.repos).find((k) => k.toLowerCase() === (raw as string).toLowerCase()) : undefined);
-const LANE_KEYS = ["repo", "repoPath", "baseBranch", "agent", "sandbox", "maxConcurrent", "testCmd", "prompt"];
-const MOVED_KEYS = ["agent", "testCmd", "planStep", "prompt", "testPaths"];
-const TOP_KEYS = ["host", "defaultHost", "pollIntervalMs", "workspaceRoot", "reposRoot", "tmuxSession", "maxConcurrent", "maxInReview", "stallMinutes", "lanes", "defaults", "repos", "sources", "intake", "judge", "prs"];
-const REPO_KEYS = ["path", "baseBranch", "sandbox", "maxConcurrent", "maxInReview", "autoMerge", "criticalPaths", "feedbackAuthors", "stallMinutes", "feedback", ...MOVED_KEYS];
+
+const originRepo = (dir: string) => {
+  try {
+    return /[:/]([^/:]+\/[^/]+?)(?:\.git)?\/?$/.exec(Bun.spawnSync(["git", "-C", dir, "remote", "get-url", "origin"], { stderr: "ignore" }).stdout.toString().trim())?.[1];
+  } catch {}
+};
+/** The profile a check of the clone at `dir` validates against: its repo entry's, found by `origin`, else the top-level one. */
+export const checkProfile = (cfg: Config, dir: string) => ((key) => (key ? cfg.repos[key]!.profile : cfg.profile))(allowedRepo(cfg, originRepo(dir)));
+const LANE_KEYS = ["repo", "repoPath", "baseBranch", "agent", "sandbox", "maxConcurrent"];
+const MOVED_KEYS = ["agent", "testPaths"];
+const TOP_KEYS = ["host", "defaultHost", "pollIntervalMs", "workspaceRoot", "reposRoot", "tmuxSession", "maxConcurrent", "maxInReview", "stallMinutes", "profile", "lanes", "defaults", "repos", "sources", "intake", "judge", "prs"];
+const REPO_KEYS = ["path", "baseBranch", "sandbox", "maxConcurrent", "maxInReview", "autoMerge", "criticalPaths", "feedbackAuthors", "stallMinutes", "feedback", "profile", ...MOVED_KEYS];
 export const AUTO_MERGE = ["off", "shadow", "intelligent", "all"] as const;
 export const validGlob = (v: unknown): v is string => typeof v === "string" && v.trim() === v && /[^/]/.test(v) && !/^!|[{}\\]|\/\/|(^|\/)\.\.?(\/|$)/.test(v);
 export const GLOB_RULES = 'no surrounding spaces, "!", "{}", "\\", "." or ".." segments, or "//"';
@@ -52,6 +61,18 @@ export function parseConfig(raw: any, base: string): Config {
   for (const k of ["workspaceRoot", "reposRoot"]) check(raw[k] === undefined || str(raw[k]), `${k}: non-empty string`);
   const reposRoot = expand(str(raw.reposRoot) ? raw.reposRoot : "~/agent-repos", base);
   const workspaceRoot = expand(str(raw.workspaceRoot) ? raw.workspaceRoot : "~/agent-ws", base);
+  const profiles = new Map<string, Profile>();
+  const profile = (p: unknown, at: string): Profile | undefined => {
+    if (p === undefined) return defaultProfile();
+    if (!str(p)) return void check(false, `${at}: non-empty string, a profile directory`);
+    const dir = expand(p as string, base);
+    try {
+      return profiles.get(dir) ?? profiles.set(dir, loadProfile(dir)).get(dir);
+    } catch (e) {
+      check(false, `${at}: ${(e as Error).message}`);
+    }
+  };
+  const top = profile(raw.profile, "profile");
   check(raw.lanes === undefined, "lanes: replaced by sources + repos + defaults");
   const defaults = raw.defaults ?? {};
   check(obj(defaults) && defaults.path === undefined, "defaults: object without path");
@@ -74,6 +95,7 @@ export function parseConfig(raw: any, base: string): Config {
     for (const k of MOVED_KEYS) check(o[k] === undefined, `${at}.${k}: moved to .tender/config.yaml in the repo`);
     for (const k of Object.keys(o)) check(REPO_KEYS.includes(k), `${at}.${k}: unknown key`);
     for (const k of ["path", "baseBranch"]) check(v[k] === undefined || str(v[k]), `${at}.${k}: non-empty string`);
+    const own = v.profile === undefined ? top : profile(v.profile, `${at}.profile`);
     const r: Repo = {
       key,
       path: str(v.path) ? expand(v.path, base) : join(reposRoot, key),
@@ -86,6 +108,7 @@ export function parseConfig(raw: any, base: string): Config {
       feedbackAuthors: v.feedbackAuthors === undefined ? [] : v.feedbackAuthors,
       stallMinutes: v.stallMinutes ?? stallMinutes,
       feedbackRounds: v.feedback === undefined ? 3 : v.feedback?.maxRounds,
+      profile: own!,
     };
     check(r.baseBranch === undefined || validBranch(r.baseBranch), `${at}.baseBranch: invalid`);
     check(["nono", "none"].includes(r.sandbox), `${at}.sandbox: "nono" | "none" (here or in defaults)`);
@@ -149,7 +172,7 @@ export function parseConfig(raw: any, base: string): Config {
   const digest = /^([^#]+)#([1-9]\d{0,9})$/.exec(typeof prs.digestIssue === "string" ? prs.digestIssue : "");
   check(prs.digestIssue === undefined || (digest && keys.includes(digest[1]!)), `prs.digestIssue: "owner/name#<issue number>" for a repo in repos`);
   if (errs.length) throw new Error(`invalid config:\n  ${errs.join("\n  ")}`);
-  return { host: raw.host, defaultHost, pollIntervalMs, workspaceRoot, reposRoot, tmuxSession, maxConcurrent, maxInReview: raw.maxInReview, stallMinutes, repos, sources, ...(obj(intake) && { intake: { enabled: intake.enabled, host: intake.host } }), ...(judge && { judge }), prs: { staleDays: prs.staleDays, ...(prs.digestIssue && { digestIssue: prs.digestIssue }) } };
+  return { host: raw.host, defaultHost, pollIntervalMs, workspaceRoot, reposRoot, tmuxSession, maxConcurrent, maxInReview: raw.maxInReview, stallMinutes, profile: top!, repos, sources, ...(obj(intake) && { intake: { enabled: intake.enabled, host: intake.host } }), ...(judge && { judge }), prs: { staleDays: prs.staleDays, ...(prs.digestIssue && { digestIssue: prs.digestIssue }) } };
 }
 
 export const repoDir = (cfg: Config, key: string) => join(cfg.workspaceRoot, key);

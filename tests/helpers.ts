@@ -176,6 +176,7 @@ export const statusRow = (over: Partial<Row> = {}): Row => ({
   id: "PER-1",
   repo: "acme/web",
   agent: "claude",
+  type: null,
   session: "running",
   state: "working",
   stateSince: null,

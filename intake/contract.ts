@@ -3,7 +3,7 @@
 // Copy to .tender/intake/contract.ts (executable) and add a rule with `labels: [contract]`; see docs/intake.md.
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 type Item = { key: string; title: string; body: string; facts: Record<string, string> };
 
@@ -23,11 +23,14 @@ export const globRe = (glob: string) => {
 export const globKey = (field: string, glob: string) => `contract:${field}:${glob.replace(/[^A-Za-z0-9./-]/g, "-").slice(0, 60)}-${createHash("sha256").update(glob).digest("hex").slice(0, 8)}`;
 
 // undefined when tender's parser is not beside this script: under tender, the rule ran only because the config parsed.
-async function configError(dir: string, parser: string) {
+// TENDER_CONFIG (a tender.json) selects the repo's profile, as `tender check --config` does.
+async function configError(dir: string, parser: string, host = process.env.TENDER_CONFIG) {
   if (!existsSync(parser)) return undefined;
   const { dirEntries, parseRepoConfig } = await import(parser);
+  const { checkProfile, parseConfig } = await import(join(dirname(parser), "config.ts"));
+  const profile = host ? checkProfile(parseConfig(JSON.parse(readFileSync(host, "utf8")), dirname(resolve(host))), dir) : undefined;
   try {
-    parseRepoConfig(dirEntries(dir));
+    parseRepoConfig(dirEntries(dir), profile);
     return "";
   } catch (e) {
     return (e as Error).message;
@@ -67,7 +70,8 @@ export async function main(argv: string[], dir = process.cwd(), parser = PARSER)
   if (argv.length && !KEY.test(recheck ?? "")) throw new Error("usage: contract.ts [--recheck contract:<check>:<subject>]");
   if (recheck === CONFIG_KEY && !existsSync(parser)) throw new Error(`--recheck ${CONFIG_KEY}: tender's parser is not at ${parser}`);
   const err = await configError(dir, parser);
-  const config = err ? [{ key: CONFIG_KEY, title: "tender contract: .tender/ fails tender check", body: `\`bun <tender>/tender.ts check .\` reports:\n\n\`\`\`\n${err}\n\`\`\`\n\nUntil it passes on the base branch, tender starts no tickets in this repo.`, facts: { check: "config" } }] : [];
+  const cmd = `bun <tender>/tender.ts check .${process.env.TENDER_CONFIG ? " --config <tender.json>" : ""}`;
+  const config = err ? [{ key: CONFIG_KEY, title: "tender contract: .tender/ fails tender check", body: `\`${cmd}\` reports:\n\n\`\`\`\n${err}\n\`\`\`\n\nUntil it passes on the base branch, tender starts no tickets in this repo.`, facts: { check: "config" } }] : [];
   let globs = new Map<string, [string, string]>();
   if (recheck !== CONFIG_KEY) {
     try {

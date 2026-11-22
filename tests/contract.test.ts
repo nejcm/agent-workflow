@@ -116,3 +116,31 @@ test("errors exit non-zero with nothing on stdout", async () => {
     expect(r.stdout.toString()).toBe("");
   }
 });
+
+test("with TENDER_CONFIG, the config check and its recheck use the repo's profile from that tender.json", async () => {
+  const profile = join(dir, "..", `${dir.split("/").at(-1)}-profile`);
+  mkdirSync(join(profile, "instructions"), { recursive: true });
+  writeFileSync(join(profile, "instructions/ui.md"), "UI");
+  writeFileSync(join(profile, "instructions/default.md"), "D");
+  writeFileSync(join(profile, "types.yaml"), "types:\n  - { name: default, instructions: instructions/default.md }\n");
+  const host = join(profile, "tender.json");
+  writeFileSync(host, JSON.stringify({ host: "h", defaults: { sandbox: "nono" }, repos: [{ name: "acme/web", path: join(profile, "web"), profile }], sources: [{ name: "gh", tracker: "github" }] }));
+  Bun.spawnSync(["git", "-C", dir, "remote", "add", "origin", "https://github.com/acme/web.git"]);
+  config("types:\n  - { name: ui, match: { labels: [ui] }, instructions: instructions/ui.md }\n");
+  const prev = process.env.TENDER_CONFIG;
+  try {
+    delete process.env.TENDER_CONFIG;
+    expect((await collect()).map((f) => f.key)).toEqual(["contract:config:check"]);
+    process.env.TENDER_CONFIG = host;
+    expect(await collect()).toEqual([]);
+    expect(await recheck("contract:config:check")).toBe("gone");
+    rmSync(join(profile, "instructions/ui.md"));
+    const [found] = await collect();
+    expect(found!.body).toStartWith("`bun <tender>/tender.ts check . --config <tender.json>` reports:");
+    expect(await recheck("contract:config:check")).toBe("still");
+  } finally {
+    if (prev === undefined) delete process.env.TENDER_CONFIG;
+    else process.env.TENDER_CONFIG = prev;
+    rmSync(profile, { recursive: true, force: true });
+  }
+});

@@ -88,7 +88,7 @@ export function ticketTree(r: Row): TreeCard {
   return {
     id,
     name: clean(r.id, 40),
-    subtitle: `${r.agent} · ticket`,
+    subtitle: `${r.agent} · ${r.type?.name ?? "ticket"}`,
     status: label(r),
     activity: clean(r.waitingFor ?? items.find((p) => p.status === "in-progress")?.title ?? (r.phases ? "No phase in progress" : "No phases reported"), 120),
     progress: r.phases,
@@ -146,6 +146,7 @@ export function treeScreen(m: Model, width: number, height: number, P: Palette, 
       [s(P, "dim", node.progress ? `${selected ? "Completion" : "Phases"} ${node.progress.done} / ${node.progress.total}` : "Progress unavailable")],
       [s(P, "dim", `Session runtime ${dur(r.runtimeMs)}   Idle ${dur(r.idleMs)}`)],
       [s(P, "dim", `Session ${label(r)} · ${r.agent}`)],
+      ...(selected === 0 && r.type ? wrap(`Type ${r.type.name} · ${r.type.instructions}`, bw - 4).map((t) => [s(P, "dim", t)]) : []),
     ];
     const keys = [...(r.window ? ["[a Attach]"] : []), ...(r.pr ? ["[o Open PR]"] : [])];
     const actions: Line = [...(keys.length ? [s(P, "blue", `${keys.join(" ")} `, { b: true })] : []), s(P, "fg", "[Enter Close]", { b: true })];

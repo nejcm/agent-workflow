@@ -1,6 +1,6 @@
 ---
 name: tender-setup
-description: Set up a repo for tender. Finds its test command, writes .tender/config.yaml, validates it with tender check, and prints the tender.json repos entry. Use when the user asks to set up, onboard or configure a repo for tender.
+description: Set up a repo for tender. Finds its test command, writes .tender/config.yaml and .tender/verify.yaml, validates it with tender check, and prints the tender.json repos entry. Use when the user asks to set up, onboard or configure a repo for tender.
 ---
 
 # tender setup
@@ -19,22 +19,21 @@ Check, in order:
 - `go.mod`: `go test ./...`.
 - `Cargo.toml`: `cargo test`.
 
-Show the command to the user and confirm it. Chain several with `&&`. If nothing fits, leave `testCmd` unset, and the agent will be told to find and run the project's tests.
+Show the command to the user and confirm it. Each command becomes a check in `.tender/verify.yaml` (step 3). If nothing fits, write no `verify.yaml`: the agent will be told to find and run the project's checks, and medium and large changes never auto-merge.
 
 ## 2. Ask the user
 
 - **Agent:** `claude` (the default) or `codex`, optionally with a model and effort: `agent: { name: claude, model: sonnet, effort: high }`. Quote a model with brackets: `model: "opus[1m]"`. Effort is `low`, `medium`, `high`, `xhigh` or `max` for Claude, `minimal`, `low`, `medium`, `high` or `xhigh` for Codex.
 - **Linear project:** the name of the project whose tickets should come to this repo, if any, and optionally its team key (for example `ENG`). Skip this for GitHub issues, which go to their own repo.
 - **Auto-merge:** suggest `shadow`, which posts what it would merge and never merges, or `off`. Use `intelligent` or `all` only if the user asks for it. The host's `autoMerge` for this repo in `tender.json` (default `off`) is a ceiling, and the lower of the two applies (`off < shadow < intelligent < all`).
-- **Custom prompt steps:** only if the user wants them. Without them, tender uses its own steps in `<tender>/prompts/steps/`.
+- **Task types:** only if the user wants them. Without them, tender uses the host profile's types (tender ships `bug`, `docs` and `default` in `<tender>/profile/`).
 
-## 3. Write `.tender/config.yaml`
+## 3. Write `.tender/config.yaml` and `.tender/verify.yaml`
 
 Write only the keys that differ from the defaults. An unknown key fails the check.
 
 ```yaml
 agent: claude
-testCmd: bun test && bun run typecheck
 autoMerge: shadow
 tracker:
   linear:
@@ -42,33 +41,40 @@ tracker:
     team: ENG          # optional; a team key, [A-Z0-9]+
 ```
 
+`.tender/verify.yaml` holds the test command from step 1, one check per command; `docs/config.md` documents it under "Verify contract":
+
+```yaml
+checks:
+  - name: test
+    run: bun test
+  - name: typecheck
+    run: bun run typecheck
+```
+
 Add these keys only if the user asks for them:
 
-- `prompt.steps.plan`: the plan step of the prompt (default: read the relevant code, then plan and implement the ticket with the smallest complete change). If it names a skill, the session's agent must have it: committed in the repo (`.claude/skills/` for Claude, `.agents/skills/` for Codex) or installed for the user.
 - `criticalPaths`: globs added to the built-in critical paths and the host's `criticalPaths`. A critical path is never auto-merged, in any mode.
 - `testPaths`: globs added to the built-in test paths. Under `intelligent`, a PR that deletes, renames or removes lines from an existing test file is not merged.
 - `trust`: a list of `{ paths: [glob, …], autoMerge: <mode> }`. The first rule that matches a file decides its mode, and the host ceiling still caps it.
 - `escapeHatches`: up to 20 regexes of at most 200 characters each, for added lines that block a merge.
 - `intake`: rules that file tickets from errors, database advisors and the like. Leave them out here; once the repo is set up, the `tender-maintain` skill suggests the ones it qualifies for.
 
-tender's prompt header and closing protocol are fixed; a repo replaces only steps. Under `prompt.steps`, set any of `clarify`, `plan`, `test`, `verify`, `review`, `commit` to text, to `""` to drop it, or to `{ file: <name>.md }` for `.tender/prompts/<name>.md` (named `[a-z0-9-]+.md`); tender's defaults are in `<tender>/prompts/steps/`, with per-type replacements for `type:bug` and `type:docs` tickets in `<tender>/prompts/types/`. `prompt.append` adds text after the steps. To change steps by ticket label, add a `byLabel` entry; the first matching label wins. Use block style, since a comma ends plain text inside `{ … }`:
+tender's prompt header and closing protocol are fixed; the type's instruction file goes between them. Under `types`, a repo adds a type or replaces the profile's type of the same name; `instructions` names a `.md` file in the host's profile, never one in the repo, and the type's `agent` replaces the repo's whole `agent`, model and effort included. If an instruction file names a skill, the session's agent must have it: committed in the repo (`.claude/skills/` for Claude, `.agents/skills/` for Codex) or installed for the user. Use block style, since a comma ends plain text inside `{ … }`:
 
 ```yaml
-byLabel:
-  "type:bug":
-    prompt:
-      steps:
-        plan: Reproduce with a failing test first, then fix.
+types:
+  - name: bug
+    match:
+      labels: ["type:bug"]
+    instructions: instructions/bug.md
     agent: { name: codex, effort: xhigh }
 ```
 
-A label's `agent` replaces the repo's whole `agent`, model and effort included.
-
- Never create `.tender/prompts/default.md`: the check rejects it. The placeholders are `{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{testCmd}} {{tests}} {{repo}}`.
+The placeholders are `{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{verify}} {{repo}}`.
 
 ## 4. Validate
 
-Run `bun <tender>/tender.ts check .` from the root of the repo being set up. tender installs no `tender` command.
+Run `bun <tender>/tender.ts check .` from the root of the repo being set up; add `--config <tender.json>` when its `types` name files in a profile other than tender's own. tender installs no `tender` command.
 
 The check prints the settings with defaults filled in, or lists every problem and exits non-zero. Fix the problems and run it again until it passes. The check does not apply the host ceiling or the host's `criticalPaths`.
 

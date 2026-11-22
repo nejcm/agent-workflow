@@ -23,6 +23,7 @@ Host and repo configuration.
 
 - `src/config/config.ts`: `tender.json` parsing and the repo allowlist.
 - `src/config/repo-config.ts`: a repo's `.tender/` read from its base branch, validated, cached per commit and combined with the host settings.
+- `src/config/profile.ts`: a profile's `types.yaml` and instruction paths, validated and confined to the profile, the repo-over-profile type merge and a ticket's type.
 
 ## `src/trackers/`
 
@@ -64,7 +65,8 @@ What a session leaves in `.tender/run/` and the merge decision.
 ## Other
 
 - `intake/`: example intake scripts that repos copy into `.tender/intake/`.
-- `prompts/`: the ticket prompt: the fixed `header.md` and `protocol.md`, the default `steps/*.md` a repo's `prompt.steps` can replace, and `types/<type>/*.md`, which replace those steps for a ticket labelled `type:<type>`.
+- `prompts/`: the fixed `header.md` and `protocol.md` around every ticket prompt.
+- `profile/`: the default profile: `types.yaml` and the instruction file each task type puts between the header and protocol.
 - `nono/`: sandbox profiles for Claude and Codex sessions, intake scripts, the intake judge and checks.
 - `systemd/`: user units for `tender run`, the intake timer and the weekly PR sweep timer, installed by `scripts/run.sh`.
 - `.agents/skills/tender-setup/SKILL.md`: the setup skill for a repo's `.tender/`; `.agents/skills/tender-maintain/SKILL.md` proposes repairs and intake rules. `.claude/skills/` symlinks to them for Claude Code.

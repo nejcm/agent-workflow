@@ -22,20 +22,28 @@ export interface Repo {
   stallMinutes: number;
   /** PR feedback rounds before the ticket is parked; the repo's `feedback.maxRounds` overrides it. */
   feedbackRounds: number;
+  profile: Profile;
 }
 
-export type PromptText = string | { file: string };
-export interface PromptSet {
-  steps: Record<string, PromptText>;
-  append?: PromptText;
+/** `instructions` is the resolved file inside the profile; only `default` has no `match`. */
+export interface TaskType {
+  name: string;
+  match?: { labels: string[] };
+  instructions: string;
+  agent?: AgentConfig;
+  output: "pr";
+}
+/** A profile's types end with `default`. */
+export interface Profile {
+  dir: string;
+  types: TaskType[];
 }
 
-/** A repo's `.tender/` at one base commit: `files` maps each `prompts/` file name to its text. */
+/** A repo's `.tender/` at one base commit. */
 export interface RepoConfig {
   agent: AgentName;
   model?: string;
   effort?: string;
-  testCmd?: string;
   autoMerge?: AutoMerge;
   criticalPaths: string[];
   testPaths: string[];
@@ -43,16 +51,14 @@ export interface RepoConfig {
   trust: { paths: string[]; autoMerge: AutoMerge }[];
   /** Regexes for added lines that hold a merge back, on top of the built-in ones. */
   escapeHatches: string[];
-  prompt: PromptSet;
-  /** The first entry whose label the ticket has replaces `prompt`'s steps and append it sets. */
-  byLabel: Record<string, { prompt?: PromptSet; agent?: AgentConfig }>;
+  /** The profile's types with the repo's `types` over them by name; the first that matches a ticket is its type. */
+  types: TaskType[];
   /** The Linear project whose tickets go to this repo; `team` is only checked against the ticket's source. */
   tracker?: { linear?: { project: string; team?: string } };
   intake: IntakeRule[];
   feedbackRounds?: number;
   /** `.tender/verify.yaml`; unset when the repo has none. */
   verify?: VerifyContract;
-  files: Record<string, string>;
 }
 
 export interface VerifyCheck {
@@ -134,6 +140,8 @@ export interface Config {
   maxConcurrent: number;
   maxInReview?: number;
   stallMinutes: number;
+  /** The top-level `profile`, or tender's `profile/`. */
+  profile: Profile;
   repos: Record<string, Repo>;
   sources: Source[];
   /** Rules as `owner/name:rule`; only `host` runs them. */

@@ -1,10 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { repoDir } from "../config/config";
 import { nonoRun, scopePrefix } from "../session/launcher";
 import type { Config, Io, Session, VerifyCheck, VerifyContract } from "../types";
-import { budget, collectProof, type Pending } from "./proof";
+import { budget, collectProof, postProof } from "./proof";
 import { GIT, Kept, put, read, SAFE_ID, SLOW_SECS, strip, subdirs, write } from "../util";
 
 /** `<ID>.verified`: the last verify result tender recorded, for one PR head and contract digest. */
@@ -55,14 +55,6 @@ export async function reconcileVerify(cfg: Config, io: Io) {
       const lost = job && !verifiedAt(readVerified(dir, id), job.head, job) ? { head: job.head, digest: job.digest, pass: false as const, check: "(verifier)", tail: "the run ended without a result: killed, out of memory or past its deadline" } : undefined;
       const res = readFile(join(dir, d, "result")) ?? lost;
       if (res) put(io, join(dir, `${id}.verified`), JSON.stringify(res));
-      // The newest pass's staging replaces an older one still waiting to be posted.
-      if (res?.pass && existsSync(join(dir, d, "proof", "pending.json")) && !io.dry)
-        try {
-          rmSync(join(dir, `${id}.proof`), { recursive: true, force: true });
-          renameSync(join(dir, d, "proof"), join(dir, `${id}.proof`));
-        } catch (e) {
-          io.log(`verify ${r.key}/${id}: proof not staged: ${(e as Error).message}`);
-        }
       io.log(`verify ${r.key}/${id}: ${res ? `${res.pass ? "passed" : `${res.check} failed`} at ${res.head.slice(0, 12)}` : "ended without a result or a job, so it runs again"}`);
       // A check can leave read-only dirs, which rm cannot empty; chmod -R skips symlinks.
       await write(io, ["chmod", "-R", "u+rwX", "--", join(dir, d)], undefined, SLOW_SECS).catch(() => {});
@@ -137,11 +129,12 @@ export async function runVerify(vdir: string, io: Io) {
       // Outside the sandbox, right after its own check, before a later one can change the files.
       collectProof(clone, proof, c, b, io.log);
     }
-    if (job.pr) put(io, join(proof, "pending.json"), JSON.stringify({ pr: job.pr, head: job.head, checks: job.checks.map((c) => c.name), files: b.files, skipped: b.skipped } satisfies Pending));
     finish({ pass: true });
   } catch (e) {
-    finish({ pass: false, check: "(setup)", tail: lastLines((e as Error).message) });
+    return finish({ pass: false, check: "(setup)", tail: lastLines((e as Error).message) });
   }
+  // Here rather than in the poll, so a slow upload never holds it; tender's own gh login, never the sandbox's.
+  if (job.pr) await postProof(io, job.pr, job.head, job.checks.map((c) => c.name), proof, b);
 }
 
 if (import.meta.main) {

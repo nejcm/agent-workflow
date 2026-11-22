@@ -8,7 +8,6 @@ import { baseBranch, canonical, findPr, sameRepo } from "./github";
 import { authStamp, claim, cloned, CODEX_AUTH, codexIdentity, codexLogin, codexRecorded, handedOff, nonoRun, refreshCodexCopy, scopeUnit, start, stopSession, sweepScopes, windows, winName } from "./session/launcher";
 import { autoMerge, checkState, policyBlocked, PR_FIELDS, prMode, prReady, viewPr } from "./review/merge";
 import { syncPhases } from "./review/phases";
-import { deliverProof } from "./review/proof";
 import { readVerified, reconcileVerify, startVerify, stopVerify, verifiedAt } from "./review/verify";
 import { agentPane, deliverAnswer, liveStates, syncQuestion } from "./session/question";
 import { atTip, combine, loadSession, parseRepoConfig } from "./config/repo-config";
@@ -495,7 +494,6 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
   // Before cleanup, so a done ticket's finished run is recorded before its files go; one start per pass at most.
   const verifier: { busy?: boolean } = {};
   await step(io, "verify", async () => void (verifier.busy = await reconcileVerify(cfg, io)));
-  await step(io, "proof", () => deliverProof(cfg, io));
 
   const lists = new Map<string, Promise<Ticket[]>>();
   const listReady = (x: { s: Source; io: Io; tr: Tracker }) => lists.get(x.s.name) ?? lists.set(x.s.name, x.tr.listReady().then((ts) => ts.filter((t) => !assignedElsewhere(x.io, t)))).get(x.s.name)!;
@@ -530,8 +528,6 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
           await stopVerify(cfg, x.io, join(dir, `${id}.verify`));
           throw new Kept(`${r.key}/${id}: waiting for its verify run to stop`);
         }
-        // Posted, or dropped after its last try, by this poll's proof step or a later one.
-        if (existsSync(join(dir, `${id}.proof`))) throw new Kept(`${r.key}/${id}: waiting for its verify comment to be posted`);
         if (end === "canceled") {
           if (existsSync(join(dir, `${id}.ended`))) return;
           put(x.io, join(dir, `${id}.ended`), new Date().toISOString());

@@ -291,16 +291,6 @@ export function combine(r: Repo, base: string, c: RepoConfig): Session {
   return { ...host, ...c, feedbackRounds: c.feedbackRounds ?? r.feedbackRounds, baseBranch: base, ceiling: r.autoMerge, criticalPaths: [...r.criticalPaths, ...c.criticalPaths], autoMerge: c.autoMerge !== undefined && rank(c.autoMerge) < rank(r.autoMerge) ? c.autoMerge : r.autoMerge };
 }
 
-/** Whether the PR's base commit has the verify contract `s` was read with; false while it is not fetched or its `.tender/` is invalid. */
-export async function sameContract(io: Io, s: Session, base: string | undefined) {
-  if (!base || base === s.baseSha) return true;
-  try {
-    return parseRepoConfig(await gitEntries(io, s.path, base)).verify?.digest === s.verify?.digest;
-  } catch {
-    return false;
-  }
-}
-
 /** Fetches `origin/<base>` into the clone, then the settings there; undefined if the repo's config is invalid, logged once per commit. */
 export async function loadSession(io: Io, r: Repo, secs?: number): Promise<Session | undefined> {
   const base = await baseBranch(io, r);

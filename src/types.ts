@@ -92,8 +92,7 @@ export interface IntakeRule {
   judge?: { minWorth: number; minFixable: number };
 }
 
-/** Host and repo settings combined for one start or merge decision. */
-/** `baseSha`: the origin/<base> commit `.tender/` was read at. */
+/** Host and repo settings combined for one start or merge decision; `baseSha` is the origin/<base> commit `.tender/` was read at. */
 export type Session = Omit<Repo, "baseBranch"> & Omit<RepoConfig, "autoMerge"> & { baseBranch: string; ceiling: AutoMerge; baseSha?: string };
 
 export type AutoMerge = "off" | "shadow" | "intelligent" | "all";

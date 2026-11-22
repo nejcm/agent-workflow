@@ -21,7 +21,7 @@ export interface FeedbackCursor {
   ciShas?: string[];
   dirtyShas?: string[];
   rounds: number;
-  /** Failed verify runs delivered, counted apart from `rounds`, and their heads (newest last, at most 10); `endedSha`: the head whose failure was escalated with the window gone. */
+  /** Failed verify runs delivered, counted apart from `rounds`, and every head delivered, so each fails once; `endedSha`: the head whose failure was escalated with the window gone. */
   verifyRounds?: number;
   verifyShas?: string[];
   endedSha?: string;
@@ -107,7 +107,7 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
   const dirty = pr.mergeStateStatus === "DIRTY" && !cur.dirtyShas?.includes(pr.headRefOid);
   // Once per head, as CI failures: a revised contract failing the same head is not another round.
   const vfail = current && !cur.verifyShas?.includes(current.head) ? current : undefined;
-  const verifyShas = vfail ? [...(cur.verifyShas ?? []), vfail.head].slice(-10) : cur.verifyShas;
+  const verifyShas = vfail ? [...(cur.verifyShas ?? []), vfail.head] : cur.verifyShas;
   const fb = items.length > 0 || failed.length > 0 || dirty;
   if (!fb && !vfail) return true;
   if (!win) {

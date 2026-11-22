@@ -21,23 +21,21 @@ const TAIL = 'set -o pipefail; "$@" 2>&1 | tail -c 65536';
 /** One transient user service per workspace, so a second start fails rather than running two at once. */
 export const verifyUnit = (cfg: Config) => `${scopePrefix(cfg)}-verify.service`;
 
-const parse = (text: string): Verified | undefined => {
-  const v = JSON.parse(text);
-  return v && typeof v.head === "string" && typeof v.digest === "string" && typeof v.pass === "boolean" && (v.pass || (typeof v.check === "string" && typeof v.tail === "string")) ? v : undefined;
-};
+const parse = (v: any): Verified | undefined => (v && typeof v.head === "string" && typeof v.digest === "string" && typeof v.pass === "boolean" && (v.pass || (typeof v.check === "string" && typeof v.tail === "string")) ? v : undefined);
 
-const readFile = (f: string) => {
+const readJson = (f: string) => {
   try {
-    return existsSync(f) ? parse(readFileSync(f, "utf8").slice(0, MAX_FILE)) : undefined;
+    return existsSync(f) ? JSON.parse(readFileSync(f, "utf8").slice(0, MAX_FILE)) : undefined;
   } catch {
     return undefined;
   }
 };
+const readFile = (f: string): Verified | undefined => parse(readJson(f));
 
 export const readVerified = (dir: string, id: string) => readFile(join(dir, `${id}.verified`));
 
 /** The recorded result when it is for this head under this contract, else undefined (never verified, stale head or changed contract). */
-export const verifiedAt = (v: Verified | undefined, head: string | undefined, c: VerifyContract | undefined) => (v && c && v.head === head && v.digest === c.digest ? v : undefined);
+export const verifiedAt = (v: Verified | undefined, head: string | undefined, c: Pick<VerifyContract, "digest"> | undefined) => (v && c && v.head === head && v.digest === c.digest ? v : undefined);
 
 /** Records finished runs and removes every `<ID>.verify` once the verifier is idle; true while it runs, throws if systemd cannot tell. */
 export async function reconcileVerify(cfg: Config, io: Io) {
@@ -50,10 +48,16 @@ export async function reconcileVerify(cfg: Config, io: Io) {
     for (const d of subdirs(dir)) {
       const id = d.endsWith(".verify") ? d.slice(0, -".verify".length) : "";
       if (!SAFE_ID.test(id)) continue;
-      const res = readFile(join(dir, d, "result"));
+      const job: Job | undefined = readJson(join(dir, d, "job.json"));
+      // Killed, out of memory or past its deadline: a rerun would likely end the same way and hold the one slot again.
+      const lost = job && !verifiedAt(readVerified(dir, id), job.head, job) ? { head: job.head, digest: job.digest, pass: false as const, check: "(verifier)", tail: "the run ended without a result: killed, out of memory or past its deadline" } : undefined;
+      const res = readFile(join(dir, d, "result")) ?? lost;
       if (res) put(io, join(dir, `${id}.verified`), JSON.stringify(res));
-      io.log(`verify ${r.key}/${id}: ${res ? `${res.pass ? "passed" : `${res.check} failed`} at ${res.head.slice(0, 12)}` : "ended without a result (killed or crashed), so it runs again"}`);
-      await write(io, ["rm", "-rf", "--one-file-system", "--", join(dir, d)], undefined, SLOW_SECS);
+      io.log(`verify ${r.key}/${id}: ${res ? `${res.pass ? "passed" : `${res.check} failed`} at ${res.head.slice(0, 12)}` : "ended without a result or a job, so it runs again"}`);
+      // A check can leave read-only dirs, which rm cannot empty; chmod -R skips symlinks.
+      await write(io, ["chmod", "-R", "u+rwX", "--", join(dir, d)], undefined, SLOW_SECS).catch(() => {});
+      // One stuck dir must not hold the slot for every other ticket; startVerify skips that ticket while it is there.
+      await write(io, ["rm", "-rf", "--one-file-system", "--", join(dir, d)], undefined, SLOW_SECS).catch((e) => io.log(`verify ${r.key}/${id}: ${e.message}`));
     }
   }
   return false;
@@ -69,14 +73,16 @@ export const stopVerify = (cfg: Config, io: Io) =>
 export async function startVerify(cfg: Config, io: Io, r: Session, id: string, pr: any, verifier: { busy?: boolean }, done: () => Promise<boolean>, tenderDir: string) {
   const c = r.verify!;
   const dir = repoDir(cfg, r.key);
-  if (verifier.busy !== false || verifiedAt(readVerified(dir, id), pr.headRefOid, c)) return;
+  const vdir = join(dir, `${id}.verify`);
+  if (verifier.busy !== false || existsSync(vdir) || verifiedAt(readVerified(dir, id), pr.headRefOid, c)) return;
   if (pr.state !== "OPEN" || pr.isCrossRepository || pr.baseRefName !== r.baseBranch || !(await done())) return;
   // Also on `sandbox: none` hosts: the checks are agent-written code.
   if ((await io.run(["nono", "--version"])).code !== 0) throw new Kept("verify: nono is not installed, so no verify contract runs and merges wait");
   await write(io, [...GIT, "-C", r.path, "fetch", "-q", "--no-tags", "origin", `refs/pull/${pr.number}/head`]);
+  // A dry run fetched nothing, so FETCH_HEAD is some earlier fetch's.
+  if (io.dry) return;
   const head = (await read(io, [...GIT, "-C", r.path, "rev-parse", "--verify", "FETCH_HEAD^{commit}"])).trim();
   if (head !== pr.headRefOid) return io.log(`verify ${id}: fetched ${head.slice(0, 12) || "nothing"} for PR #${pr.number}, not the head ${pr.headRefOid.slice(0, 12)} it was judged at; retried next poll`);
-  const vdir = join(dir, `${id}.verify`);
   put(io, join(vdir, "job.json"), JSON.stringify({ base: r.path, head, digest: c.digest, checks: c.checks, tenderDir } satisfies Job));
   verifier.busy = true;
   // A backstop only: each check has its own deadline, and stopping the unit kills everything a check left behind.

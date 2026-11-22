@@ -1,12 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AUTO_MERGE, repoDir } from "../config/config";
-import { sameContract } from "../config/repo-config";
 import { canonical, findPr, sameRepo } from "../github";
 import { hatchInWorker } from "./hatch";
 import { readVerified, type Verified, verifiedAt } from "./verify";
 import type { AutoMerge, Config, Io, Session, Ticket, Tracker } from "../types";
-import { put, read, readRun, remove, write } from "../util";
+import { GIT, put, read, readRun, remove, write } from "../util";
 
 const MAX_MERGE_BYTES = 4 * 1024;
 const MAX_DIFF_BYTES = 2 * 1024 * 1024;
@@ -187,8 +186,6 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
     return void io.event?.("done", r.key, t.id, { pr: pr.url }, pr.url);
   }
   if (parked) return pr;
-  // The final recheck pins this base, so a contract superseded after the fetch never judges the PR.
-  if (!(await sameContract(io, r, pr.baseRefOid))) return io.log(`merge ${t.id}: origin/${r.baseBranch} moved to ${pr.baseRefOid.slice(0, 12)} with another or unreadable verify contract; judged next poll`), pr;
   let a: Assessment | undefined;
   try {
     const raw = readRun(join(dir, t.id), "merge.json", MAX_MERGE_BYTES);
@@ -239,6 +236,9 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
     if (mergeDecision(now, a, r, t.labels, readVerified(dir, t.id)).merge !== true) return;
     // The listing may predate a human parking it; a failed read throws, so no merge.
     if (await tr.parked(t)) return;
+    // The PR's baseRefOid is the base at its last sync, not the live tip; a contract pushed since this pass's fetch is judged next poll.
+    const tip = (await read(io, [...GIT, "-C", r.path, "ls-remote", "origin", `refs/heads/${r.baseBranch}`])).split("\t")[0];
+    if (tip !== r.baseSha) return io.log(`merge ${t.id}: origin/${r.baseBranch} moved to ${tip.slice(0, 12) || "nothing"} since this poll read .tender/; judged next poll`);
     const merge = (...del: string[]) => write(io, ["gh", "pr", "merge", n, "--repo", r.key, "--squash", ...del, "--match-head-commit", pr.headRefOid]);
     // gh refuses -d on a merge-queue branch (cli/cli pkg/cmd/pr/merge canMerge); without it, gh enqueues the PR.
     await merge("--delete-branch").catch((e) => (/^gh pr merge: \S+ Cannot use `-d` or `--delete-branch` when merge queue enabled$/.test(e.message) ? merge() : Promise.reject(e)));

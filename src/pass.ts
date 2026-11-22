@@ -10,7 +10,7 @@ import { autoMerge, checkState, policyBlocked, PR_FIELDS, prMode, prReady, viewP
 import { syncPhases } from "./review/phases";
 import { readVerified, reconcileVerify, startVerify, stopVerify, verifiedAt } from "./review/verify";
 import { agentPane, deliverAnswer, liveStates, syncQuestion } from "./session/question";
-import { combine, loadSession, parseRepoConfig, sameContract } from "./config/repo-config";
+import { combine, loadSession, parseRepoConfig } from "./config/repo-config";
 import { lastSay, transcript } from "./ui/tail";
 import { type Adapter, TRACKERS } from "./trackers";
 import type { ProjectClaim } from "./trackers/linear";
@@ -254,7 +254,9 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
       else
         await step(io, `pr ${t.id}`, async () => {
           const n = /\/pull\/(\d+)$/.exec((await findPr(key, t.id, io, dir)) ?? "")?.[1];
-          if (n && share) pr = share.pr = await viewPr(io, key, n, PR_FIELDS + share.fields);
+          // Parked in Ready to merge too, so a pushed head is judged against its verify result.
+          if (n && (share || w.readyToMerge)) pr = await viewPr(io, key, n, PR_FIELDS + (share?.fields ?? ""));
+          if (share) share.pr = pr;
         });
       if (parked) {
         if (w.readyToMerge && tr.toReadyToMerge) await step(io, `ready ${t.id}`, async () => retryDemote(w, tr, io, dir, await sessionOf(io, sessions, r).catch(() => undefined), pr));
@@ -282,7 +284,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
         return now.has(name) ? Date.now() / 1000 - now.activity.get(name)! >= IDLE_SECS : now.listed;
       };
       if (pr && cur?.verify) await step(io, `verify ${t.id}`, () => startVerify(cfg, io, cur, t.id, pr, verifier, done, tenderDir));
-      const gate = verifyGate(cur && (await sameContract(io, cur, pr?.baseRefOid)) ? cur : undefined, pr?.headRefOid, dir, t.id);
+      const gate = verifyGate(cur, pr?.headRefOid, dir, t.id);
       // Auto-merge reports these as a hold; promoting too would post a second, contradicting verdict.
       const promote = !(merging && policyBlocked(pr));
       if (pr && tr.toReadyToMerge) await step(io, `ready ${t.id}`, () => syncReady(w, tr, io, dir, pr, clear, done, promote, gate));
@@ -326,10 +328,7 @@ async function syncReady(t: Ticket, tr: Tracker, io: Io, dir: string, pr: any, c
       : m?.step === "demote" ? m.why
       : undefined;
     if (!why) return void ((m?.step === "moved" && m.head === at) || writeReady(io, f, { head: at, step: "moved" }));
-    writeReady(io, f, { head: at, step: "demote", why });
-    await tr.toReview(t, `back in review, ${why}: ${pr.url}`);
-    io.event?.("review", t.repo!, t.id, { pr: pr.url, why });
-    return remove(io, f);
+    return demote(t, tr, io, f, at, why, pr.url);
   }
   // Tender's own move back is marked `demote` first, so `moved` here means a human moved it back.
   if (m?.step === "held" && m.head === pr.headRefOid) return;
@@ -343,7 +342,7 @@ async function syncReady(t: Ticket, tr: Tracker, io: Io, dir: string, pr: any, c
 }
 
 type Gate = "pass" | "fail" | "pending" | "unknown";
-// Unknown while .tender/ cannot be read, or its contract is not the PR base's: Ready to merge then neither moves nor moves back.
+// Unknown while .tender/ cannot be read: Ready to merge then neither moves nor moves back.
 function verifyGate(cur: Session | undefined, head: string | undefined, dir: string, id: string): Gate {
   if (!cur) return "unknown";
   if (!cur.verify) return "pass";
@@ -355,13 +354,17 @@ function verifyGate(cur: Session | undefined, head: string | undefined, dir: str
 async function retryDemote(t: Ticket, tr: Tracker, io: Io, dir: string, cur: Session | undefined, pr: any) {
   const f = join(dir, `${t.id}.ready`);
   const m = readReady(f);
-  // Parked with autoMerge off there is no view: the marker's head, else the last run's, stands in for the PR's.
+  // A failed view: the marker's head, else the last run's, stands in for the PR's.
   const head = pr?.headRefOid ?? m?.head ?? readVerified(dir, t.id)?.head;
-  const gate = verifyGate(cur && (await sameContract(io, cur, pr?.baseRefOid)) ? cur : undefined, head, dir, t.id);
+  const gate = verifyGate(cur, head, dir, t.id);
   const why = m?.step === "demote" ? m.why : gate === "fail" ? "verify failed" : gate === "pending" ? "verify pending for this head" : undefined;
   if (!why) return;
-  const url = existsSync(join(dir, `${t.id}.pr`)) ? readFileSync(join(dir, `${t.id}.pr`), "utf8") : "";
-  writeReady(io, f, { head: head ?? "", step: "demote", why });
+  await demote(t, tr, io, f, head ?? "", why, pr?.url ?? (existsSync(join(dir, `${t.id}.pr`)) ? readFileSync(join(dir, `${t.id}.pr`), "utf8") : ""));
+}
+
+// The reason is written first, so a move that fails is retried next poll.
+async function demote(t: Ticket, tr: Tracker, io: Io, f: string, head: string, why: string, url: string) {
+  writeReady(io, f, { head, step: "demote", why });
   await tr.toReview(t, `back in review, ${why}: ${url}`);
   io.event?.("review", t.repo!, t.id, { pr: url, why });
   remove(io, f);

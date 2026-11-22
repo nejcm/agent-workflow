@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type Entry, loadSession, parseRepoConfig, sameContract } from "../src/config/repo-config";
+import { type Entry, loadSession, parseRepoConfig } from "../src/config/repo-config";
 import { mergeDecision, type PrFacts } from "../src/review/merge";
 import { readVerified, reconcileVerify, runVerify, startVerify, verifiedAt, verifyUnit } from "../src/review/verify";
 import { pass } from "../src/pass";
@@ -53,21 +53,6 @@ test("verify.yaml is read from origin/<base> of the base clone, never the worktr
   const second = (await loadSession(io, web(c)))!.verify!;
   const pass = { head: "h", digest: first.digest, pass: true as const };
   expect([verifiedAt(pass, "h", first), verifiedAt(pass, "h", second), verifiedAt(pass, "other", first)]).toEqual([pass, undefined, undefined]);
-});
-
-test("sameContract: the PR's base agrees when it is the loaded commit or has the same contract; unreadable or changed does not", async () => {
-  repoFiles["verify.yaml"] = YAML;
-  const c = config({ repos: [{ name: "acme/web", path: join(root, "src-web") }] });
-  const x = fakeIo();
-  const s = (await loadSession(x.io, web(c)))!;
-  expect(s.baseSha).toBe("a".repeat(40));
-  expect([await sameContract(x.io, s, undefined), await sameContract(x.io, s, s.baseSha), await sameContract(x.io, s, "e".repeat(40))]).toEqual([true, true, true]);
-  repoFiles["verify.yaml"] = YAML.replace("bun test", "bun test --bail");
-  expect(await sameContract(x.io, s, "e".repeat(40))).toBe(false);
-  delete repoFiles["verify.yaml"];
-  expect(await sameContract(x.io, s, "e".repeat(40))).toBe(false);
-  const gone = fakeIo((a) => (a[3] === "ls-tree" ? { code: 128, err: "fatal: not a tree object" } : undefined));
-  expect(await sameContract(gone.io, s, "e".repeat(40))).toBe(false);
 });
 
 test("merge decision: with a contract only a pass at this head and digest merges; without one only small changes do", () => {
@@ -144,6 +129,25 @@ test("reconcile: a running verifier is left alone; an idle one has each result r
   expect(x.logs.some((l) => l.includes("verify acme/web/gh-2: ended without a result"))).toBe(true);
   const down = fakeIo((a) => (a[0] === "systemctl" ? { code: 1, err: "no bus" } : undefined));
   expect(reconcileVerify(c, down.io)).rejects.toThrow("no bus");
+});
+
+test("reconcile: a run that left no result records a (verifier) failure; a dir rm cannot remove is logged and holds only its own ticket", async () => {
+  const c = config();
+  const dir = join(root, "acme/web");
+  mkdirSync(join(dir, "gh-1.verify"), { recursive: true });
+  writeFileSync(join(dir, "gh-1.verify/job.json"), JSON.stringify({ base: "b", head: "h", digest: "d", checks: [], tenderDir: "/t" }));
+  mkdirSync(join(dir, "gh-2.verify"), { recursive: true });
+  const x = fakeIo((a) => (a[0] === "rm" && a.at(-1)!.endsWith("gh-1.verify") ? { code: 1, err: "rm: cannot remove 'ro': Permission denied" } : undefined));
+  expect(await reconcileVerify(c, x.io)).toBe(false);
+  expect(readVerified(dir, "gh-1")).toEqual({ head: "h", digest: "d", pass: false, check: "(verifier)", tail: expect.stringContaining("without a result") });
+  expect(x.cmds.filter((l) => l.includes("gh-1.verify"))).toEqual([`chmod -R u+rwX -- ${dir}/gh-1.verify`, `rm -rf --one-file-system -- ${dir}/gh-1.verify`]);
+  expect(x.cmds).toContain(`rm -rf --one-file-system -- ${dir}/gh-2.verify`);
+  expect(x.logs.some((l) => l.startsWith("verify acme/web/gh-1: ") && l.includes("Permission denied"))).toBe(true);
+  const d = scheduler();
+  const s = await d.session();
+  rmSync(join(dir, "gh-2.verify"), { recursive: true });
+  for (const id of ["gh-1", "gh-2"]) await startVerify(d.c, d.io, s, id, d.pr, { busy: false }, async () => true, "/tender");
+  expect(d.cmds.filter((x) => x.startsWith("systemd-run")).map((x) => x.split(" ").at(-1))).toEqual([`${dir}/gh-2.verify`]);
 });
 
 test("done: a running verifier is stopped without waiting, and the clone is kept until its <ID>.verify is gone", async () => {
@@ -236,26 +240,37 @@ test("ready to merge: a changed contract makes the pass stale and moves it back;
   p.t.readyToMerge = true;
   p.t.labels = ["needs-human"];
   setBaseSha("c".repeat(40));
+  // The fake runner never ends a run, so the first scenario's would read as killed.
+  rmSync(join(root, "acme/web/gh-1.verify"), { recursive: true });
   verified("gh-1", { head: "a", pass: false, check: "test", tail: "x" });
   await p.run();
   expect(p.calls).toEqual([`review gh-1 back in review, verify failed: ${URL}`]);
 });
 
-test("auto-merge and Ready to merge hold a PR whose base moved to another contract after the fetch", async () => {
-  const d = inReview({ ready: true, autoMerge: "intelligent" });
+test("auto-merge judges by origin/<base> as this poll fetched it, not the PR's stale baseRefOid; a base pushed since holds the merge a poll", async () => {
+  const d = inReview({ autoMerge: "intelligent" });
   d.pr.baseRefOid = "e".repeat(40);
   verified("gh-1", { head: "a", pass: true });
-  // Cached as read at origin/main before the base moved on GitHub.
-  await loadSession(d.io, web(config({ repos: [{ name: "acme/web", path: join(root, "src-web") }] })));
-  repoFiles["verify.yaml"] = YAML.replace("bun test", "bun test --bail");
-  await d.run();
+  let tip = "f".repeat(40);
+  const run = d.io.run;
+  d.io.run = async (a, ...r) => (a.includes("ls-remote") ? { code: 0, out: `${tip}\trefs/heads/main\n`, err: "" } : run(a, ...r));
   await d.run();
   expect(d.cmds.some((x) => x.startsWith("gh pr merge"))).toBe(false);
-  expect(d.calls).toEqual([]);
-  expect(d.logs.some((l) => l.includes(`merge gh-1: origin/main moved to eeeeeeeeeeee with another or unreadable verify contract`))).toBe(true);
-  repoFiles["verify.yaml"] = YAML;
+  expect(d.logs.some((l) => l.includes("merge gh-1: origin/main moved to ffffffffffff since this poll read .tender/; judged next poll"))).toBe(true);
+  tip = "a".repeat(40);
   await d.run();
   expect(d.cmds.some((x) => x.startsWith("gh pr merge 7"))).toBe(true);
+});
+
+test("ready to merge: parked with autoMerge off, a head pushed past the verified one still moves it back", async () => {
+  const d = inReview({ ready: true });
+  verified("gh-1", { head: "a", pass: true });
+  await d.run();
+  expect(d.calls).toEqual([`ready gh-1 ready to merge: ${URL}`]);
+  d.t.labels = ["needs-human"];
+  d.pr.headRefOid = "b";
+  await d.run();
+  expect(d.calls.slice(1)).toEqual([`review gh-1 back in review, verify pending for this head: ${URL}`]);
 });
 
 test("ready to merge: a .tender/ that cannot be read holds it back", async () => {
@@ -308,4 +323,17 @@ test("verify failure with the session's window gone parks at once, also when alr
   e.pr.comments = [{ id: "c1", author: { login: "op" }, body: "hm", createdAt: new Date().toISOString() }];
   await e.run();
   expect(e.calls).toEqual(["park gh-1", ended]);
+});
+
+test("verify failure: every delivered head is remembered, so an old head failing again after more than 10 others is not delivered twice", async () => {
+  const d = inReview({ win: true, maxRounds: 5 });
+  const heads = Array.from({ length: 10 }, (_, i) => `h${i}`);
+  writeFileSync(join(root, "acme/web/gh-1.feedback"), JSON.stringify({ seenAt: 0, rounds: 0, verifyRounds: 1, verifyShas: ["a", ...heads] }));
+  verified("gh-1", { head: "a", digest: sha(`maxRounds: 5\n${YAML}`), pass: false, check: "test", tail: "x" });
+  await d.run();
+  expect([existsSync(join(root, "acme/web/gh-1/.tender/run/feedback.md")), d.cursor().verifyShas]).toEqual([false, ["a", ...heads]]);
+  d.pr.headRefOid = "b";
+  verified("gh-1", { head: "b", digest: sha(`maxRounds: 5\n${YAML}`), pass: false, check: "test", tail: "x" });
+  await d.run();
+  expect(d.cursor().verifyShas).toEqual(["a", ...heads, "b"]);
 });

@@ -904,6 +904,19 @@ test("a failed start leaves the ticket unclaimed and retries next poll; a failed
   expect(existsSync(pending)).toBe(false);
 });
 
+test("a claim retry that keeps failing is logged once per ticket and message while tender runs", async () => {
+  const c = config();
+  worktree("gh-7");
+  writeFileSync(join(root, "acme/web/gh-7.claim"), "");
+  const { tr } = fakeTracker({ ready: [ticket(7)] });
+  tr.claim = () => Promise.reject(new Error("label in-progress not found"));
+  const { io, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(["acme/web/gh-7"]) : noPr(a)));
+  await pass(c, io, () => tr, "/tender");
+  await pass(c, io, () => tr, "/tender");
+  expect(logs.filter((l) => l.includes("label in-progress not found"))).toEqual(["[web] cleanup acme/web/gh-7 failed: label in-progress not found"]);
+  expect(existsSync(join(root, "acme/web/gh-7.claim"))).toBe(true);
+});
+
 test("a start first kills a stale scope by its name, and fails unclaimed when systemd --user is unreachable", async () => {
   const c = config();
   const { tr, calls } = fakeTracker({ ready: [ticket(1)] });

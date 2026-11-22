@@ -5,6 +5,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { makeTracker, pass } from "../src/pass";
 import { config, fakeIo, lin, noPr, phase, root, setBaseSha, src, two, useTempRoot, windowsOut, withLinearKey, writePhases } from "./helpers";
+import { Kept } from "../src/util";
 
 useTempRoot();
 
@@ -418,6 +419,17 @@ test("linear adapter: a trashed issue is deleted, one missing from the response 
     expect(await tr.closed("ENG-1", "acme/web")).toBeUndefined();
   });
   expect(queries[0]).toContain("trashed state { name type }");
+});
+
+test("linear adapter: a permanently deleted issue throws Kept, keyed by ticket, so polling logs it once", async () => {
+  const l = lin(config({ sources: [src({ tracker: "linear", team: "ENG" })] }));
+  const { io } = fakeIo();
+  io.fetch = (async () => Response.json({ data: null, errors: [{ message: "Entity not found: Issue", extensions: { code: "INPUT_ERROR" } }] })) as any;
+  await withLinearKey(async () => {
+    const e = await linear(l, "box", io).closed("ENG-1", "acme/web").catch((e) => e);
+    expect(e).toBeInstanceOf(Kept);
+    expect(e.key).toStartWith("ENG-1: linear 200: ");
+  });
 });
 
 test("linear adapter: a ticket assigned to another user carries their name; unassigned or the viewer's does not; the viewer is read once", async () => {

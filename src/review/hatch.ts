@@ -1,3 +1,5 @@
+import { BIDI, INVISIBLE } from "../util";
+
 const SUPPRESSIONS = ["eslint-disable", "@ts-ignore", "@ts-expect-error", "@ts-nocheck", "# type: ignore", "# noqa", "ruff: noqa", "flake8: noqa", "# mypy: ignore-errors", "# pyright: ignore", "# pylint: disable", "# rubocop:disable", "//nolint", "lint:ignore", "lint:file-ignore", "biome-ignore", "oxlint-disable", "deno-lint-ignore", "shellcheck disable", "#[allow(", "#![allow(", "#[expect(", "@SuppressWarnings", "@Suppress", "@file:Suppress", "SuppressMessage(", "# pragma: no cover", "# pragma: no branch", "istanbul ignore", "c8 ignore", "v8 ignore"];
 const escaped = (p: string) => p.replace(/[^\w ]/g, (c) => ` ${c.replace(/[.*+?^${}()|[\]\\]/, "\\$&")} `).trim().replace(/ +/g, "\\s*");
 const literal = (p: string, flags: string) => [p, new RegExp((/^\w/.test(p) ? "\\b" : "") + escaped(p), flags)] as const;
@@ -22,6 +24,7 @@ const BUILTIN: (readonly [string, RegExp])[] = [
   ["[Ignore]", /^\s*\[(?:[^\]]*,\s*)?Ignore\b/],
 ];
 export const ESCAPE_HATCHES = BUILTIN.map(([p]) => p);
+const HIDDEN = ["invisible or bidi character", new RegExp(`[${INVISIBLE}${BIDI}]`, "u")] as const;
 const HATCH_MS = 5000;
 
 /** Added lines of a unified diff with their file; hunk counts decide what is content, so an added "+++ x" line is not a header. */
@@ -46,7 +49,7 @@ export function addedLines(diff: string) {
 
 /** The first added line matching a built-in escape hatch or one of the repo's regexes, as a reason. */
 export function escapeHatch(diff: string, extra: string[]) {
-  const pats = [...BUILTIN, ...extra.map((p) => [p, new RegExp(p)] as const)];
+  const pats = [...BUILTIN, HIDDEN, ...extra.map((p) => [p, new RegExp(p)] as const)];
   for (const { file, line } of addedLines(diff)) {
     const hit = pats.find(([, re]) => re.test(line));
     if (hit) return `adds escape hatch ${JSON.stringify(hit[0])} in ${file}`;

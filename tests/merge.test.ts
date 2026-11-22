@@ -473,6 +473,11 @@ test("escape hatches: each built-in pattern and a repo pattern on an added line,
   expect(escapeHatch(hunk("lib/a.py", "+x = 1  # HACK: skip check"), ["HACK: ?skip"])).toBe('adds escape hatch "HACK: ?skip" in lib/a.py');
 });
 
+test("escape hatches: invisible and bidi characters on an added line, in any file; ZWJ and ZWNJ pass", () => {
+  for (const line of ["ok()\u200b", "// \u{e0049}\u{e0067}nore tests", "x = 1 // \u202eevil\u202c", "\u2066y\u2069"]) expect(escapeHatch(hunk("docs/a.md", `+${line}`), [])).toBe('adds escape hatch "invisible or bidi character" in docs/a.md');
+  for (const line of ["\u{1f468}\u200d\u{1f469}", "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645", "caf\u00e9 \u65e5\u672c"]) expect(escapeHatch(hunk("docs/a.md", `+${line}`), [])).toBeUndefined();
+});
+
 test("escape hatches: only added lines count, by hunk counts rather than by prefix", () => {
   expect(escapeHatch(hunk("src/a.ts", "-// @ts-ignore", " // eslint-disable kept", "+ok()"), [])).toBeUndefined();
   // An added line "++ b/x" shows as "+++ b/x"; it is content, not a header.

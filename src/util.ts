@@ -30,11 +30,13 @@ export const hasMarker = (body: string, marker: string) => body.split("\n").some
 export const nonEmpty = (v: unknown): v is string => typeof v === "string" && v.length > 0;
 
 // Untrusted text: drop ESC sequences and invisible chars, blank controls and bidi; ZWJ/ZWNJ stay (emoji, Persian, Indic).
+export const INVISIBLE = "\\u00ad\\u200b\\u2060\\ufeff\\ufff9-\\ufffb\\u{e0000}-\\u{e007f}";
+export const BIDI = "\\u061c\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069";
 export const strip = (s: string) =>
   s
     .replace(/\x1b(\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(\x07|\x1b\\)?|[@-_])?/g, "")
-    .replace(/[\u00ad\u200b\u2060\ufeff\ufff9-\ufffb\u{e0000}-\u{e007f}]/gu, "")
-    .replace(/[\p{Cc}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, " ");
+    .replace(new RegExp(`[${INVISIBLE}]`, "gu"), "")
+    .replace(new RegExp(`[\\p{Cc}${BIDI}]`, "gu"), " ");
 
 export const clean = (s: string, max = 200) => strip(s).replace(/\s+/g, " ").trim().slice(0, max);
 

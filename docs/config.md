@@ -209,7 +209,7 @@ checks:
 | `checks[].name` | `[a-z0-9][a-z0-9-]{0,31}`, unique | required | names the check in feedback and hold reasons |
 | `checks[].run` | string, ≤ 4000 chars | required | run with `sh -c` in the PR head's checkout, offline |
 | `checks[].timeout` | integer 1–1800 | `600` | seconds before the check is killed and fails |
-| `checks[].proof` | list of globs ending in `.png`, `.gif`, `.jpg`, `.jpeg`, `.mp4`, `.mov` or `.webm`, ≤ 20 | `[]` | validated only; not collected yet |
+| `checks[].proof` | list of globs ending in `.png`, `.gif`, `.jpg`, `.jpeg`, `.webp`, `.svg`, `.mp4`, `.mov` or `.webm`, ≤ 20 | `[]` | validated only; not collected yet |
 | `maxRounds` | integer 1–10 | `2` | failed runs sent to the agent before the ticket is parked, counted apart from `feedback.maxRounds` |
 
 ### Intake rules

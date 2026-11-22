@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AUTO_MERGE, repoDir } from "../config/config";
+import { sameContract } from "../config/repo-config";
 import { canonical, findPr, sameRepo } from "../github";
 import { hatchInWorker } from "./hatch";
 import { readVerified, type Verified, verifiedAt } from "./verify";
@@ -186,6 +187,8 @@ export async function autoMerge(cfg: Config, r: Session, t: Ticket, tr: Tracker,
     return void io.event?.("done", r.key, t.id, { pr: pr.url }, pr.url);
   }
   if (parked) return pr;
+  // The final recheck pins this base, so a contract superseded after the fetch never judges the PR.
+  if (!(await sameContract(io, r, pr.baseRefOid))) return io.log(`merge ${t.id}: origin/${r.baseBranch} moved to ${pr.baseRefOid.slice(0, 12)} with another or unreadable verify contract; judged next poll`), pr;
   let a: Assessment | undefined;
   try {
     const raw = readRun(join(dir, t.id), "merge.json", MAX_MERGE_BYTES);

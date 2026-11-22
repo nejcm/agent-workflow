@@ -10,7 +10,7 @@ import { autoMerge, checkState, policyBlocked, PR_FIELDS, prMode, prReady, viewP
 import { syncPhases } from "./review/phases";
 import { readVerified, reconcileVerify, startVerify, stopVerify, verifiedAt } from "./review/verify";
 import { agentPane, deliverAnswer, liveStates, syncQuestion } from "./session/question";
-import { combine, loadSession, parseRepoConfig } from "./config/repo-config";
+import { combine, loadSession, parseRepoConfig, sameContract } from "./config/repo-config";
 import { lastSay, transcript } from "./ui/tail";
 import { type Adapter, TRACKERS } from "./trackers";
 import type { ProjectClaim } from "./trackers/linear";
@@ -257,7 +257,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
           if (n && share) pr = share.pr = await viewPr(io, key, n, PR_FIELDS + share.fields);
         });
       if (parked) {
-        if (w.readyToMerge && tr.toReadyToMerge) await step(io, `ready ${t.id}`, async () => retryDemote(w, tr, io, dir, (await sessionOf(io, sessions, r).catch(() => undefined))?.verify));
+        if (w.readyToMerge && tr.toReadyToMerge) await step(io, `ready ${t.id}`, async () => retryDemote(w, tr, io, dir, await sessionOf(io, sessions, r).catch(() => undefined), pr));
         continue;
       }
       // A view taken before an awaited comment or files call is stale; a closed PR is not found, so its recorded one is viewed.
@@ -282,9 +282,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
         return now.has(name) ? Date.now() / 1000 - now.activity.get(name)! >= IDLE_SECS : now.listed;
       };
       if (pr && cur?.verify) await step(io, `verify ${t.id}`, () => startVerify(cfg, io, cur, t.id, pr, verifier, done, tenderDir));
-      const v = verifiedAt(readVerified(dir, t.id), pr?.headRefOid, cur?.verify);
-      // Like auto-merge, Ready to merge waits while the base branch's .tender/ cannot be read.
-      const gate = !cur ? "wait" : !cur.verify || v?.pass ? "pass" : v ? "fail" : "wait";
+      const gate = verifyGate(cur && (await sameContract(io, cur, pr?.baseRefOid)) ? cur : undefined, pr?.headRefOid, dir, t.id);
       // Auto-merge reports these as a hold; promoting too would post a second, contradicting verdict.
       const promote = !(merging && policyBlocked(pr));
       if (pr && tr.toReadyToMerge) await step(io, `ready ${t.id}`, () => syncReady(w, tr, io, dir, pr, clear, done, promote, gate));
@@ -306,7 +304,7 @@ export function readReady(f: string): ReadyMark | undefined {
 const writeReady = (io: Io, f: string, m: ReadyMark) => put(io, f, m.step === "moved" ? m.head : m.step === "demote" ? `${m.head} demote ${m.why}` : `${m.head} ${m.step}`);
 
 // Promoted from GitHub's view and tender's own state only.
-async function syncReady(t: Ticket, tr: Tracker, io: Io, dir: string, pr: any, clear: boolean | undefined, done: () => Promise<boolean>, promote: boolean, verify: "pass" | "fail" | "wait") {
+async function syncReady(t: Ticket, tr: Tracker, io: Io, dir: string, pr: any, clear: boolean | undefined, done: () => Promise<boolean>, promote: boolean, verify: Gate) {
   const f = join(dir, `${t.id}.ready`);
   if (pr.state === "MERGED") return;
   const m = readReady(f);
@@ -322,6 +320,7 @@ async function syncReady(t: Ticket, tr: Tracker, io: Io, dir: string, pr: any, c
       : pr.reviewDecision === "CHANGES_REQUESTED" ? "changes requested"
       : !promote ? (pr.reviewDecision === "REVIEW_REQUIRED" ? "needs review" : "blocked by branch protection")
       : verify === "fail" ? "verify failed"
+      : verify === "pending" ? "verify pending for this head"
       : clear === false ? "new feedback"
       // A failed move back after delivered feedback: this poll finds nothing left to deliver.
       : m?.step === "demote" ? m.why
@@ -343,15 +342,26 @@ async function syncReady(t: Ticket, tr: Tracker, io: Io, dir: string, pr: any, c
   writeReady(io, f, { head: pr.headRefOid, step: "moved" });
 }
 
-// Parking stops every other Ready to merge sync, so a move back that failed, or a failed verify at the moved head, is retried here.
-async function retryDemote(t: Ticket, tr: Tracker, io: Io, dir: string, contract: Session["verify"]) {
+type Gate = "pass" | "fail" | "pending" | "unknown";
+// Unknown while .tender/ cannot be read, or its contract is not the PR base's: Ready to merge then neither moves nor moves back.
+function verifyGate(cur: Session | undefined, head: string | undefined, dir: string, id: string): Gate {
+  if (!cur) return "unknown";
+  if (!cur.verify) return "pass";
+  const v = verifiedAt(readVerified(dir, id), head, cur.verify);
+  return !v ? "pending" : v.pass ? "pass" : "fail";
+}
+
+// Parking stops every other Ready to merge sync, so a move back that failed, or one the verify result calls for, happens here.
+async function retryDemote(t: Ticket, tr: Tracker, io: Io, dir: string, cur: Session | undefined, pr: any) {
   const f = join(dir, `${t.id}.ready`);
   const m = readReady(f);
-  const v = m && verifiedAt(readVerified(dir, t.id), m.head, contract);
-  const why = m?.step === "demote" ? m.why : v && !v.pass ? "verify failed" : undefined;
-  if (!m || !why) return;
+  // Parked with autoMerge off there is no view: the marker's head, else the last run's, stands in for the PR's.
+  const head = pr?.headRefOid ?? m?.head ?? readVerified(dir, t.id)?.head;
+  const gate = verifyGate(cur && (await sameContract(io, cur, pr?.baseRefOid)) ? cur : undefined, head, dir, t.id);
+  const why = m?.step === "demote" ? m.why : gate === "fail" ? "verify failed" : gate === "pending" ? "verify pending for this head" : undefined;
+  if (!why) return;
   const url = existsSync(join(dir, `${t.id}.pr`)) ? readFileSync(join(dir, `${t.id}.pr`), "utf8") : "";
-  writeReady(io, f, { head: m.head, step: "demote", why });
+  writeReady(io, f, { head: head ?? "", step: "demote", why });
   await tr.toReview(t, `back in review, ${why}: ${url}`);
   io.event?.("review", t.repo!, t.id, { pr: url, why });
   remove(io, f);
@@ -509,6 +519,11 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
         const w = wins.get(winName(r.key, id));
         if (end === "canceled" && !w && existsSync(join(dir, `${id}.ended`))) return;
         await stopSession(cfg, x.io, r.key, id, wins);
+        // Before anything is deleted or kept: systemd kills the run's cgroup and the next poll's reconcile removes <ID>.verify.
+        if (existsSync(join(dir, `${id}.verify`))) {
+          await stopVerify(cfg, x.io);
+          throw new Kept(`${r.key}/${id}: waiting for its verify run to stop`);
+        }
         if (end === "canceled") {
           if (existsSync(join(dir, `${id}.ended`))) return;
           put(x.io, join(dir, `${id}.ended`), new Date().toISOString());
@@ -546,9 +561,8 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
         if (nested) throw new Kept(`${wt} may hold a nested repository: ${nested}; left in place`);
         // rm never follows symlinks.
         await write(x.io, ["rm", "-rf", "--one-file-system", "--", wt], undefined, SLOW_SECS);
-        // After the clone, so a delete that fails keeps the transcripts too. While the verifier runs, its <ID>.verify is the only one.
-        if (existsSync(join(dir, `${id}.verify`))) await stopVerify(cfg, x.io);
-        for (const ext of [".claude", ".codex", ".tmpdir", ".verify"]) remove(x.io, join(dir, id + ext));
+        // After the clone, so a delete that fails keeps the transcripts too.
+        for (const ext of [".claude", ".codex", ".tmpdir"]) remove(x.io, join(dir, id + ext));
         for (const f of readdirSync(dir)) {
           if (f.startsWith(`${id}.`) && lstatSync(join(dir, f), { throwIfNoEntry: false })?.isFile()) remove(x.io, join(dir, f));
         }

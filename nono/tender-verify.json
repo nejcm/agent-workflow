@@ -8,10 +8,8 @@
   "extends": "default",
   "groups": {
     "include": [
-      "git_config",
       "bun_runtime",
-      "node_runtime",
-      "mise_manager"
+      "node_runtime"
     ],
     "exclude": [
       "system_write_linux",
@@ -35,6 +33,7 @@
       "/proc/self/fd"
     ],
     "read": [
+      "$HOME/.local/share/mise",
       "/bin",
       "/sbin",
       "/usr/bin",
@@ -115,7 +114,10 @@
       "TMPDIR",
       "TMP",
       "TEMP",
-      "XDG_CACHE_HOME"
+      "XDG_CACHE_HOME",
+      "XDG_CONFIG_HOME",
+      "GIT_CONFIG_GLOBAL",
+      "GIT_CONFIG_NOSYSTEM"
     ]
   },
   "network": {

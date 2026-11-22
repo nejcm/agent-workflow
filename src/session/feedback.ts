@@ -21,9 +21,10 @@ export interface FeedbackCursor {
   ciShas?: string[];
   dirtyShas?: string[];
   rounds: number;
-  /** Failed verify runs delivered, counted apart from `rounds`; `verifyKeys` are their `head:digest`, newest last, at most 10. */
+  /** Failed verify runs delivered, counted apart from `rounds`, and their heads (newest last, at most 10); `endedSha`: the head whose failure was escalated with the window gone. */
   verifyRounds?: number;
-  verifyKeys?: string[];
+  verifyShas?: string[];
+  endedSha?: string;
   capped?: boolean;
 }
 
@@ -83,6 +84,16 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
   const pr = share?.pr?.url === url && !saved.capped ? share.pr : JSON.parse(await read(io, ["gh", "pr", "view", n, "--repo", r.key, "--json", share ? PR_FIELDS + share.fields : `state,baseRefName,headRefOid,mergeStateStatus,statusCheckRollup${talk ? ",reviews,comments" : ""}`]));
   if (share) share.pr = pr;
   if (pr.state !== "OPEN") return;
+  const res = verify?.result;
+  const current = res && !res.pass && res.head === pr.headRefOid && res.digest === verify.digest ? res : undefined;
+  // Nobody is left to fix it: delivered or not, it goes to a human now, ahead of comments and their debounce, once per head.
+  if (!win && current && cur.endedSha !== current.head) {
+    await tr.park(t);
+    io.event?.("park", r.key, t.id, { why: "verify failed, session ended" });
+    put(io, file, JSON.stringify({ ...cur, endedSha: current.head, capped: true } satisfies FeedbackCursor));
+    await tr.comment(t, `verify check ${current.check} failed on ${url} and the session has ended: a human is needed`);
+    return false;
+  }
   const lines = talk ? await lineComments(io, r.key, n) : [];
   const ok = byOperator(r.feedbackAuthors);
   const at = (c: Item) => Date.parse(c.cursorAt ?? c.createdAt);
@@ -94,20 +105,11 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
   const checks: any[] = pr.statusCheckRollup ?? [];
   const failed = !cur.ciShas?.includes(pr.headRefOid) && !checks.some((c) => checkState(c) === "pending") ? checks.filter((c) => checkState(c) === "failed") : [];
   const dirty = pr.mergeStateStatus === "DIRTY" && !cur.dirtyShas?.includes(pr.headRefOid);
-  const res = verify?.result;
-  const key = res && `${res.head}:${res.digest}`;
-  const vfail = res && !res.pass && res.head === pr.headRefOid && res.digest === verify.digest && !cur.verifyKeys?.includes(key!) ? res : undefined;
-  const verifyKeys = vfail ? [...(cur.verifyKeys ?? []), key!].slice(-10) : cur.verifyKeys;
+  // Once per head, as CI failures: a revised contract failing the same head is not another round.
+  const vfail = current && !cur.verifyShas?.includes(current.head) ? current : undefined;
+  const verifyShas = vfail ? [...(cur.verifyShas ?? []), vfail.head].slice(-10) : cur.verifyShas;
   const fb = items.length > 0 || failed.length > 0 || dirty;
   if (!fb && !vfail) return true;
-  if (!win && vfail) {
-    // Nobody is left to fix it, so it goes to a human now rather than after the rounds.
-    await tr.park(t);
-    io.event?.("park", r.key, t.id, { why: "verify failed, session ended" });
-    put(io, file, JSON.stringify({ ...cur, verifyKeys, capped: true } satisfies FeedbackCursor));
-    await tr.comment(t, `verify check ${vfail.check} failed on ${url} and the session has ended: a human is needed`);
-    return false;
-  }
   if (!win) {
     const seen = `${file}@${newest ?? cur.seenAt}@${pr.headRefOid}`;
     if (!warned.has(seen)) io.log(`${t.id}: PR feedback pending but the session's window is gone; restart it or act on ${url} by hand`);
@@ -128,7 +130,7 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
   if (pane === undefined) return false;
   const runs = [...new Set(failed.map((c) => /\/actions\/runs\/(\d+)/.exec(c.detailsUrl ?? c.targetUrl ?? "")?.[1]).filter((x): x is string => !!x))].slice(0, MAX_RUNS);
   const logs = await Promise.all(runs.map((id) => failedLog(io, r.key, id)));
-  put(io, file, JSON.stringify({ seenAt: newest ?? cur.seenAt, ciShas: failed.length ? [...(cur.ciShas ?? []), pr.headRefOid].slice(-10) : cur.ciShas, dirtyShas: dirty ? [...(cur.dirtyShas ?? []), pr.headRefOid].slice(-10) : cur.dirtyShas, rounds: cur.rounds + (fb ? 1 : 0), verifyRounds: (cur.verifyRounds ?? 0) + (vfail ? 1 : 0) || undefined, verifyKeys } satisfies FeedbackCursor));
+  put(io, file, JSON.stringify({ seenAt: newest ?? cur.seenAt, ciShas: failed.length ? [...(cur.ciShas ?? []), pr.headRefOid].slice(-10) : cur.ciShas, dirtyShas: dirty ? [...(cur.dirtyShas ?? []), pr.headRefOid].slice(-10) : cur.dirtyShas, rounds: cur.rounds + (fb ? 1 : 0), verifyRounds: (cur.verifyRounds ?? 0) + (vfail ? 1 : 0) || undefined, verifyShas, endedSha: cur.endedSha } satisfies FeedbackCursor));
   io.event?.("feedback-round", r.key, t.id, { round: cur.rounds + (fb ? 1 : 0), comments: items.length, failedChecks: failed.length, conflict: dirty, ...(vfail && { failedVerify: vfail.check, verifyRound: (cur.verifyRounds ?? 0) + 1 }) });
   const text = [
     `<feedback ticket="${t.id}" pr="${attr(url)}">`,

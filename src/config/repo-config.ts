@@ -136,10 +136,9 @@ export function parseRepoConfig(entries: Entry[]): RepoConfig {
   return c;
 }
 
-// What GitHub renders inline in a comment, minus SVG, which is markup rather than a picture.
-const PROOF = /\.(png|gif|jpe?g|mp4|mov|webm)$/i;
+// What `gh --attach` uploads.
+const PROOF = /\.(png|gif|jpe?g|webp|svg|mp4|mov|webm)$/i;
 
-/** `.tender/verify.yaml`: the checks tender runs on a PR head, in order, before anything merges. */
 function parseVerify(yaml: string, check: Check): VerifyContract {
   const obj = (v: unknown): v is Record<string, any> => !!v && typeof v === "object" && !Array.isArray(v);
   let raw: any;
@@ -163,7 +162,7 @@ function parseVerify(yaml: string, check: Check): VerifyContract {
     check(typeof v.name === "string" && INTAKE_NAME.test(v.name), `${at}.name: required, [a-z0-9-]`);
     check(typeof v.run === "string" && v.run.trim().length > 0 && v.run.length <= 4000 && !v.run.includes("\0"), `${at}.run: required, a shell command of at most 4000 chars`);
     check(Number.isInteger(v.timeout) && v.timeout >= 1 && v.timeout <= 1800, `${at}.timeout: seconds, integer 1-1800`);
-    check(Array.isArray(v.proof) && v.proof.length <= 20 && v.proof.every((g: unknown) => validGlob(g) && PROOF.test(g)), `${at}.proof: at most 20 globs (${GLOB_RULES}) ending in .png, .gif, .jpg, .jpeg, .mp4, .mov or .webm`);
+    check(Array.isArray(v.proof) && v.proof.length <= 20 && v.proof.every((g: unknown) => validGlob(g) && PROOF.test(g)), `${at}.proof: at most 20 globs (${GLOB_RULES}) ending in .png, .gif, .jpg, .jpeg, .webp, .svg, .mp4, .mov or .webm`);
     return v;
   });
   check(new Set(checks.map((c: { name: string }) => c.name)).size === checks.length, "verify.checks: names must be unique");
@@ -292,12 +291,22 @@ export function combine(r: Repo, base: string, c: RepoConfig): Session {
   return { ...host, ...c, feedbackRounds: c.feedbackRounds ?? r.feedbackRounds, baseBranch: base, ceiling: r.autoMerge, criticalPaths: [...r.criticalPaths, ...c.criticalPaths], autoMerge: c.autoMerge !== undefined && rank(c.autoMerge) < rank(r.autoMerge) ? c.autoMerge : r.autoMerge };
 }
 
+/** Whether the PR's base commit has the verify contract `s` was read with; false while it is not fetched or its `.tender/` is invalid. */
+export async function sameContract(io: Io, s: Session, base: string | undefined) {
+  if (!base || base === s.baseSha) return true;
+  try {
+    return parseRepoConfig(await gitEntries(io, s.path, base)).verify?.digest === s.verify?.digest;
+  } catch {
+    return false;
+  }
+}
+
 /** Fetches `origin/<base>` into the clone, then the settings there; undefined if the repo's config is invalid, logged once per commit. */
 export async function loadSession(io: Io, r: Repo, secs?: number): Promise<Session | undefined> {
   const base = await baseBranch(io, r);
   await write(io, [...GIT, "-C", r.path, "fetch", "origin", base], undefined, secs);
   const c = await repoConfig(io, r, base);
-  if (c.config) return combine(r, base, c.config);
+  if (c.config) return { ...combine(r, base, c.config), baseSha: c.sha };
   if (!c.logged) io.log(`${r.key}: .tender/ on ${base} at ${c.sha.slice(0, 12)} is invalid, so no tickets start:\n  ${c.error}`);
   c.logged = true;
 }

@@ -11,6 +11,8 @@ export type Verified = { head: string; digest: string } & ({ pass: true } | { pa
 type Job = { base: string; head: string; digest: string; checks: VerifyCheck[]; tenderDir: string };
 
 const LOG_LINES = 80;
+// Whole in one feedback item, and under MAX_FILE once serialized even as 4-byte UTF-8.
+const TAIL_CHARS = 8000;
 const MAX_FILE = 64 * 1024;
 const RUNNING = ["active", "activating", "deactivating", "reloading", "refreshing"];
 // tail keeps only the last bytes, so a chatty check never fills memory; pipefail keeps the check's exit code.
@@ -57,9 +59,9 @@ export async function reconcileVerify(cfg: Config, io: Io) {
   return false;
 }
 
-/** Stops the workspace's verifier, as before deleting a done ticket's `<ID>.verify`. */
+/** Asks systemd to stop the workspace's verifier without waiting; the next reconcile sees it gone. */
 export const stopVerify = (cfg: Config, io: Io) =>
-  write(io, ["systemctl", "--user", "stop", verifyUnit(cfg)]).catch((e) => {
+  write(io, ["systemctl", "--user", "stop", "--no-block", verifyUnit(cfg)]).catch((e) => {
     if (!/ not loaded\.$/.test(e.message)) throw e;
   });
 
@@ -86,7 +88,7 @@ export async function startVerify(cfg: Config, io: Io, r: Session, id: string, p
 const lastLines = (text: string) => {
   const lines = text.split("\n").map((l) => strip(l).trimEnd());
   while (lines.length && !lines.at(-1)) lines.pop();
-  return lines.slice(-LOG_LINES).join("\n") || "(no output)";
+  return lines.slice(-LOG_LINES).join("\n").slice(-TAIL_CHARS) || "(no output)";
 };
 
 /** The verifier: a `--shared` clone of the base clone at the fetched head, each check in order under nono, then `result`. */
@@ -99,7 +101,8 @@ export async function runVerify(vdir: string, io: Io) {
   const [nono, run, ...rest] = nonoRun("tender-verify", job.tenderDir, [["--allow", clone], ["--allow", tmp], ["--read", join(job.base, ".git", "objects")]]);
   // Silent: nono's banner would push the check's own output out of the tail.
   const box = [nono!, run!, "--silent", ...rest];
-  const env = { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: io.home, LANG: "C.UTF-8", TMPDIR: tmp, TMP: tmp, TEMP: tmp, XDG_CACHE_HOME: join(tmp, "cache") };
+  // No host git or XDG config: it can hold credentials (http.extraHeader), and the profile cannot read it anyway.
+  const env = { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: io.home, LANG: "C.UTF-8", TMPDIR: tmp, TMP: tmp, TEMP: tmp, XDG_CACHE_HOME: join(tmp, "cache"), XDG_CONFIG_HOME: join(tmp, "config"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
   try {
     await read(io, [...GIT, "-c", "protocol.file.allow=always", "clone", "-q", "--shared", "--no-checkout", "--", job.base, clone], undefined, SLOW_SECS);
     // The head's tree is agent-written, so even its checkout runs sandboxed and offline.

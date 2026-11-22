@@ -5,7 +5,7 @@ description: Maintain a repo's tender setup. Proposes repairs for what tender's 
 
 # tender maintain
 
-Work in the root of a repo that already has `.tender/`; for a repo without one, use the `tender-setup` skill. This skill proposes and never applies: it writes no files. Ask the user for the path to their tender clone, the directory that holds `tender.ts`, and to their `tender.json`. They are called `<tender>` and `<tender.json>` below.
+Work in the root of a repo that already has `.tender/`; for a repo without one, use the `tender-setup` skill. This skill proposes and never applies: it edits nothing in the repo; only `tender verify` writes, in tender's own workspace. Ask the user for the path to their tender clone, the directory that holds `tender.ts`, and to their `tender.json`. They are called `<tender>` and `<tender.json>` below.
 
 Show each proposed change as a diff or a YAML block for the user to apply. tender reads `.tender/` only from `origin/<base branch>`, so nothing takes effect until it is committed and pushed there.
 

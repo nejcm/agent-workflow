@@ -217,6 +217,10 @@ test("verifyBase: the base's contract on the base commit through the verifier, n
   expect([x.cmds.some((l) => l.startsWith("systemd-run")), x.cmds.at(-1)]).toEqual([false, `rm -rf --one-file-system -- ${vdir}`]);
   code = 1;
   expect(await verifyBase(c, x.io, web(c), "/tender")).toMatchObject({ pass: false, check: "test", tail: "boom" });
+  rmSync(vdir, { recursive: true });
+  const stuck = fakeIo((a) => (a[0] === "rm" ? { code: 1, err: "busy" } : undefined));
+  expect(await verifyBase(c, stuck.io, web(c), "/tender")).toMatchObject({ pass: true });
+  expect(stuck.logs.some((l) => l.includes(`acme/web: rm -rf --one-file-system: busy; ${vdir} stays until the next tender verify`))).toBe(true);
   const idle = fakeIo((a) => (a[2] === "list-units" ? { out: "" } : undefined));
   await reconcileVerify(c, idle.io);
   expect([idle.cmds.some((l) => l.includes("_base")), existsSync(join(dir, "_base.verified"))]).toEqual([false, false]);

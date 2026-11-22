@@ -124,27 +124,33 @@ async function discard(io: Io, vdir: string) {
 export async function verifyBase(cfg: Config, io: Io, r: Repo, tenderDir: string): Promise<Verified> {
   const vdir = join(repoDir(cfg, r.key), `${BASE}.verify`);
   if (existsSync(vdir)) await discard(io, vdir);
-  // Under the pass lock only while it fetches and takes ports, so the checks never hold up a poll.
-  const job = await passLocked(cfg, io.log, async () => {
-    if (!(await cloned(cfg, io, r))) throw new Error(`${r.key}: GitHub resolves it to another repo`);
-    const s = await loadSession(io, r, SLOW_SECS);
-    if (!s) throw new Error(`${r.key}: .tender/ on its base branch is invalid; see above`);
-    const c = s.verify;
-    if (!c) throw new Error(`${r.key}: no .tender/verify.yaml on origin/${s.baseBranch}`);
-    if ((await io.run(["nono", "--version"])).code !== 0) throw new Error("verify: nono is not installed");
-    const n = Math.max(0, ...c.checks.map((x) => x.needs?.ports ?? 0));
-    if (n) requireLandlock();
-    const services = c.checks.some((x) => x.needs?.compose);
-    const j: Job = { base: r.path, head: s.baseSha!, digest: c.digest, checks: c.checks, tenderDir, ...(n && { ports: allocatePorts(cfg, n) }), ...(services && { project: composeProject(cfg, r.key, BASE, "verify"), baseSha: s.baseSha }) };
-    put(io, join(vdir, "job.json"), JSON.stringify(j));
-    return j;
-  });
-  io.log(`verify ${r.key}: ${job.checks.map((x) => x.name).join(", ")} at ${job.head.slice(0, 12)}`);
+  const keep = (e: Error) => io.log(`verify ${r.key}: ${e.message}; ${vdir} stays until the next tender verify`);
+  // Each check runs under `timeout`, its own process group, which forwards the TERM to the whole group.
+  const stop = (code: number) => (Bun.spawnSync(["pkill", "-TERM", "-P", String(process.pid)]), void discard(io, vdir).catch(keep).finally(() => process.exit(code)));
+  const signals = ([["SIGINT", 130], ["SIGTERM", 143]] as const).map(([sig, code]) => [sig, () => stop(code)] as const);
+  for (const [sig, h] of signals) process.once(sig, h);
   try {
+    // Under the pass lock only while it fetches and takes ports, so the checks never hold up a poll.
+    const job = await passLocked(cfg, io.log, async () => {
+      if (!(await cloned(cfg, io, r))) throw new Error(`${r.key}: GitHub resolves it to another repo`);
+      const s = await loadSession(io, r, SLOW_SECS);
+      if (!s) throw new Error(`${r.key}: .tender/ on its base branch is invalid; see above`);
+      const c = s.verify;
+      if (!c) throw new Error(`${r.key}: no .tender/verify.yaml on origin/${s.baseBranch}`);
+      if ((await io.run(["nono", "--version"])).code !== 0) throw new Error("verify: nono is not installed");
+      const n = Math.max(0, ...c.checks.map((x) => x.needs?.ports ?? 0));
+      if (n) requireLandlock();
+      const services = c.checks.some((x) => x.needs?.compose);
+      const j: Job = { base: r.path, head: s.baseSha!, digest: c.digest, checks: c.checks, tenderDir, ...(n && { ports: allocatePorts(cfg, n) }), ...(services && { project: composeProject(cfg, r.key, BASE, "verify"), baseSha: s.baseSha }) };
+      put(io, join(vdir, "job.json"), JSON.stringify(j));
+      return j;
+    });
+    io.log(`verify ${r.key}: ${job.checks.map((x) => x.name).join(", ")} at ${job.head.slice(0, 12)}`);
     await runVerify(vdir, io);
     return readFile(join(vdir, "result")) ?? { head: job.head, digest: job.digest, pass: false, check: "(verifier)", tail: "the run ended without a result" };
   } finally {
-    await discard(io, vdir);
+    for (const [sig, h] of signals) process.off(sig, h);
+    await discard(io, vdir).catch(keep);
   }
 }
 

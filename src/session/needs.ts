@@ -43,6 +43,16 @@ export const portGrants = (ports: number[]): [string, string][] => ports.map((p)
 
 const readJson = (f: string) => JSON.parse(readFileSync(f, "utf8"));
 
+// A file removed since the scan held nothing: `tender verify` removes its run outside the pass lock.
+const held = (f: string) => {
+  try {
+    return readJson(f).ports ?? [];
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw e;
+  }
+};
+
 /** Every port a session (`<ID>.needs`) or a verify run (`<ID>.verify/job.json`) in this workspace holds; a file that cannot be read throws. */
 export function reservedPorts(cfg: Config) {
   const used = new Set<number>();
@@ -50,8 +60,8 @@ export function reservedPorts(cfg: Config) {
     const dir = repoDir(cfg, r.key);
     if (!existsSync(dir)) continue;
     const files = [...new Bun.Glob("*.needs").scanSync({ cwd: dir, onlyFiles: true })].map((f) => join(dir, f));
-    for (const d of subdirs(dir)) if (d.endsWith(".verify") && existsSync(join(dir, d, "job.json"))) files.push(join(dir, d, "job.json"));
-    for (const f of files) for (const p of readJson(f).ports ?? []) used.add(p);
+    for (const d of subdirs(dir)) if (d.endsWith(".verify")) files.push(join(dir, d, "job.json"));
+    for (const f of files) for (const p of held(f)) used.add(p);
   }
   return used;
 }

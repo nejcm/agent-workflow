@@ -45,7 +45,7 @@ function isWebm(b: Buffer) {
   for (let i = a + c, end = Math.min(i + size, b.length); i < end; ) {
     const [eid, n] = vint(b, i, true);
     const [len, m] = vint(b, i + n, false);
-    if (eid < 0 || len < 0) return false;
+    if (eid < 0 || len < 0 || i + n + m + len > end) return false;
     if (eid === 0x4282) return ascii(b, i + n + m, i + n + m + len) === "webm";
     i += n + m + len;
   }

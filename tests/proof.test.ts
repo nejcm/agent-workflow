@@ -74,12 +74,14 @@ test("collect: SVG needs an svg root and rejects hostile preambles fast; WebM ne
   // An EBML Void element hiding a webm DocType inside a matroska header.
   put(join(clone, "w/void.webm"), Buffer.from("1a45dfa3954282886d6174726f736b61ec874282847765626d", "hex"));
   put(join(clone, "w/webmx.webm"), Buffer.from("1a45dfa3874282857765626d78", "hex"));
-  put(join(clone, "w/late.webm"), Buffer.from("1a45dfa38e4286810142f781014282847765626d", "hex"));
+  put(join(clone, "w/short.webm"), Buffer.from("1a45dfa388428240057765626d", "hex"));
+  put(join(clone, "w/cut-id.webm"), Buffer.from("1a45dfa38142", "hex"));
+  put(join(clone, "w/late.webm"), Buffer.from("1a45dfa38f4286810142f781014282847765626d", "hex"));
   const t = performance.now();
   const { b } = collect(clone, ["s/*.svg", "w/*.webm"]);
   expect(performance.now() - t).toBeLessThan(200);
   expect(b.files).toEqual(["e2e-1.svg", "e2e-2.svg", "e2e-3.webm"]);
-  expect(b.skipped).toBe(5);
+  expect(b.skipped).toBe(7);
 });
 
 test("collect: literal dirs match case-insensitively like the glob; each check gets its own copy of the same path", () => {

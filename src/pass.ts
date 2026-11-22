@@ -470,7 +470,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
         if (!end && (wins.has(winName(r.key, id)) || handedOff(dir, id)) && existsSync(pending)) {
           // Only a ticket still ready is claimed, so a newer move by a human wins.
           const t = (await listReady(x)).find((k) => k.id === id && allowedRepo(cfg, k.repo) === r.key);
-          if (t) await claim(x.io, x.tr, pending, { ...t, repo: r.key });
+          if (t) await claim(x.io, x.tr, pending, { ...t, repo: r.key }).catch((e) => Promise.reject(new Kept(e.message, `${r.key}/${id}: claim: ${e.message}`)));
         }
         if (!end) return;
         if (end === "done") {

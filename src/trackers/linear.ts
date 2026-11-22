@@ -1,5 +1,5 @@
 import type { Check, Io, LinearSource, Ticket, Tracker } from "../types";
-import { hasLabel, hasMarker, nonEmpty, ours } from "../util";
+import { hasLabel, hasMarker, Kept, nonEmpty, ours } from "../util";
 
 export function parseLinear(r: Record<string, any>, at: string, check: Check) {
   const s = { team: r.team, todo: r.todo ?? "Todo", inProgress: r.inProgress ?? "In Progress", inReview: r.inReview ?? "In Review", readyToMerge: r.readyToMerge, done: r.done ?? ["Done"] };
@@ -176,7 +176,9 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
       ...(l.readyToMerge ? (await listMine(l.readyToMerge, [l.readyLabel], complete)).map((t) => ({ ...t, readyToMerge: true })) : []),
     ],
     async closed(id) {
-      const i = (await gql(`query($id: String!) { issue(id: $id) { trashed state { name type } } }`, { id })).issue;
+      const i = (
+        await gql(`query($id: String!) { issue(id: $id) { trashed state { name type } } }`, { id }).catch((e) => Promise.reject(/Entity not found/.test(e.message) ? new Kept(e.message, `${id}: ${e.message}`) : e))
+      ).issue;
       if (i?.trashed) return "deleted";
       // The schema makes `issue` non-null, so a response without one is malformed, never proof of deletion.
       if (!i) return "canceled";

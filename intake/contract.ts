@@ -70,7 +70,8 @@ export async function main(argv: string[], dir = process.cwd(), parser = PARSER)
   if (argv.length && !KEY.test(recheck ?? "")) throw new Error("usage: contract.ts [--recheck contract:<check>:<subject>]");
   if (recheck === CONFIG_KEY && !existsSync(parser)) throw new Error(`--recheck ${CONFIG_KEY}: tender's parser is not at ${parser}`);
   const err = await configError(dir, parser);
-  const config = err ? [{ key: CONFIG_KEY, title: "tender contract: .tender/ fails tender check", body: `\`bun <tender>/tender.ts check .\` reports:\n\n\`\`\`\n${err}\n\`\`\`\n\nUntil it passes on the base branch, tender starts no tickets in this repo.`, facts: { check: "config" } }] : [];
+  const cmd = `bun <tender>/tender.ts check .${process.env.TENDER_CONFIG ? " --config <tender.json>" : ""}`;
+  const config = err ? [{ key: CONFIG_KEY, title: "tender contract: .tender/ fails tender check", body: `\`${cmd}\` reports:\n\n\`\`\`\n${err}\n\`\`\`\n\nUntil it passes on the base branch, tender starts no tickets in this repo.`, facts: { check: "config" } }] : [];
   let globs = new Map<string, [string, string]>();
   if (recheck !== CONFIG_KEY) {
     try {

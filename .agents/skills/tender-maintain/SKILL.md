@@ -16,7 +16,7 @@ Run `TENDER_CONFIG=<tender.json> bun <tender>/intake/contract.ts` from the repo 
 - `contract:config:check`: `.tender/` fails `bun <tender>/tender.ts check . --config <tender.json>`, so tender starts no tickets here. Propose a fix for each listed problem; the keys are documented in `<tender>/docs/config.md` under "Repo config". Unknown-key errors for `testCmd`, `prompt` or `byLabel` mean config from before task types: move the test command into `.tender/verify.yaml` and per-label prompts into `types`, as `<tender>/docs/config.md` describes.
 - `contract:criticalPaths:…` or `contract:trust:…`: the glob in the item's `glob` fact matches no file in `git ls-files`. Find where the files went (`git log --stat -1 -- <old path>` shows the commit that moved or removed them), and propose the new glob or removing it. Never widen a glob to make it match.
 
-After the user applies the fixes, run `bun <tender>/tender.ts check . --config <tender.json>` and the contract script again until both are clean. `bun <tender>/intake/contract.ts --recheck <key>` answers `still` or `gone` for one item.
+After the user applies the fixes, run `bun <tender>/tender.ts check . --config <tender.json>` and the contract script again until both are clean. `TENDER_CONFIG=<tender.json> bun <tender>/intake/contract.ts --recheck <key>` answers `still` or `gone` for one item.
 
 ## 2. Suggest intake rules
 

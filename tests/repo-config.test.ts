@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cloneAll } from "../src/session/launcher";
 import { mergeDecision, type PrFacts } from "../src/review/merge";
@@ -279,7 +279,20 @@ test("repoConfig reads a git-ignored config.yaml from the host's checkout when t
   sh("git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "tracked");
   sh("git", "-C", repo, "update-ref", "refs/remotes/origin/main", "HEAD");
   writeFileSync(join(repo, ".tender/config.yaml"), "agent: codex\n");
+  writeFileSync(join(repo, ".tender/verify.yaml"), "x");
+  chmodSync(join(repo, ".tender/verify.yaml"), 0);
   expect(await read()).toMatchObject({ agent: "claude", autoMerge: "shadow" });
+  sh("git", "-C", repo, "rm", "-q", "--cached", ".tender/config.yaml");
+  sh("git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "untracked");
+  sh("git", "-C", repo, "update-ref", "refs/remotes/origin/main", "HEAD");
+  expect(await read()).toMatchObject({ agent: "codex" });
+  chmodSync(join(repo, ".tender/config.yaml"), 0);
+  expect((await repoConfig(io, r, "main")).error).toContain("EACCES");
+  chmodSync(join(repo, ".tender/config.yaml"), 0o644);
+  expect((await read())?.agent).toBe("codex");
+  writeFileSync(join(repo, ".git/index"), "broken");
+  const broken = await repoConfig(io, r, "main");
+  expect([broken.config, broken.error]).toEqual([undefined, expect.stringContaining("git check-ignore .tender/config.yaml")]);
 });
 
 test("an invalid repo config starts nothing: logged once and commented once per base commit", async () => {

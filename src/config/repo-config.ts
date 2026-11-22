@@ -192,7 +192,7 @@ export async function gitEntries(io: Io, path: string, sha: string): Promise<Ent
 }
 
 /** `.tender/` entries in a working tree, for `tender check`. */
-export function dirEntries(dir: string): Entry[] {
+export function dirEntries(dir: string, names = ["config.yaml", "verify.yaml"]): Entry[] {
   const top = lstatSync(join(dir, ".tender"), { throwIfNoEntry: false });
   if (top && !top.isDirectory()) return [{ name: ".", regular: false, size: 0 }];
   const at = (name: string): Entry[] => {
@@ -201,32 +201,36 @@ export function dirEntries(dir: string): Entry[] {
     const ok = st.isFile() && st.size <= MAX_FILE && wanted(name);
     return [{ name, regular: st.isFile(), size: st.size, text: ok ? readFileSync(join(dir, ".tender", name), "utf8") : undefined }];
   };
-  return [...at("config.yaml"), ...at("verify.yaml")];
+  return names.flatMap(at);
 }
 
-export const configCache = new Map<string, { sha: string; own?: string; config?: RepoConfig; error?: string; logged?: boolean }>();
+export const configCache = new Map<string, { sha: string; committed: Entry[]; own?: string; config?: RepoConfig; error?: string; logged?: boolean }>();
 
 /** A git-ignored `.tender/config.yaml` in the host's own checkout: personal, outside git, so no PR changes it. */
 async function personalConfig(io: Io, path: string) {
-  const ignored = (await io.run([...GIT, "-C", path, "check-ignore", "--", ".tender/config.yaml"])).out.trim() === ".tender/config.yaml";
-  return ignored ? dirEntries(path).find((e) => e.name === "config.yaml") : undefined;
+  const r = await io.run([...GIT, "-C", path, "check-ignore", "-q", "--", ".tender/config.yaml"]);
+  if (r.code === 1) return [];
+  if (r.code !== 0) throw new Error(`git check-ignore .tender/config.yaml in ${path}: ${r.err.trim() || `exit ${r.code}`}`);
+  return dirEntries(path, ["config.yaml"]);
 }
 
 /** The repo's `.tender/` at `origin/<base>` in its clone, never a worktree, with a personal config.yaml when that commit has none; re-read when either changes. */
 export async function repoConfig(io: Io, r: Repo, base: string) {
   const sha = (await read(io, [...GIT, "-C", r.path, "rev-parse", "--verify", `refs/remotes/origin/${base}^{commit}`])).trim();
   if (!/^[0-9a-f]{40,64}$/.test(sha)) throw new Error(`${r.key}: no origin/${base} in ${r.path}`);
-  const mine = await personalConfig(io, r.path);
-  const own = mine && JSON.stringify(mine);
   const hit = configCache.get(r.key);
+  const committed = hit?.sha === sha ? hit.committed : await gitEntries(io, r.path, sha);
+  // Fails closed: an unreadable personal file makes the config invalid rather than dropping its policy.
+  let mine: Entry[] | Error = [];
+  if (!committed.some((e) => e.name === "config.yaml")) mine = await personalConfig(io, r.path).catch((e: Error) => e);
+  const own = mine instanceof Error ? `error: ${mine.message}` : mine.length ? JSON.stringify(mine) : undefined;
   if (hit?.sha === sha && hit.own === own) return hit;
-  const committed = await gitEntries(io, r.path, sha);
-  const entries = mine && !committed.some((e) => e.name === "config.yaml") ? [...committed, mine] : committed;
   let c: NonNullable<typeof hit>;
   try {
-    c = { sha, own, config: parseRepoConfig(entries, r.profile) };
+    if (mine instanceof Error) throw mine;
+    c = { sha, committed, own, config: parseRepoConfig([...committed, ...mine], r.profile) };
   } catch (e) {
-    c = { sha, own, error: (e as Error).message };
+    c = { sha, committed, own, error: (e as Error).message };
   }
   configCache.set(r.key, c);
   return c;

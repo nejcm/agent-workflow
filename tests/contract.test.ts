@@ -134,6 +134,10 @@ test("with TENDER_CONFIG, the config check and its recheck use the repo's profil
     process.env.TENDER_CONFIG = host;
     expect(await collect()).toEqual([]);
     expect(await recheck("contract:config:check")).toBe("gone");
+    rmSync(join(profile, "instructions/ui.md"));
+    const [found] = await collect();
+    expect(found!.body).toStartWith("`bun <tender>/tender.ts check . --config <tender.json>` reports:");
+    expect(await recheck("contract:config:check")).toBe("still");
   } finally {
     if (prev === undefined) delete process.env.TENDER_CONFIG;
     else process.env.TENDER_CONFIG = prev;

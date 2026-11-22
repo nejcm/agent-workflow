@@ -11,6 +11,7 @@ import { intake } from "./src/intake";
 import { prs } from "./src/prs";
 import { DEFAULT_DAYS, stats, statsTable } from "./src/stats";
 import { cloned, cloneAll, resume } from "./src/session/launcher";
+import { verifyBase } from "./src/review/verify";
 import { landlockAbi, landlockProblem } from "./src/session/needs";
 import { CRITICAL_PATHS, TEST_PATHS } from "./src/review/merge";
 import { makeTracker, pass } from "./src/pass";
@@ -92,7 +93,8 @@ const USAGE = `usage: bun tender.ts <command> [--config tender.json]
   intake [owner/repo:rule | rule] [--dry-run]
   prs [--dry-run]
   stats [--days 90] [--json]
-  check [path] [--config tender.json]`;
+  check [path] [--config tender.json]
+  verify <owner/repo>`;
 const VALUED = ["--config", "--interval", "-n", "--tool", "--days"];
 const CMD_FLAGS: Record<string, string[]> = {
   run: ["--dry-run"],
@@ -106,9 +108,10 @@ const CMD_FLAGS: Record<string, string[]> = {
   prs: ["--dry-run"],
   stats: ["--days", "--json"],
   check: [],
+  verify: [],
 };
 const FLAGS = ["--config", ...Object.values(CMD_FLAGS).flat()];
-const TARGETED = ["tail", "open", "resume"];
+const TARGETED = ["tail", "open", "resume", "verify"];
 
 const ghVersion = () => {
   try {
@@ -169,7 +172,7 @@ export function parseArgs(argv: string[]) {
   if (!allowed) return fail(`unknown command ${cmd}`);
   const wrong = [...vals.keys()].find((f) => !allowed.includes(f) && f !== "--config");
   if (wrong) return fail(`${cmd} does not take ${wrong}`);
-  if (TARGETED.includes(cmd) && id === undefined) return fail(`${cmd} needs an <ID>`);
+  if (TARGETED.includes(cmd) && id === undefined) return fail(`${cmd} needs ${cmd === "verify" ? "an <owner/repo>" : "an <ID>"}`);
   const stray = cmd === "check" || cmd === "intake" || TARGETED.includes(cmd) ? extra[0] : id;
   if (stray !== undefined) return fail(`unexpected argument ${stray}`);
   const tool = vals.get("--tool");
@@ -254,6 +257,18 @@ async function main(argv: string[]) {
     for (const key of new Set(cfg.intake?.host === cfg.host ? cfg.intake.enabled.map((e) => e.slice(0, e.lastIndexOf(":"))) : []))
       await cloned(cfg, io, cfg.repos[key]!).catch((e) => io.log(`clone ${key} failed: ${e.message}`));
     return intake(cfg, io, TENDER_DIR, { only: id });
+  }
+  if (cmd === "verify") {
+    const r = Object.hasOwn(cfg.repos, id!) ? cfg.repos[id!] : undefined;
+    const held = join(cfg.workspaceRoot, ".verify.lock");
+    if (!r) console.error(`${id}: not in tender.json repos`);
+    else if (!holdLock(held)) console.error(`another tender verify holds ${held}`);
+    else {
+      const v = await verifyBase(cfg, io, r, TENDER_DIR).catch((e) => (console.error(e.message), undefined));
+      if (v) console.log(v.pass ? `passed at ${v.head.slice(0, 12)}` : `${v.check} failed at ${v.head.slice(0, 12)}:\n${v.tail}`);
+      if (v?.pass) return;
+    }
+    process.exit(1);
   }
   if (cmd === "prs") {
     const held = join(cfg.workspaceRoot, ".prs.lock");

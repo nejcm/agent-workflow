@@ -288,6 +288,7 @@ bun tender.ts <command> [--config tender.json]
   prs [--dry-run]
   stats [--days 90] [--json]
   check [path] [--config tender.json]
+  verify <owner/repo>
 ```
 
 | flag | | |

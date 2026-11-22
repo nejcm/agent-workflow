@@ -30,6 +30,7 @@ test("ports: skips every port a session or verify run holds and any in use; a he
   const c = config();
   const dir = join(root, "acme/web");
   mkdirSync(join(dir, "gh-2.verify"), { recursive: true });
+  mkdirSync(join(dir, "_base.verify"), { recursive: true });
   writeFileSync(join(dir, "gh-1.needs"), JSON.stringify({ ports: [20000, 20002] }));
   writeFileSync(join(dir, "gh-2.verify/job.json"), JSON.stringify({ base: "b", ports: [20003] }));
   expect(allocatePorts(c, 3, (p) => p !== 20004)).toEqual([20001, 20005, 20006]);

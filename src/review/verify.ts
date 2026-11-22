@@ -2,11 +2,12 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { repoDir } from "../config/config";
-import { nonoRun, scopePrefix } from "../session/launcher";
+import { loadSession } from "../config/repo-config";
+import { cloned, nonoRun, scopePrefix } from "../session/launcher";
 import { allocatePorts, composeDown, composeProject, composeUp, portEnv, portGrants, requireLandlock } from "../session/needs";
-import type { Config, Io, Session, VerifyCheck, VerifyContract } from "../types";
+import type { Config, Io, Repo, Session, VerifyCheck, VerifyContract } from "../types";
 import { budget, collectProof, postProof } from "./proof";
-import { GIT, Kept, put, read, SAFE_ID, SLOW_SECS, strip, subdirs, write } from "../util";
+import { GIT, Kept, passLocked, put, read, SAFE_ID, SLOW_SECS, strip, subdirs, write } from "../util";
 
 /** `<ID>.verified`: the last verify result tender recorded, for one PR head and contract digest. */
 export type Verified = { head: string; digest: string } & ({ pass: true } | { pass: false; check: string; tail: string });
@@ -107,6 +108,50 @@ export async function startVerify(cfg: Config, io: Io, r: Session, id: string, p
   const secs = c.checks.reduce((n, x) => n + x.timeout * (x.needs?.compose ? 2 : 1) + 10, SLOW_SECS);
   await write(io, ["systemd-run", "--user", "--quiet", "--collect", "--unit", verifyUnit(cfg), `--description=${vdir}`, "-p", `RuntimeMaxSec=${secs}`, `--setenv=PATH=${process.env.PATH ?? "/usr/bin:/bin"}`, "--", process.execPath, join(tenderDir, "src/review/verify.ts"), vdir]);
   io.log(`verify ${r.key}/${id}: started at ${head.slice(0, 12)}`);
+}
+
+// `_` is outside SAFE_ID, so no ticket's run, reconcile or Compose project shares it; reservedPorts still counts its ports.
+const BASE = "_base";
+
+async function discard(io: Io, vdir: string) {
+  const job: Job | undefined = readJson(join(vdir, "job.json"), Infinity);
+  if (job?.project) await composeDown(io, job.project);
+  await write(io, ["chmod", "-R", "u+rwX", "--", vdir], undefined, SLOW_SECS).catch(() => {});
+  await write(io, ["rm", "-rf", "--one-file-system", "--", vdir], undefined, SLOW_SECS);
+}
+
+/** `tender verify`: the contract at `origin/<base>` run on that same commit by the verifier, in the foreground; hold `.verify.lock` around it. */
+export async function verifyBase(cfg: Config, io: Io, r: Repo, tenderDir: string): Promise<Verified> {
+  const vdir = join(repoDir(cfg, r.key), `${BASE}.verify`);
+  if (existsSync(vdir)) await discard(io, vdir);
+  const keep = (e: Error) => io.log(`verify ${r.key}: ${e.message}; ${vdir} stays until the next tender verify`);
+  // Each check runs under `timeout`, its own process group, which forwards the TERM to the whole group.
+  const stop = (code: number) => (Bun.spawnSync(["pkill", "-TERM", "-P", String(process.pid)]), void discard(io, vdir).catch(keep).finally(() => process.exit(code)));
+  const signals = ([["SIGINT", 130], ["SIGTERM", 143]] as const).map(([sig, code]) => [sig, () => stop(code)] as const);
+  for (const [sig, h] of signals) process.once(sig, h);
+  try {
+    // Under the pass lock only while it fetches and takes ports, so the checks never hold up a poll.
+    const job = await passLocked(cfg, io.log, async () => {
+      if (!(await cloned(cfg, io, r))) throw new Error(`${r.key}: GitHub resolves it to another repo`);
+      const s = await loadSession(io, r, SLOW_SECS);
+      if (!s) throw new Error(`${r.key}: .tender/ on its base branch is invalid; see above`);
+      const c = s.verify;
+      if (!c) throw new Error(`${r.key}: no .tender/verify.yaml on origin/${s.baseBranch}`);
+      if ((await io.run(["nono", "--version"])).code !== 0) throw new Error("verify: nono is not installed");
+      const n = Math.max(0, ...c.checks.map((x) => x.needs?.ports ?? 0));
+      if (n) requireLandlock();
+      const services = c.checks.some((x) => x.needs?.compose);
+      const j: Job = { base: r.path, head: s.baseSha!, digest: c.digest, checks: c.checks, tenderDir, ...(n && { ports: allocatePorts(cfg, n) }), ...(services && { project: composeProject(cfg, r.key, BASE, "verify"), baseSha: s.baseSha }) };
+      put(io, join(vdir, "job.json"), JSON.stringify(j));
+      return j;
+    });
+    io.log(`verify ${r.key}: ${job.checks.map((x) => x.name).join(", ")} at ${job.head.slice(0, 12)}`);
+    await runVerify(vdir, io);
+    return readFile(join(vdir, "result")) ?? { head: job.head, digest: job.digest, pass: false, check: "(verifier)", tail: "the run ended without a result" };
+  } finally {
+    for (const [sig, h] of signals) process.off(sig, h);
+    await discard(io, vdir).catch(keep);
+  }
 }
 
 const lastLines = (text: string) => {

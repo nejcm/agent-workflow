@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { type Entry, loadSession, parseRepoConfig } from "../src/config/repo-config";
 import { mergeDecision, type PrFacts } from "../src/review/merge";
-import { readVerified, reconcileVerify, runVerify, startVerify, stopVerify, verifiedAt, verifyUnit } from "../src/review/verify";
+import { readVerified, reconcileVerify, runVerify, startVerify, stopVerify, verifiedAt, verifyBase, verifyUnit } from "../src/review/verify";
 import { pass } from "../src/pass";
 import { Kept } from "../src/util";
 import { config, fakeIo, fakeTracker, repoFiles, root, setBaseSha, ticket, useTempRoot, web, windowsOut, worktree } from "./helpers";
@@ -198,6 +198,34 @@ test("runner: no host git or XDG config reaches a check; a huge failing output i
   await reconcileVerify(c, fakeIo().io);
   const v = readVerified(join(root, "acme/web"), "gh-1");
   expect(v && !v.pass && v.tail.endsWith("last line") && v.tail.length).toBe(8000);
+});
+
+test("verifyBase: the base's contract on the base commit through the verifier, never the shared slot; a stale run is taken down first", async () => {
+  const c = config();
+  const dir = join(root, "acme/web");
+  mkdirSync(join(dir, "_base.verify"), { recursive: true });
+  writeFileSync(join(dir, "_base.verify/job.json"), JSON.stringify({ project: "stale" }));
+  let code = 0;
+  let nono = 0;
+  const x = fakeIo((a) => (a[0] === "nono" && a[1] === "--version" ? { code: nono } : a[0] === "bash" ? { code, out: "boom", err: "" } : undefined));
+  await expect(verifyBase(c, x.io, web(c), "/tender")).rejects.toThrow("acme/web: no .tender/verify.yaml on origin/main");
+  repoFiles["verify.yaml"] = YAML;
+  setBaseSha("b".repeat(40));
+  expect(await verifyBase(c, x.io, web(c), "/tender")).toEqual({ head: "b".repeat(40), digest: sha(YAML), pass: true });
+  const vdir = join(dir, "_base.verify");
+  expect(x.cmds.findIndex((l) => l === "docker compose -p stale down -v")).toBeLessThan(x.cmds.findIndex((l) => l.includes(`checkout -q --detach ${"b".repeat(40)}`)));
+  expect([x.cmds.some((l) => l.startsWith("systemd-run")), x.cmds.at(-1)]).toEqual([false, `rm -rf --one-file-system -- ${vdir}`]);
+  code = 1;
+  expect(await verifyBase(c, x.io, web(c), "/tender")).toMatchObject({ pass: false, check: "test", tail: "boom" });
+  rmSync(vdir, { recursive: true });
+  const stuck = fakeIo((a) => (a[0] === "rm" ? { code: 1, err: "busy" } : undefined));
+  expect(await verifyBase(c, stuck.io, web(c), "/tender")).toMatchObject({ pass: true });
+  expect(stuck.logs.some((l) => l.includes(`acme/web: rm -rf --one-file-system: busy; ${vdir} stays until the next tender verify`))).toBe(true);
+  const idle = fakeIo((a) => (a[2] === "list-units" ? { out: "" } : undefined));
+  await reconcileVerify(c, idle.io);
+  expect([idle.cmds.some((l) => l.includes("_base")), existsSync(join(dir, "_base.verified"))]).toEqual([false, false]);
+  nono = 127;
+  await expect(verifyBase(c, x.io, web(c), "/tender")).rejects.toThrow("nono is not installed");
 });
 
 test("stopVerify matches the run by the exact description tender gave it, also in a path with spaces", async () => {

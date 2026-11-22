@@ -52,14 +52,14 @@ export function parseConfig(raw: any, base: string): Config {
   for (const k of ["workspaceRoot", "reposRoot"]) check(raw[k] === undefined || str(raw[k]), `${k}: non-empty string`);
   const reposRoot = expand(str(raw.reposRoot) ? raw.reposRoot : "~/agent-repos", base);
   const workspaceRoot = expand(str(raw.workspaceRoot) ? raw.workspaceRoot : "~/agent-ws", base);
-  check(raw.lanes === undefined, "lanes: replaced by sources + repos + defaults (see docs/upgrading.md)");
+  check(raw.lanes === undefined, "lanes: replaced by sources + repos + defaults");
   const defaults = raw.defaults ?? {};
   check(obj(defaults) && defaults.path === undefined, "defaults: object without path");
   if (obj(defaults)) for (const k of MOVED_KEYS) check(defaults[k] === undefined, `defaults.${k}: moved to .tender/config.yaml in the repo`);
   if (obj(defaults)) for (const k of Object.keys(defaults)) check(k === "path" || REPO_KEYS.includes(k), `defaults.${k}: unknown key`);
 
   const shape = `array of "owner/name" or { "name": "owner/name", …overrides }`;
-  check(!obj(raw.repos), `repos: now an ${shape}; move each "owner/name": {…} entry to { "name": "owner/name", … } (see docs/upgrading.md)`);
+  check(!obj(raw.repos), `repos: now an ${shape}; move each "owner/name": {…} entry to { "name": "owner/name", … }`);
   check(obj(raw.repos) || (Array.isArray(raw.repos) && raw.repos.length > 0), `repos: non-empty ${shape}`);
   const repos: Record<string, Repo> = {};
   const keys: string[] = [];

@@ -85,7 +85,7 @@ Every poll (default 60 s), `tender` looks for ready tickets (the `agent` label p
 - [Intake](docs/intake.md): scripts that file tickets from signals
 - [PR sweep](docs/prs.md): `tender prs`, orphan agent PRs and the weekly report
 - [Trust signals](docs/stats.md): `tender stats`, per-path merge, revert and shadow numbers and recommendations
-- [Upgrading](docs/upgrading.md), [Code layout](docs/code-layout.md)
+- [Code layout](docs/code-layout.md)
 - Design notes: [agent questions](docs/agent-questions.md)
 
 ## Quick start

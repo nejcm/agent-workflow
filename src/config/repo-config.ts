@@ -35,7 +35,7 @@ export function parseRepoConfig(entries: Entry[]): RepoConfig {
   let yaml: string | undefined;
   for (const e of entries) {
     if (e.name === ".") errs.push(".tender: must be a directory");
-    else if (e.name === "prompts/default.md") errs.push(`${e.name}: no longer replaces tender's prompt; move your changes into prompt.steps and prompt.append (see docs/upgrading.md)`);
+    else if (e.name === "prompts/default.md") errs.push(`${e.name}: no longer replaces tender's prompt; move your changes into prompt.steps and prompt.append`);
     else if (!wanted(e.name)) errs.push(e.name.startsWith("prompts/") ? `${e.name}: prompt files must be named [a-z0-9-]+.md` : `${e.name}: not expected here`);
     else if (!e.regular) errs.push(`${e.name}: must be a regular file`);
     else if (e.size > MAX_FILE || e.text === undefined) errs.push(`${e.name}: over 64 KiB`);
@@ -50,7 +50,7 @@ export function parseRepoConfig(entries: Entry[]): RepoConfig {
   }
   check(obj(raw), "config.yaml: must be a mapping");
   raw = obj(raw) ? raw : {};
-  for (const k of Object.keys(raw)) check(KEYS.includes(k), Object.hasOwn(RETIRED, k) ? `${k}: ${RETIRED[k]} (see docs/upgrading.md)` : `${k}: unknown key`);
+  for (const k of Object.keys(raw)) check(KEYS.includes(k), Object.hasOwn(RETIRED, k) ? `${k}: ${RETIRED[k]}` : `${k}: unknown key`);
   const text = (t: unknown, at: string) => {
     if (typeof t === "string") check(!/^\S+\.md$/.test(t.trim()), `${at}: ${JSON.stringify(t)} is a file name; write { file: <name>.md } to use a file in .tender/prompts/`);
     else if (obj(t) && Object.keys(t).length === 1 && str(t.file)) check(Object.hasOwn(files, t.file), `${at}: ${JSON.stringify(t.file)} is not a file in .tender/prompts/`);

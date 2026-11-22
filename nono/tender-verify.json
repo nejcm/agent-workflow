@@ -107,6 +107,7 @@
   "environment": {
     "allow_vars": [
       "PATH",
+      "TENDER_PORT_*",
       "HOME",
       "LANG",
       "LC_*",

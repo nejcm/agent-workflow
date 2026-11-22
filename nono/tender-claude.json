@@ -142,6 +142,7 @@
     },
     "allow_vars": [
       "PATH",
+      "TENDER_PORT_*",
       "HOME",
       "USER",
       "LOGNAME",

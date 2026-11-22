@@ -3,13 +3,15 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { repoDir } from "../config/config";
 import { nonoRun, scopePrefix } from "../session/launcher";
+import { allocatePorts, composeDown, composeProject, composeUp, portEnv, portGrants, requireLandlock } from "../session/needs";
 import type { Config, Io, Session, VerifyCheck, VerifyContract } from "../types";
 import { budget, collectProof, postProof } from "./proof";
 import { GIT, Kept, put, read, SAFE_ID, SLOW_SECS, strip, subdirs, write } from "../util";
 
 /** `<ID>.verified`: the last verify result tender recorded, for one PR head and contract digest. */
 export type Verified = { head: string; digest: string } & ({ pass: true } | { pass: false; check: string; tail: string });
-type Job = { base: string; head: string; digest: string; checks: VerifyCheck[]; tenderDir: string; pr?: string };
+// `ports` and `project` are the run's own, apart from the session's, and recorded before anything starts.
+type Job = { base: string; head: string; digest: string; checks: VerifyCheck[]; tenderDir: string; pr?: string; ports?: number[]; project?: string; baseSha?: string };
 
 const LOG_LINES = 80;
 // Whole in one feedback item, and under MAX_FILE once serialized even as 4-byte UTF-8.
@@ -56,6 +58,11 @@ export async function reconcileVerify(cfg: Config, io: Io) {
       const res = readFile(join(dir, d, "result")) ?? lost;
       if (res) put(io, join(dir, `${id}.verified`), JSON.stringify(res));
       io.log(`verify ${r.key}/${id}: ${res ? `${res.pass ? "passed" : `${res.check} failed`} at ${res.head.slice(0, 12)}` : "ended without a result or a job, so it runs again"}`);
+      // A run killed mid-check left its services up; the dir stays, holding only this ticket, until they are down.
+      if (job?.project) {
+        const down = await composeDown(io, job.project).then(() => true, (e) => (io.log(`verify ${r.key}/${id}: ${e.message}`), false));
+        if (!down) continue;
+      }
       // A check can leave read-only dirs, which rm cannot empty; chmod -R skips symlinks.
       await write(io, ["chmod", "-R", "u+rwX", "--", join(dir, d)], undefined, SLOW_SECS).catch(() => {});
       // One stuck dir must not hold the slot for every other ticket; startVerify skips that ticket while it is there.
@@ -84,15 +91,20 @@ export async function startVerify(cfg: Config, io: Io, r: Session, id: string, p
   if (pr.state !== "OPEN" || pr.isCrossRepository || pr.baseRefName !== r.baseBranch || !(await done())) return;
   // Also on `sandbox: none` hosts: the checks are agent-written code.
   if ((await io.run(["nono", "--version"])).code !== 0) throw new Kept("verify: nono is not installed, so no verify contract runs and merges wait");
+  const n = Math.max(0, ...c.checks.map((x) => x.needs?.ports ?? 0));
+  if (n) requireLandlock();
+  const services = c.checks.some((x) => x.needs?.compose);
+  if (services && !r.baseSha) throw new Error(`verify ${id}: no base commit to read compose files from`);
   await write(io, [...GIT, "-C", r.path, "fetch", "-q", "--no-tags", "origin", `refs/pull/${pr.number}/head`]);
   // A dry run fetched nothing, so FETCH_HEAD is some earlier fetch's.
   if (io.dry) return;
   const head = (await read(io, [...GIT, "-C", r.path, "rev-parse", "--verify", "FETCH_HEAD^{commit}"])).trim();
   if (head !== pr.headRefOid) return io.log(`verify ${id}: fetched ${head.slice(0, 12) || "nothing"} for PR #${pr.number}, not the head ${pr.headRefOid.slice(0, 12)} it was judged at; retried next poll`);
-  put(io, join(vdir, "job.json"), JSON.stringify({ base: r.path, head, digest: c.digest, checks: c.checks, tenderDir, pr: pr.url } satisfies Job));
+  const own = { ...(n && { ports: allocatePorts(cfg, n) }), ...(services && { project: composeProject(cfg, r.key, id, "verify"), baseSha: r.baseSha }) };
+  put(io, join(vdir, "job.json"), JSON.stringify({ base: r.path, head, digest: c.digest, checks: c.checks, tenderDir, pr: pr.url, ...own } satisfies Job));
   verifier.busy = true;
-  // A backstop only: each check has its own deadline, and stopping the unit kills everything a check left behind.
-  const secs = c.checks.reduce((n, x) => n + x.timeout + 10, SLOW_SECS);
+  // A backstop only: each check has its own deadline (its services' start another), and stopping the unit kills everything a check left behind.
+  const secs = c.checks.reduce((n, x) => n + x.timeout * (x.needs?.compose ? 2 : 1) + 10, SLOW_SECS);
   await write(io, ["systemd-run", "--user", "--quiet", "--collect", "--unit", verifyUnit(cfg), `--description=${vdir}`, "-p", `RuntimeMaxSec=${secs}`, `--setenv=PATH=${process.env.PATH ?? "/usr/bin:/bin"}`, "--", process.execPath, join(tenderDir, "src/review/verify.ts"), vdir]);
   io.log(`verify ${r.key}/${id}: started at ${head.slice(0, 12)}`);
 }
@@ -113,18 +125,24 @@ export async function runVerify(vdir: string, io: Io) {
   mkdirSync(join(tmp, "cache"), { recursive: true });
   mkdirSync(proof, { recursive: true });
   const b = budget();
-  const [nono, run, ...rest] = nonoRun("tender-verify", job.tenderDir, [["--allow", clone], ["--allow", tmp], ["--read", join(job.base, ".git", "objects")]]);
   // Silent: nono's banner would push the check's own output out of the tail.
-  const box = [nono!, run!, "--silent", ...rest];
+  const sandbox = (ports: number[] = []) => {
+    const [nono, run, ...rest] = nonoRun("tender-verify", job.tenderDir, [["--allow", clone], ["--allow", tmp], ["--read", join(job.base, ".git", "objects")], ...portGrants(ports)]);
+    return [nono!, run!, "--silent", ...rest];
+  };
   // No host git or XDG config: it can hold credentials (http.extraHeader), and the profile cannot read it anyway.
   const env = { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: io.home, LANG: "C.UTF-8", TMPDIR: tmp, TMP: tmp, TEMP: tmp, XDG_CACHE_HOME: join(tmp, "cache"), XDG_CONFIG_HOME: join(tmp, "config"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
   try {
     await read(io, [...GIT, "-c", "protocol.file.allow=always", "clone", "-q", "--shared", "--no-checkout", "--", job.base, clone], undefined, SLOW_SECS);
     // The head's tree is agent-written, so even its checkout runs sandboxed and offline.
-    const co = await io.run([...box, ...GIT, "-c", "advice.detachedHead=false", "-C", clone, "checkout", "-q", "--detach", job.head], clone, SLOW_SECS, { env });
+    const co = await io.run([...sandbox(), ...GIT, "-c", "advice.detachedHead=false", "-C", clone, "checkout", "-q", "--detach", job.head], clone, SLOW_SECS, { env });
     if (co.code !== 0) throw new Error(`git checkout ${job.head.slice(0, 12)}: ${co.err.trim() || `exit ${co.code}`}`);
     for (const c of job.checks) {
-      const res = await io.run(["bash", "-c", TAIL, "bash", ...box, "sh", "-c", c.run], clone, c.timeout, { env, max: 128 * 1024 });
+      const ports = (job.ports ?? []).slice(0, c.needs?.ports ?? 0);
+      // Each start takes the last check's services down first; reconcile takes down the last ones.
+      const up = c.needs?.compose && (await composeUp(io, { project: job.project!, repo: job.base, sha: job.baseSha!, file: c.needs.compose, ports }, join(vdir, "compose"), c.timeout).catch((e: Error) => e));
+      if (up) return finish({ pass: false, check: c.name, tail: lastLines(up.message) });
+      const res = await io.run(["bash", "-c", TAIL, "bash", ...sandbox(ports), "sh", "-c", c.run], clone, c.timeout, { env: { ...env, ...portEnv(ports) }, max: 128 * 1024 });
       if (res.code !== 0) return finish({ pass: false, check: c.name, tail: / timed out after \d+s/.test(res.err) ? `${c.name} timed out after ${c.timeout}s` : lastLines(`${res.out}\n${res.err}`) });
       // Outside the sandbox, right after its own check, before a later one can change the files.
       collectProof(clone, proof, c, b, io.log);

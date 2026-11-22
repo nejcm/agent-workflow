@@ -9,6 +9,7 @@ import { typeFor } from "../config/profile";
 import { configCache, loadSession, promptFor } from "../config/repo-config";
 import type { AgentConfig, Config, Io, Repo, Session, Source, TaskType, Ticket, Tracker } from "../types";
 import { GIT, inDir, inRun, passLocked, put, quote, read, remove, SLOW_SECS, write } from "../util";
+import { allocatePorts, type ComposeJob, composeProject, portGrants, requireLandlock } from "./needs";
 
 export const render = (tpl: string, vars: Record<string, string>) => tpl.replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? m);
 
@@ -56,13 +57,14 @@ export const socketWarning = (tmp: string) => {
   if (n + SOCKET_SUFFIX > 107) return `${tmp} is ${n} bytes, so a Unix socket a tool makes there (tsx adds ~${SOCKET_SUFFIX}) can exceed the 108-byte sun_path limit: shorten workspaceRoot`;
 };
 
-export function launcher(l: Pick<Session, "agent" | "sandbox" | "path" | "model" | "effort">, wt: string, promptFile: string, unit: string, tenderDir: string, bun: string) {
+/** `services`: the `<ID>.compose` dir whose project the script starts, on the host, before the agent. */
+export function launcher(l: Pick<Session, "agent" | "sandbox" | "path" | "model" | "effort">, wt: string, promptFile: string, unit: string, tenderDir: string, bun: string, ports: number[] = [], services?: string) {
   const prompt = `"$(cat ${quote(promptFile)})"`;
   const nono = l.sandbox === "nono";
   const git = join(l.path, ".git");
   const own = [claudeHome(wt), codexHome(wt)].map((p): [string, string] => ["--allow", p]);
   const tmp = tmpHome(wt);
-  const grants: [string, string][] = [["--allow", wt], ["--allow-unix-socket-subtree-bind", wt], ["--allow", tmp], ["--allow-unix-socket-subtree-bind", tmp], ...own, ["--read", join(git, "objects")]];
+  const grants: [string, string][] = [["--allow", wt], ["--allow-unix-socket-subtree-bind", wt], ["--allow", tmp], ["--allow-unix-socket-subtree-bind", tmp], ...own, ["--read", join(git, "objects")], ...portGrants(ports)];
   const wrap = nono ? nonoRun(`tender-${l.agent}`, tenderDir, grants, quote) : [];
   const [env, cmd] = AGENTS[l.agent].launch(quote(wt), prompt, nono, l);
   // gh exits if it cannot read its config dir; <ID>.gh is never created, so gh runs on defaults plus nono's GH_TOKEN.
@@ -71,7 +73,10 @@ export function launcher(l: Pick<Session, "agent" | "sandbox" | "path" | "model"
   // systemd 258+ expands $$ and ${VAR} in a scope's argv (prompt, Stop hook); the flag exists only since 254. Dropped only when help works and lacks it.
   const expand = `expand=--expand-environment=no; help=$(systemd-run --help 2>/dev/null) && [[ $help != *--expand-environment=* ]] && expand=\n`;
   const scope = ["systemd-run", "--user", "--scope", "--quiet", "--collect", "$expand", "--unit", quote(unit), "--"];
-  return `#!/usr/bin/env bash\ncd ${quote(wt)} || exit 1\nunset LINEAR_API_KEY\nexport TMPDIR=${quote(tmp)} TMP=${quote(tmp)} TEMP=${quote(tmp)}\n${box}${env}\n${expand}exec ${[...scope, ...wrap, ...cmd].join(" ")}\n`;
+  const vars = ports.length ? `export ${ports.map((p, i) => `TENDER_PORT_${i}=${p}`).join(" ")}\n` : "";
+  // From `/`, so bun reads no bunfig.toml or .env the agent wrote in the clone.
+  const up = services ? `(cd / && exec ${quote(bun)} --no-env-file ${quote(join(tenderDir, "src/session/needs.ts"))} ${quote(services)}) || exit 1\n` : "";
+  return `#!/usr/bin/env bash\ncd ${quote(wt)} || exit 1\nunset LINEAR_API_KEY\n${up}export TMPDIR=${quote(tmp)} TMP=${quote(tmp)} TEMP=${quote(tmp)}\n${vars}${box}${env}\n${expand}exec ${[...scope, ...wrap, ...cmd].join(" ")}\n`;
 }
 
 /** Kills the session's scope, then its window, as for a canceled ticket; drops it from `wins`. */
@@ -440,7 +445,15 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
   if (r.agent === "claude" && !nono && !(existsSync(token) && readFileSync(token, "utf8").trim())) throw new Error(`${token} is missing or empty: run \`claude setup-token\` and save the token it prints there (chmod 600)`);
   const warn = r.agent === "claude" && nono ? checkLogin(readLogin(io.home), Date.now()) : undefined;
   if (warn) io.log(warn);
-  const bun = nono ? findBun([cfg.workspaceRoot]) : "";
+  const needsFile = join(dir, `${id}.needs`);
+  // A fresh start gets new ports; a resume keeps the ones its session already had.
+  if (source !== undefined) remove(io, needsFile);
+  const want = type?.needs;
+  const needs: { ports: number[]; compose?: string } | undefined = source === undefined ? (existsSync(needsFile) ? JSON.parse(readFileSync(needsFile, "utf8")) : undefined) : want && { ports: allocatePorts(cfg, want.ports), ...(want.compose && { compose: want.compose }) };
+  const ports = needs?.ports ?? [];
+  if (ports.length && nono) requireLandlock();
+  if (needs?.compose && !r.baseSha) throw new Error(`${id}: no base commit to read ${needs.compose} from`);
+  const bun = nono || needs?.compose ? findBun([cfg.workspaceRoot]) : "";
   // No window means any scope left under this name is a stale session, still writing the clone it is about to share.
   await stopScope(cfg, io, r.key, id);
   // Claude sessions run Codex only as a helper, so a missing Codex login does not stop them.
@@ -465,6 +478,9 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
   }
   put(io, join(dir, `${id}.agent`), r.model || r.effort ? JSON.stringify({ name: r.agent, model: r.model, effort: r.effort }) : r.agent);
   if (type) put(io, join(dir, `${id}.type`), JSON.stringify({ name: type.name, instructions: type.instructions }));
+  if (needs) put(io, needsFile, JSON.stringify(needs));
+  const services = needs?.compose ? join(dir, `${id}.compose`) : undefined;
+  if (services) put(io, join(services, "job.json"), JSON.stringify({ project: composeProject(cfg, r.key, id, "session"), repo: r.path, sha: r.baseSha!, file: needs!.compose!, ports } satisfies ComposeJob));
   const root = existsSync(wt) ? realpathSync(wt) : wt;
   seedCodex(io, codexHome(wt), login, root);
   if (r.agent === "claude" || nono) seedClaude(io, claudeHome(wt), root);
@@ -478,7 +494,7 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
     if (source !== undefined) inRun(wt, (d) => ["question.md", "answer.md"].forEach((f) => rmSync(`${d}/${f}`, { recursive: true, force: true })));
   }
   put(io, promptFile, text);
-  put(io, script, launcher(r, wt, promptFile, scopeUnit(cfg, r.key, id), tenderDir, bun), 0o755);
+  put(io, script, launcher(r, wt, promptFile, scopeUnit(cfg, r.key, id), tenderDir, bun, ports, services), 0o755);
   // Claimed last, so a failed start leaves the ticket ready; `<ID>.claim` goes first, so a claim lost to an error or a crash is retried while the window lives.
   if (source !== undefined) put(io, join(dir, `${id}.claim`), new Date().toISOString());
   await write(io, ["tmux", "new-window", "-d", "-t", `=${cfg.tmuxSession}:`, "-n", winName(r.key, id), script]);

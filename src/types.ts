@@ -31,7 +31,13 @@ export interface TaskType {
   match?: { labels: string[] };
   instructions: string;
   agent?: AgentConfig;
+  needs?: Needs;
   output: "pr";
+}
+/** `ports` loopback TCP ports tender assigns and grants in nono; `compose` a file in the repo tender starts outside the sandbox, from the base commit. */
+export interface Needs {
+  ports: number;
+  compose?: string;
 }
 /** A profile's types end with `default`. */
 export interface Profile {
@@ -66,6 +72,7 @@ export interface VerifyCheck {
   run: string;
   timeout: number;
   proof: string[];
+  needs?: Needs;
 }
 /** `digest` is the file's sha256, so a changed contract invalidates a pass. */
 export interface VerifyContract {

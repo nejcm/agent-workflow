@@ -23,9 +23,9 @@ export const verifyUnit = (cfg: Config) => `${scopePrefix(cfg)}-verify.service`;
 
 const parse = (v: any): Verified | undefined => (v && typeof v.head === "string" && typeof v.digest === "string" && typeof v.pass === "boolean" && (v.pass || (typeof v.check === "string" && typeof v.tail === "string")) ? v : undefined);
 
-const readJson = (f: string) => {
+const readJson = (f: string, max = MAX_FILE) => {
   try {
-    return existsSync(f) ? JSON.parse(readFileSync(f, "utf8").slice(0, MAX_FILE)) : undefined;
+    return existsSync(f) ? JSON.parse(readFileSync(f, "utf8").slice(0, max)) : undefined;
   } catch {
     return undefined;
   }
@@ -37,18 +37,21 @@ export const readVerified = (dir: string, id: string) => readFile(join(dir, `${i
 /** The recorded result when it is for this head under this contract, else undefined (never verified, stale head or changed contract). */
 export const verifiedAt = (v: Verified | undefined, head: string | undefined, c: Pick<VerifyContract, "digest"> | undefined) => (v && c && v.head === head && v.digest === c.digest ? v : undefined);
 
+// Its description is systemd-run's default, the command line, which ends with the run's <ID>.verify.
+const listUnit = async (cfg: Config, io: Io) => (await read(io, ["systemctl", "--user", "list-units", "--type=service", "--all", "--plain", "--no-legend", verifyUnit(cfg)])).split("\n").map((l) => l.trim().split(/\s+/)).find((f) => f[0] === verifyUnit(cfg));
+// Not listed once collected; listed as failed or inactive until then.
+const running = (f: string[] | undefined) => RUNNING.includes(f?.[2] ?? "inactive");
+
 /** Records finished runs and removes every `<ID>.verify` once the verifier is idle; true while it runs, throws if systemd cannot tell. */
 export async function reconcileVerify(cfg: Config, io: Io) {
-  const out = await read(io, ["systemctl", "--user", "list-units", "--type=service", "--all", "--plain", "--no-legend", verifyUnit(cfg)]);
-  // Not listed once collected; listed as failed or inactive until then.
-  const st = out.split("\n").map((l) => l.trim().split(/\s+/)).find((f) => f[0] === verifyUnit(cfg))?.[2] ?? "inactive";
-  if (RUNNING.includes(st)) return true;
+  if (running(await listUnit(cfg, io))) return true;
   for (const r of Object.values(cfg.repos)) {
     const dir = repoDir(cfg, r.key);
     for (const d of subdirs(dir)) {
       const id = d.endsWith(".verify") ? d.slice(0, -".verify".length) : "";
       if (!SAFE_ID.test(id)) continue;
-      const job: Job | undefined = readJson(join(dir, d, "job.json"));
+      // tender's own file, so uncapped: a large contract still names its run.
+      const job: Job | undefined = readJson(join(dir, d, "job.json"), Infinity);
       // Killed, out of memory or past its deadline: a rerun would likely end the same way and hold the one slot again.
       const lost = job && !verifiedAt(readVerified(dir, id), job.head, job) ? { head: job.head, digest: job.digest, pass: false as const, check: "(verifier)", tail: "the run ended without a result: killed, out of memory or past its deadline" } : undefined;
       const res = readFile(join(dir, d, "result")) ?? lost;
@@ -63,11 +66,14 @@ export async function reconcileVerify(cfg: Config, io: Io) {
   return false;
 }
 
-/** Asks systemd to stop the workspace's verifier without waiting; the next reconcile sees it gone. */
-export const stopVerify = (cfg: Config, io: Io) =>
-  write(io, ["systemctl", "--user", "stop", "--no-block", verifyUnit(cfg)]).catch((e) => {
+/** Asks systemd to stop the workspace's verifier, only while it runs `vdir`, without waiting; the next reconcile sees it gone. */
+export async function stopVerify(cfg: Config, io: Io, vdir: string) {
+  const f = await listUnit(cfg, io);
+  if (!running(f) || f!.at(-1) !== vdir) return;
+  await write(io, ["systemctl", "--user", "stop", "--no-block", verifyUnit(cfg)]).catch((e) => {
     if (!/ not loaded\.$/.test(e.message)) throw e;
   });
+}
 
 /** Starts the verifier on the PR head when this contract has no result for it and the session is done; never waits for the run. */
 export async function startVerify(cfg: Config, io: Io, r: Session, id: string, pr: any, verifier: { busy?: boolean }, done: () => Promise<boolean>, tenderDir: string) {

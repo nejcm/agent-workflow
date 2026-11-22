@@ -291,6 +291,9 @@ export function combine(r: Repo, base: string, c: RepoConfig): Session {
   return { ...host, ...c, feedbackRounds: c.feedbackRounds ?? r.feedbackRounds, baseBranch: base, ceiling: r.autoMerge, criticalPaths: [...r.criticalPaths, ...c.criticalPaths], autoMerge: c.autoMerge !== undefined && rank(c.autoMerge) < rank(r.autoMerge) ? c.autoMerge : r.autoMerge };
 }
 
+/** Whether `origin/<base>` is still the commit `s` read `.tender/` at; a failed lookup throws. */
+export const atTip = async (io: Io, s: Session) => (await read(io, [...GIT, "-C", s.path, "ls-remote", "origin", `refs/heads/${s.baseBranch}`])).split("\t")[0] === s.baseSha;
+
 /** Fetches `origin/<base>` into the clone, then the settings there; undefined if the repo's config is invalid, logged once per commit. */
 export async function loadSession(io: Io, r: Repo, secs?: number): Promise<Session | undefined> {
   const base = await baseBranch(io, r);

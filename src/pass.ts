@@ -10,7 +10,7 @@ import { autoMerge, checkState, policyBlocked, PR_FIELDS, prMode, prReady, viewP
 import { syncPhases } from "./review/phases";
 import { readVerified, reconcileVerify, startVerify, stopVerify, verifiedAt } from "./review/verify";
 import { agentPane, deliverAnswer, liveStates, syncQuestion } from "./session/question";
-import { combine, loadSession, parseRepoConfig } from "./config/repo-config";
+import { atTip, combine, loadSession, parseRepoConfig } from "./config/repo-config";
 import { lastSay, transcript } from "./ui/tail";
 import { type Adapter, TRACKERS } from "./trackers";
 import type { ProjectClaim } from "./trackers/linear";
@@ -273,7 +273,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
       // Loaded whatever the merge mode; an invalid config or failed fetch keeps the host's maxRounds.
       const cur = await sessionOf(io, sessions, r).catch((e) => void (fresh || io.log(`feedback ${t.id}: .tender/ unavailable, using the host's feedback rounds: ${e.message}`)));
       const rounds = cur?.feedbackRounds ?? r.feedbackRounds;
-      const verify = cur?.verify && { ...cur.verify, result: readVerified(dir, t.id) };
+      const verify = cur?.verify && { ...cur.verify, result: readVerified(dir, t.id), live: () => atTip(io, cur) };
       await step(io, `feedback ${t.id}`, async () => void (clear = await deliverFeedback({ ...r, feedbackRounds: rounds }, w, tr, io, dir, win, scopeUnit(cfg, key, t.id), () => state(dir, t.id), warned, share, verify)));
       pr &&= share!.pr;
       // Never from the live state, which the session writes: ended is a listing without the window, idle is tmux's own output clock.
@@ -287,7 +287,8 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
       const gate = verifyGate(cur, pr?.headRefOid, dir, t.id);
       // Auto-merge reports these as a hold; promoting too would post a second, contradicting verdict.
       const promote = !(merging && policyBlocked(pr));
-      if (pr && tr.toReadyToMerge) await step(io, `ready ${t.id}`, () => syncReady(w, tr, io, dir, pr, clear, done, promote, gate));
+      // A contract pushed since the fetch may make that pass stale, and the move posts a comment.
+      if (pr && tr.toReadyToMerge) await step(io, `ready ${t.id}`, () => syncReady(w, tr, io, dir, pr, clear, async () => (await done()) && atTip(io, cur!), promote, gate));
     }
   });
 }
@@ -524,7 +525,7 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
         await stopSession(cfg, x.io, r.key, id, wins);
         // Before anything is deleted or kept: systemd kills the run's cgroup and the next poll's reconcile removes <ID>.verify.
         if (existsSync(join(dir, `${id}.verify`))) {
-          await stopVerify(cfg, x.io);
+          await stopVerify(cfg, x.io, join(dir, `${id}.verify`));
           throw new Kept(`${r.key}/${id}: waiting for its verify run to stop`);
         }
         if (end === "canceled") {

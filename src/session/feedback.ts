@@ -69,7 +69,7 @@ export const feedbackFields = (r: Repo) => (r.feedbackAuthors.length ? ",reviews
 
 // The cursor is recorded first: a crash or failure after it loses the paste, never repeats it. Text never goes through keys.
 // True when nothing is left to deliver, false when feedback is pending or was just delivered, undefined when not checked.
-export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, dir: string, win: string | undefined, unit: string, state: () => Promise<State>, warned: Set<string>, share?: { fields: string; pr?: any }, verify?: VerifyContract & { result?: Verified }): Promise<boolean | undefined> {
+export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, dir: string, win: string | undefined, unit: string, state: () => Promise<State>, warned: Set<string>, share?: { fields: string; pr?: any }, verify?: VerifyContract & { result?: Verified; live?: () => Promise<boolean> }): Promise<boolean | undefined> {
   const prFile = join(dir, `${t.id}.pr`);
   const url = existsSync(prFile) ? readFileSync(prFile, "utf8") : "";
   const n = /\/pull\/(\d+)$/.exec(url)?.[1];
@@ -85,7 +85,10 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
   if (share) share.pr = pr;
   if (pr.state !== "OPEN") return;
   const res = verify?.result;
-  const current = res && !res.pass && res.head === pr.headRefOid && res.digest === verify.digest ? res : undefined;
+  const failure = res && !res.pass && res.head === pr.headRefOid && res.digest === verify.digest ? res : undefined;
+  const acts = failure && (win ? !cur.verifyShas?.includes(failure.head) : cur.endedSha !== failure.head);
+  // A park or a spent round outlasts the poll, so a contract pushed since the fetch must not decide it.
+  const current = acts && verify?.live && !(await verify.live()) ? undefined : failure;
   // Nobody is left to fix it: delivered or not, it goes to a human now, ahead of comments and their debounce, once per head.
   if (!win && current && cur.endedSha !== current.head) {
     await tr.park(t);

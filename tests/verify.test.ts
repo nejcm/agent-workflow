@@ -143,20 +143,30 @@ test("reconcile: a run that left no result records a (verifier) failure; a dir r
   expect(x.cmds.filter((l) => l.includes("gh-1.verify"))).toEqual([`chmod -R u+rwX -- ${dir}/gh-1.verify`, `rm -rf --one-file-system -- ${dir}/gh-1.verify`]);
   expect(x.cmds).toContain(`rm -rf --one-file-system -- ${dir}/gh-2.verify`);
   expect(x.logs.some((l) => l.startsWith("verify acme/web/gh-1: ") && l.includes("Permission denied"))).toBe(true);
+  const big = join(dir, "gh-3.verify");
+  mkdirSync(big, { recursive: true });
+  writeFileSync(join(big, "job.json"), JSON.stringify({ base: "b", head: "h3", digest: "d", checks: [{ name: "a", run: "x".repeat(70_000), timeout: 60, proof: [] }], tenderDir: "/t" }));
+  await reconcileVerify(c, x.io);
+  expect(readVerified(dir, "gh-3")).toMatchObject({ head: "h3", check: "(verifier)" });
   const d = scheduler();
   const s = await d.session();
   rmSync(join(dir, "gh-2.verify"), { recursive: true });
+  rmSync(big, { recursive: true });
   for (const id of ["gh-1", "gh-2"]) await startVerify(d.c, d.io, s, id, d.pr, { busy: false }, async () => true, "/tender");
   expect(d.cmds.filter((x) => x.startsWith("systemd-run")).map((x) => x.split(" ").at(-1))).toEqual([`${dir}/gh-2.verify`]);
 });
 
-test("done: a running verifier is stopped without waiting, and the clone is kept until its <ID>.verify is gone", async () => {
+test("done: its own running verifier is stopped without waiting, another ticket's never, and the clone is kept until its <ID>.verify is gone", async () => {
   worktree("gh-5");
   mkdirSync(join(root, "acme/web/gh-5.verify/clone"), { recursive: true });
   const c = config();
   const { tr } = fakeTracker({ done: ["gh-5"] });
   let state = "active";
-  const x = fakeIo((a) => (a[2] === "list-units" && a[3] === "--type=service" ? { out: `${verifyUnit(c)} loaded ${state} running x\n` } : undefined));
+  let running = "gh-2";
+  const x = fakeIo((a) => (a[2] === "list-units" && a[3] === "--type=service" ? { out: `${verifyUnit(c)} loaded ${state} running [systemd-run] /bun /tender/src/review/verify.ts ${root}/acme/web/${running}.verify\n` } : undefined));
+  await pass(c, x.io, () => tr, "/tender");
+  expect(x.cmds.some((l) => l.startsWith("systemctl --user stop"))).toBe(false);
+  running = "gh-5";
   await pass(c, x.io, () => tr, "/tender");
   expect(x.cmds).toContain(`systemctl --user stop --no-block ${verifyUnit(c)}`);
   expect(x.cmds.some((l) => l.startsWith("rm "))).toBe(false);
@@ -256,7 +266,7 @@ test("auto-merge judges by origin/<base> as this poll fetched it, not the PR's s
   d.io.run = async (a, ...r) => (a.includes("ls-remote") ? { code: 0, out: `${tip}\trefs/heads/main\n`, err: "" } : run(a, ...r));
   await d.run();
   expect(d.cmds.some((x) => x.startsWith("gh pr merge"))).toBe(false);
-  expect(d.logs.some((l) => l.includes("merge gh-1: origin/main moved to ffffffffffff since this poll read .tender/; judged next poll"))).toBe(true);
+  expect(d.logs.some((l) => l.includes("merge gh-1: origin/main moved since this poll read .tender/; judged next poll"))).toBe(true);
   tip = "a".repeat(40);
   await d.run();
   expect(d.cmds.some((x) => x.startsWith("gh pr merge 7"))).toBe(true);
@@ -271,6 +281,39 @@ test("ready to merge: parked with autoMerge off, a head pushed past the verified
   d.pr.headRefOid = "b";
   await d.run();
   expect(d.calls.slice(1)).toEqual([`review gh-1 back in review, verify pending for this head: ${URL}`]);
+});
+
+test("a contract pushed since the poll's fetch never parks, spends a round or promotes; the next poll decides", async () => {
+  const pin = (d: ReturnType<typeof inReview>) => {
+    const tip = { sha: "f".repeat(40) };
+    const run = d.io.run;
+    d.io.run = async (a, ...r) => (a.includes("ls-remote") ? { code: 0, out: `${tip.sha}\trefs/heads/main\n`, err: "" } : run(a, ...r));
+    return tip;
+  };
+  const ended = inReview();
+  let tip = pin(ended);
+  verified("gh-1", { head: "a", pass: false, check: "test", tail: "x" });
+  await ended.run();
+  expect(ended.calls).toEqual([]);
+  tip.sha = "a".repeat(40);
+  await ended.run();
+  expect(ended.calls[0]).toBe("park gh-1");
+  rmSync(join(root, "acme/web/gh-1.feedback"));
+  const round = inReview({ win: true });
+  tip = pin(round);
+  await round.run();
+  expect(existsSync(join(root, "acme/web/gh-1.feedback")) && round.cursor().verifyRounds).toBeFalsy();
+  tip.sha = "a".repeat(40);
+  await round.run();
+  expect(round.cursor().verifyRounds).toBe(1);
+  const ready = inReview({ ready: true });
+  tip = pin(ready);
+  verified("gh-1", { head: "a", pass: true });
+  await ready.run();
+  expect(ready.calls).toEqual([]);
+  tip.sha = "a".repeat(40);
+  await ready.run();
+  expect(ready.calls).toEqual([`ready gh-1 ready to merge: ${URL}`]);
 });
 
 test("ready to merge: a .tender/ that cannot be read holds it back", async () => {

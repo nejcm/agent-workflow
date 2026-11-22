@@ -4,6 +4,13 @@ import type { Config, Io, Ticket } from "./types";
 
 export const TENDER_DIR = dirname(import.meta.dir);
 
+// Retried every poll but logged once per key while tender runs, whichever step hits it.
+export class Kept extends Error {
+  constructor(message: string, readonly key = message) {
+    super(message);
+  }
+}
+
 export const validBranch = (b: string) => /^[\w.][\w./-]*$/.test(b) && !b.includes("..");
 
 /** One single-quoted shell word. */

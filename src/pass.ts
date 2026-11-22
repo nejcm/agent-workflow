@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { allowedRepo, repoDir, validRepo } from "./config/config";
 import { deliverFeedback, feedbackFields } from "./session/feedback";
@@ -14,7 +14,7 @@ import { lastSay, transcript } from "./ui/tail";
 import { type Adapter, TRACKERS } from "./trackers";
 import type { ProjectClaim } from "./trackers/linear";
 import type { Config, Io, Repo, Session, Source, Ticket, Tracker } from "./types";
-import { TENDER_DIR, byPriority, diskRepos, GIT, hasLabel, mtime, put, read, remove, SAFE_ID, SLOW_SECS, strip, subdirs, write } from "./util";
+import { TENDER_DIR, byPriority, Kept, diskRepos, GIT, hasLabel, mtime, put, read, remove, SAFE_ID, SLOW_SECS, strip, subdirs, write } from "./util";
 
 export const sourceOf = (dir: string, id: string) => {
   const f = join(dir, `${id}.source`);
@@ -24,17 +24,34 @@ const hasTrace = (cfg: Config, key: string, id: string) => existsSync(join(repoD
 // Linear only: ids are unique per workspace (one LINEAR_API_KEY), so the marker is shared by all Linear sources.
 const rejectFile = (cfg: Config, id: string) => join(cfg.workspaceRoot, ".rejected", id);
 
-// A kept session dir is retried every poll but logged once per dir and reason.
-class Kept extends Error {}
-
 async function step(io: Io, what: string, fn: () => Promise<unknown>) {
   try {
     await fn();
   } catch (e) {
     const msg = `${what} failed: ${(e as Error).message}`;
-    if (e instanceof Kept && warned.has(msg)) return;
-    if (e instanceof Kept) warned.add(msg);
+    if (e instanceof Kept && warned.has(e.key)) return;
+    if (e instanceof Kept) warned.add(e.key);
     io.log(msg);
+  }
+}
+
+const SCAN_CAP = 100_000;
+
+// Old-form submodules, --separate-git-dir pointers, bare repos and other nested repos hold commits no check here sees.
+function nestedGit(wt: string) {
+  const dirs = [wt];
+  let seen = 0;
+  while (dirs.length) {
+    const d = dirs.pop()!;
+    const kinds = new Map<string, boolean>();
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      if (++seen > SCAN_CAP) return `more than ${SCAN_CAP} entries`;
+      if (e.name === ".git" && d !== wt) return join(d, e.name);
+      kinds.set(e.name, e.isDirectory());
+      if (e.isDirectory() && e.name !== ".git") dirs.push(join(d, e.name));
+    }
+    // A bare repo has no .git.
+    if (d !== wt && kinds.get("HEAD") === false && kinds.get("objects") && kinds.get("refs")) return d;
   }
 }
 
@@ -491,6 +508,14 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
         // A fresh clone has no tags (--revision, tagOpt=--no-tags), so any tag, stash or note is the session's own.
         const checks = [["status", "--porcelain", "--ignore-submodules=none"], ["rev-list", "--ignore-missing", "--all", "--not", ...pushed, ...unverified, "--glob=refs/remotes/*"], ["for-each-ref", "--format=%(refname)", "refs/tags", "refs/stash", "refs/notes"], ["refs", "verify"]];
         for (const c of checks) if ((await git(...c)).trim()) throw new Kept(`${wt} has uncommitted, untracked or unpushed work; left in place`);
+        // Last before rm, so a repo created during the git checks is still seen.
+        let nested: string | undefined;
+        try {
+          nested = nestedGit(wt);
+        } catch (e) {
+          nested = `an unreadable path (${(e as Error).message})`;
+        }
+        if (nested) throw new Kept(`${wt} may hold a nested repository: ${nested}; left in place`);
         // rm never follows symlinks.
         await write(x.io, ["rm", "-rf", "--one-file-system", "--", wt], undefined, SLOW_SECS);
         // After the clone, so a delete that fails keeps the transcripts too.

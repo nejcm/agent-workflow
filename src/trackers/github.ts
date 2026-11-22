@@ -1,6 +1,6 @@
 import { canonical, sameRepo } from "../github";
 import type { Check, GitHubSource, Io, Ticket, Tracker } from "../types";
-import { hasLabel, hasMarker, labelPriority, nonEmpty, ours, read, write } from "../util";
+import { hasLabel, hasMarker, Kept, labelPriority, nonEmpty, ours, read, write } from "../util";
 
 export function parseGitHub(r: Record<string, any>, at: string, check: Check) {
   const s = { inProgressLabel: r.inProgressLabel ?? "in-progress", inReviewLabel: r.inReviewLabel ?? "in-review", readyToMergeLabel: r.readyToMergeLabel ?? "ready-to-merge" };
@@ -81,6 +81,7 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
         // GraphQL also misses a transferred issue; REST follows it, and 404s one moved out of reach, so only gh's 410 status line means deleted.
         const a = await io.run(["gh", "api", `repos/${repo}/issues/${n}`]);
         if (a.code !== 0 && /^gh: .*\(HTTP 410\)\s*$/m.test(a.err)) return "deleted";
+        if (a.code !== 0 && /\(HTTP 404\)\s*$/m.test(a.err)) throw new Kept(`gh api: ${a.err.trim()}`, `${repo}/${id}: gh api: ${a.err.trim()}`);
         if (a.code !== 0) throw new Error(`gh api: ${a.err.trim() || `exit ${a.code}`}`);
         const i = JSON.parse(a.out);
         if (i.state === "closed") return ["not_planned", "duplicate"].includes(i.state_reason) ? "canceled" : "done";

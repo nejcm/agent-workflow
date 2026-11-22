@@ -1545,6 +1545,56 @@ test("cleanup keeps work the session's own config or refs would hide: untracked 
   expect(logs.filter((l) => l.includes("cleanup acme/web/gh-") && l.includes(" failed: "))).toHaveLength(10);
 });
 
+test("cleanup keeps a clone holding a nested repository, node_modules included, or a .git file pointer, a bare repo, or one made during the git checks, once logged; a symlinked repo does not keep it", async () => {
+  const origin = join(root, "origin.git");
+  const base = join(root, "src-web");
+  const sh = (...a: string[]) => Bun.spawnSync(a, { stdout: "pipe", stderr: "pipe" });
+  const git = (dir: string, ...a: string[]) => expect(sh("git", "-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", ...a).exitCode).toBe(0);
+  expect(sh("git", "init", "-q", "--bare", "-b", "main", origin).exitCode).toBe(0);
+  expect(sh("git", "clone", "-q", origin, base).exitCode).toBe(0);
+  git(base, "commit", "-q", "--allow-empty", "-m", "i");
+  git(base, "push", "-q", "origin", "HEAD:main");
+  const real = (x: string[]) => {
+    const argv = x[0] === "nono" ? x.slice(x.indexOf("--") + 1) : x[0] === "git" ? [...GIT, "-c", "protocol.file.allow=always", ...x.slice(1)] : x;
+    const r = sh(...argv);
+    return { code: r.exitCode, out: r.stdout.toString(), err: r.stderr.toString() };
+  };
+  const ids = [1, 2, 3, 4, 5, 6, 7];
+  const [wt1, wt2, wt3, wt4, wt5, wt6, wt7] = ids.map((n) => join(root, `acme/web/gh-${n}`));
+  const late = (x: string[]) => x.at(-1) === "verify" && x.includes(`--work-tree=${wt6}`) && !existsSync(join(wt6, "late")) && git(wt6, "init", "-q", "late");
+  const run = async (t: ReturnType<typeof fakeTracker>) => {
+    const { io, logs } = fakeIo((x) => (x[0] === "git" || x[0] === "nono" || x[0] === "rm" ? (late(x), real(x)) : noPr(x)));
+    await pass(config({ maxConcurrent: 7 }), io, () => t.tr, "/tender");
+    return logs.filter((l) => l.includes("left in place"));
+  };
+  await run(fakeTracker({ ready: ids.map((n) => ticket(n)) }));
+  git(wt1, "init", "-q", "sub");
+  git(join(wt1, "sub"), "commit", "-q", "--allow-empty", "-m", "local only");
+  git(wt1, "add", "sub");
+  git(wt1, "commit", "-q", "-m", "gitlink");
+  git(wt1, "-c", "protocol.file.allow=always", "push", "-q", "origin", "HEAD:refs/heads/agent/gh-1");
+  writeFileSync(join(wt3, ".git/info/exclude"), "node_modules\n");
+  git(wt3, "init", "-q", "node_modules/vendor");
+  git(join(wt3, "node_modules/vendor"), "commit", "-q", "--allow-empty", "-m", "local only");
+  git(base, "init", "-q", "elsewhere");
+  writeFileSync(join(wt4, ".git/info/exclude"), "link\n");
+  symlinkSync(join(base, "elsewhere"), join(wt4, "link"));
+  writeFileSync(join(wt5, ".git/info/exclude"), "project\n.store\n");
+  git(wt5, "init", "-q", "--separate-git-dir=.store", "project");
+  git(join(wt5, "project"), "commit", "-q", "--allow-empty", "-m", "local only");
+  writeFileSync(join(wt6, ".git/info/exclude"), "late\n");
+  writeFileSync(join(wt7, ".git/info/exclude"), "cache\n");
+  git(wt7, "init", "-q", "--bare", "cache/remote.git");
+  git(wt7, "commit", "-q", "--allow-empty", "-m", "local only");
+  git(wt7, "-c", "protocol.file.allow=always", "push", "-q", join(wt7, "cache/remote.git"), "HEAD:refs/heads/x");
+  git(wt7, "reset", "-q", "--hard", "origin/main");
+  const done = fakeTracker({ done: ids.map((n) => `gh-${n}`) });
+  expect((await run(done)).sort()).toEqual([join(wt1, "sub/.git"), join(wt3, "node_modules/vendor/.git"), join(wt5, "project/.git"), join(wt6, "late/.git"), join(wt7, "cache/remote.git")].map((p) => expect.stringContaining(`${p}; left in place`)));
+  expect(await run(done)).toEqual([]);
+  expect(ids.map((n) => [n, existsSync(join(root, `acme/web/gh-${n}`))])).toEqual([[1, true], [2, false], [3, true], [4, false], [5, true], [6, true], [7, true]]);
+  expect(existsSync(join(base, "elsewhere/.git"))).toBe(true);
+});
+
 test("a session clone that fails half-way is removed, not reused next poll", async () => {
   const { tr, calls } = fakeTracker({ ready: [ticket(1)] });
   const { io, logs } = fakeIo((a) => (a.includes("switch") ? { code: 1 } : noPr(a)));
@@ -1696,6 +1746,25 @@ test("both nono profiles grant read on every template entry a session's config d
     expect(fs.read_file).toEqual(expect.arrayContaining(["$HOME/.claude-tender/settings.json", "$HOME/.claude-tender/CLAUDE.md", "$HOME/.claude-tender/AGENTS.md", "$HOME/.codex-tender/AGENTS.md"]));
     expect(fs.deny).toEqual(expect.arrayContaining(["$HOME/.claude-tender/.credentials.json", "$HOME/.claude-tender/oauth-token", "$HOME/.codex-tender/auth.json", "$HOME/.codex-tender/config.toml", "$HOME/.codex-tender/hooks.json"]));
   }
+});
+
+test("a ticket GitHub 404s is logged once per repo and ticket while tender runs, from cleanup or a stale in-progress listing, and keeps its session dir", async () => {
+  const c = config({ repos: [{ name: "acme/web", path: join(root, "src-web") }, { name: "acme/api", path: join(root, "src-api") }] });
+  for (const repo of ["acme/web", "acme/api"]) worktree("gh-3", "web", repo);
+  writeFileSync(join(root, "acme/web/gh-3.ended"), "x");
+  const listed = JSON.stringify([{ number: 3, title: "t", body: "b", url: "https://github.com/acme/web/issues/3", labels: ["agent", "in-progress"].map((name) => ({ name })) }]);
+  const { io, logs } = fakeIo((a) => {
+    if (a[1] === "repo" && a[2] === "view") return { out: JSON.stringify({ nameWithOwner: a[3] }) };
+    if (a[1] === "issue" && a[2] === "list") return { out: a.includes("in-progress") && a[4] === "acme/web" ? listed : "[]" };
+    if (a[1] === "issue" && a[2] === "view") return { code: 1, err: "GraphQL: Could not resolve to an issue or pull request with the number of 3. (repository.issue)" };
+    if (a[1] === "api") return { code: 1, err: "gh: Not Found (HTTP 404)" };
+    return noPr(a);
+  });
+  const mk = (s: any, h: string, i: Io, d: boolean, r: string[]) => github(s, h, i, d, r);
+  await pass(c, io, mk, "/tender");
+  await pass(c, io, mk, "/tender");
+  expect(logs.filter((l) => l.includes("HTTP 404")).map((l) => l.replace(/^.*?(\w+ (acme\/\w+\/)?gh-3) failed: .*$/, "$1")).sort()).toEqual(["cleanup acme/api/gh-3", "cleanup acme/web/gh-3"]);
+  expect(["acme/web/gh-3", "acme/api/gh-3"].map((d) => existsSync(join(root, d)))).toEqual([true, true]);
 });
 
 test("cleanup logs a kept session dir once per dir and reason, not every poll", async () => {

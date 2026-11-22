@@ -1,5 +1,6 @@
+import { lstatSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import type { Config, Repo, Source } from "../types";
 import { MODEL } from "../session/agents";
 import { TRACKERS } from "../trackers";
@@ -22,6 +23,9 @@ export const validGlob = (v: unknown): v is string => typeof v === "string" && v
 export const GLOB_RULES = 'no surrounding spaces, "!", "{}", "\\", "." or ".." segments, or "//"';
 
 const expand = (p: string, base: string) => resolve(base, p.replace(/^~(?=$|\/)/, homedir()));
+// Missing segments resolve as written; any other error (EACCES, ENOTDIR) throws.
+const real = (p: string): string => (lstatSync(p, { throwIfNoEntry: false }) || dirname(p) === p ? realpathSync(p) : join(real(dirname(p)), basename(p)));
+const within = (p: string, dir: string) => [p, real(p)].some((a) => [dir, real(dir)].some((d) => !/^\.\.(\/|$)/.test(relative(d, a))));
 
 export function parseConfig(raw: any, base: string): Config {
   const errs: string[] = [];
@@ -47,6 +51,7 @@ export function parseConfig(raw: any, base: string): Config {
   check(posInt(stallMinutes), "stallMinutes: positive integer");
   for (const k of ["workspaceRoot", "reposRoot"]) check(raw[k] === undefined || str(raw[k]), `${k}: non-empty string`);
   const reposRoot = expand(str(raw.reposRoot) ? raw.reposRoot : "~/agent-repos", base);
+  const workspaceRoot = expand(str(raw.workspaceRoot) ? raw.workspaceRoot : "~/agent-ws", base);
   check(raw.lanes === undefined, "lanes: replaced by sources + repos + defaults (see docs/upgrading.md)");
   const defaults = raw.defaults ?? {};
   check(obj(defaults) && defaults.path === undefined, "defaults: object without path");
@@ -58,6 +63,7 @@ export function parseConfig(raw: any, base: string): Config {
   check(obj(raw.repos) || (Array.isArray(raw.repos) && raw.repos.length > 0), `repos: non-empty ${shape}`);
   const repos: Record<string, Repo> = {};
   const keys: string[] = [];
+  const ats: Record<string, string> = {};
   for (const [i, e] of (Array.isArray(raw.repos) ? raw.repos : []).entries()) {
     const { name: key, ...o } = typeof e === "string" ? { name: e } : obj(e) ? e : { name: undefined };
     check(typeof e === "string" || obj(e), `repos[${i}]: ${shape}`);
@@ -92,9 +98,18 @@ export function parseConfig(raw: any, base: string): Config {
     check(v.feedback === undefined || (obj(v.feedback) && Object.keys(v.feedback).every((k) => k === "maxRounds") && rounds(r.feedbackRounds)), `${at}.feedback: { maxRounds: integer 1-10 }`);
     repos[key] = r;
     keys.push(key);
+    ats[key] = at;
   }
   check(new Set(keys.map((k) => k.toLowerCase())).size === keys.length, "repos: names must be unique ignoring case");
   check(new Set(Object.values(repos).map((r) => r.path)).size === keys.length, "repos: paths must be unique");
+  // Cleanup deletes `<ID>.*` in a repo's workspace dir, so no base clone may sit there.
+  for (const r of Object.values(repos)) {
+    try {
+      check(!keys.some((k) => within(r.path, join(workspaceRoot, k))), `${ats[r.key]}.path: must be outside every repo's <workspaceRoot>/<owner>/<name>`);
+    } catch (e) {
+      check(false, `${ats[r.key]}.path: cannot resolve: ${(e as NodeJS.ErrnoException).code ?? (e as Error).message}`);
+    }
+  }
 
   check(Array.isArray(raw.sources) && raw.sources.length > 0, "sources: non-empty array required");
   const sources: Source[] = (Array.isArray(raw.sources) ? raw.sources : []).map((r: any, i: number) => {
@@ -134,7 +149,7 @@ export function parseConfig(raw: any, base: string): Config {
   const digest = /^([^#]+)#([1-9]\d{0,9})$/.exec(typeof prs.digestIssue === "string" ? prs.digestIssue : "");
   check(prs.digestIssue === undefined || (digest && keys.includes(digest[1]!)), `prs.digestIssue: "owner/name#<issue number>" for a repo in repos`);
   if (errs.length) throw new Error(`invalid config:\n  ${errs.join("\n  ")}`);
-  return { host: raw.host, defaultHost, pollIntervalMs, workspaceRoot: expand(raw.workspaceRoot ?? "~/agent-ws", base), reposRoot, tmuxSession, maxConcurrent, maxInReview: raw.maxInReview, stallMinutes, repos, sources, ...(obj(intake) && { intake: { enabled: intake.enabled, host: intake.host } }), ...(judge && { judge }), prs: { staleDays: prs.staleDays, ...(prs.digestIssue && { digestIssue: prs.digestIssue }) } };
+  return { host: raw.host, defaultHost, pollIntervalMs, workspaceRoot, reposRoot, tmuxSession, maxConcurrent, maxInReview: raw.maxInReview, stallMinutes, repos, sources, ...(obj(intake) && { intake: { enabled: intake.enabled, host: intake.host } }), ...(judge && { judge }), prs: { staleDays: prs.staleDays, ...(prs.digestIssue && { digestIssue: prs.digestIssue }) } };
 }
 
 export const repoDir = (cfg: Config, key: string) => join(cfg.workspaceRoot, key);

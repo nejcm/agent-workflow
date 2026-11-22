@@ -519,7 +519,10 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
         // rm never follows symlinks.
         await write(x.io, ["rm", "-rf", "--one-file-system", "--", wt], undefined, SLOW_SECS);
         // After the clone, so a delete that fails keeps the transcripts too.
-        for (const ext of [".claude", ".codex", ".codex-account", ".tmpdir", ".prompt.md", ".sh", ".ended", ".phases.json", ".merge", ".pr", ".question", ".feedback", ".stall", ".findings", ".claim", ".agent", ".source", ".reassigned", ".ready", ".handoff"]) remove(x.io, join(dir, id + ext));
+        for (const ext of [".claude", ".codex", ".tmpdir"]) remove(x.io, join(dir, id + ext));
+        for (const f of readdirSync(dir)) {
+          if (f.startsWith(`${id}.`) && lstatSync(join(dir, f), { throwIfNoEntry: false })?.isFile()) remove(x.io, join(dir, f));
+        }
       });
     }
   }

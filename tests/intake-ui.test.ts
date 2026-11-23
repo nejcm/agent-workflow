@@ -3,7 +3,8 @@ import { expect, test } from "bun:test";
 import { utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { MIGRATIONS, openDb } from "../src/db";
-import { intakeInfo, nextRun, tickAt } from "../src/ui/intake";
+import { header, type Line, palette } from "../src/ui/dash-view";
+import { type IntakeInfo, intakeChip, intakeInfo, intakeScreen, nextRun, tickAt } from "../src/ui/intake";
 import { config, fakeIo, repoFiles, root, setBaseSha, useTempRoot } from "./helpers";
 
 useTempRoot();
@@ -100,4 +101,61 @@ test("info: an invalid config or a missing rule is a problem on the rule; no int
   i = (await s.info())!;
   expect(i.rules[1]!.problem).toBe("no rule deps in .tender/config.yaml");
   expect(await intakeInfo(config(), s.io, NOW)).toBeUndefined();
+});
+
+const C = palette({});
+const M = palette({ NO_COLOR: "1" });
+const text = (l: Line) => l.map((x) => x.t).join("");
+const INFO: IntakeInfo = {
+  host: "box",
+  here: true,
+  timer: "ok",
+  beat: NOW - 5 * MIN,
+  judge: { agent: "claude", model: "opus", maxPerRun: 5, last: NOW - 3 * MIN },
+  rules: [
+    { id: "acme/web:errs", repo: "acme/web", name: "errs", enabled: true, every: "1h", mode: "auto", ranAt: NOW - 30 * MIN, error: "errs.sh exited 1: boom", next: NOW + 38 * MIN, due: false, filed: 3, open: 1, reopened: 1, gone: 1, still: 0 },
+    { id: "acme/web:deps", repo: "acme/web", name: "deps", enabled: true, every: "1d", mode: "judge(off)", next: NOW + 8 * MIN, due: true },
+    { id: "acme/web:lint", repo: "acme/web", name: "lint", enabled: false, every: "1h", mode: "shadow" },
+  ],
+  errors: 1,
+};
+
+test("view: every line is exactly n columns at any width, colour or not, and the selected rule's error is in the footer", () => {
+  for (const P of [C, M])
+    for (const n of [120, 80, 40, 20])
+      for (const info of [INFO, { ...INFO, here: false, errors: 0 }, { ...INFO, timer: "late" as const }, undefined]) {
+        const ls = intakeScreen(info, 0, "", NOW, n, 14, P);
+        expect(ls).toHaveLength(14);
+        for (const l of ls) expect(Bun.stringWidth(text(l))).toBe(n);
+      }
+  const wide = intakeScreen(INFO, 0, "", NOW, 120, 14, C).map(text);
+  expect(wide[0]).toContain("on box (this host)");
+  expect(wide[0]).toContain("timer ok");
+  expect(wide.join("\n")).toContain("gone/still");
+  expect(wide.at(-1)).toContain("errs: errs.sh exited 1: boom");
+  expect(wide.find((l) => l.includes("acme/web:lint"))).toContain("not enabled");
+  expect(wide.find((l) => l.includes("acme/web:deps"))).toContain("due ~12:15");
+  expect(intakeScreen(INFO, 0, "", NOW, 120, 14, C).flat().some((x) => x.t.trim() === "✕" && x.fg === C.bad)).toBe(true);
+  const narrow = intakeScreen(INFO, 0, "", NOW, 40, 14, C).map(text).join("\n");
+  expect(narrow).not.toContain("mode");
+  expect(intakeScreen(INFO, 1, "", NOW, 80, 14, C).map(text).at(-1)).toContain("i/esc back");
+  expect(intakeScreen(INFO, 0, "", NOW, 120, 14, M).flat().some((x) => x.fg || x.bg)).toBe(false);
+  const late = intakeScreen({ ...INFO, timer: "none" }, 0, "", NOW, 120, 14, C).map(text).join("\n");
+  expect(late).toContain("timer not running");
+  expect(late).toContain("due, timer not running");
+  expect(late).toContain("in 38m if the timer runs");
+  expect(intakeScreen({ ...INFO, here: false }, 0, "", NOW, 120, 14, C).map(text)[0]).toContain("intake runs on box");
+});
+
+test("chip: next run, errors or a stalled timer in warn; dropped before the clock on a narrow header", () => {
+  const ok = { ...INFO, errors: 0, rules: INFO.rules.map((r) => ({ ...r, error: undefined })) };
+  expect(text(intakeChip(ok, C))).toBe(" ⏲ intake ~12:15 ");
+  expect(intakeChip(INFO, C)[0]).toMatchObject({ t: " intake ✕1 ", fg: C.warn });
+  expect(text(intakeChip({ ...ok, timer: "late" }, C))).toBe(" intake timer? ");
+  expect(intakeChip(undefined, C)).toEqual([]);
+  for (const n of [160, 60, 30]) {
+    const top = text(header([], "box", "12:00:00", 2, n, C, undefined, intakeChip(ok, C)));
+    expect(Bun.stringWidth(top)).toBe(n);
+    expect(top.includes("intake")).toBe(n === 160);
+  }
 });

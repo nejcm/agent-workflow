@@ -63,6 +63,20 @@ test("movement scrolls the transcript within its range while it has focus", () =
   expect(reduce(t, "up", 3, 0).back).toBe(0);
 });
 
+test("i opens the intake view, j/k move its rule, esc or i leave it", () => {
+  expect(action({ name: "i" })).toBe("intake");
+  const open = reduce(v({ tree: { sel: 1, detail: false } }), "intake", 3);
+  expect(open).toEqual(v({ intake: { sel: 0 } }));
+  expect(reduce(open, "down", 3, 0, [], 2).intake).toEqual({ sel: 1 });
+  expect(reduce({ ...open, intake: { sel: 1 } }, "down", 3, 0, [], 2).intake).toEqual({ sel: 1 });
+  expect(reduce(open, "last", 3, 0, [], 0).intake).toEqual({ sel: 0 });
+  expect(reduce(open, "down", 3).sel).toBe(0);
+  expect(reduce(open, "back", 3)).toEqual(v());
+  expect(reduce({ ...open, help: true }, "back", 3)).toEqual(open);
+  expect(reduce(open, "intake", 3)).toEqual(v());
+  expect(reduce(open, "tree", 3).intake).toBeUndefined();
+});
+
 test("reselect follows the ticket across refreshes, else clamps", () => {
   const rs = [row({ id: "A" }), row({ id: "B" }), row({ id: "C" })];
   expect(reselect("acme/web/C", rs, 0)).toBe(2);

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { AGENTS, agentOf, INBOX_WAITER, type Lookup } from "./agents";
 import { resolve, type State } from "./state";
 import type { AgentName, Io, Repo, Ticket, TicketComment, Tracker } from "../types";
-import { mtime, put, read, readRun, removeRun, write, writeRun } from "../util";
+import { mtime, put, read, readRun, removeRun, SYSTEMD, write, writeRun } from "../util";
 
 const MAX_QUESTION_BYTES = 64 * 1024;
 const MAX_QUESTION_CHARS = 8000;
@@ -108,6 +108,7 @@ export async function deliveryPane(io: Io, agent: AgentName, win: string, script
 
 // Seen from the host: a session launched without the hook, or whose last turn ended without Stop, has no waiter and gets the paste.
 async function waiterLive(io: Io, unit: string) {
+  if (!SYSTEMD) return false;
   const cg = (await io.run(["systemctl", "--user", "show", "-P", "ControlGroup", unit])).out.trim();
   return cg.startsWith("/") && (await io.run(["pgrep", "-f", "--cgroup", cg, INBOX_WAITER])).code === 0;
 }

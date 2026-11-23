@@ -181,3 +181,6 @@ export const labelPriority = (labels: string[]) => {
   return ranks.length ? Math.min(...ranks) : undefined;
 };
 export const byPriority = (a: Ticket, b: Ticket) => (a.priority ?? 5) - (b.priority ?? 5);
+
+/** Sessions run in systemd scopes on Linux only; elsewhere the tmux window is the only handle. */
+export const SYSTEMD = process.platform === "linux";

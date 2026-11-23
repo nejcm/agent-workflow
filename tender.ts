@@ -42,7 +42,7 @@ export const spawnRun: Run = async (argv, cwd, secs = 60, { env, max = Infinity 
   const start = performance.now();
   const cmd = argv.slice(0, 3).join(" ");
   const clean = Object.fromEntries(Object.entries(env ?? process.env).filter(([k]) => !LOCAL_GIT.has(k)));
-  const p = Bun.spawn(["timeout", "-k", "5", String(secs), ...argv], { cwd, env: clean, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const p = Bun.spawn([process.platform === "darwin" ? "gtimeout" : "timeout", "-k", "5", String(secs), ...argv], { cwd, env: clean, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const readers = [p.stdout.getReader(), p.stderr.getReader()];
   let over = false;
   const text = async (r: ReadableStreamDefaultReader<Uint8Array>) => {

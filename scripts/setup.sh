@@ -44,7 +44,7 @@ for a in "$@"; do
   esac
 done
 
-for c in bun git gh tmux timeout systemd-run systemctl pgrep; do command -v "$c" >/dev/null || { echo "MISSING: $c"; exit 1; }; done
+for c in bun git gh tmux pgrep $([ "$(uname)" = Darwin ] && echo gtimeout flock || echo timeout systemd-run systemctl); do command -v "$c" >/dev/null || { echo "MISSING: $c"; exit 1; }; done
 gh auth status >/dev/null 2>&1 || { echo "MISSING: gh login (gh auth login)"; exit 1; }
 
 [ -e .env ] || { cp .env.example .env && echo "write .env (set LINEAR_API_KEY if you use Linear)"; }

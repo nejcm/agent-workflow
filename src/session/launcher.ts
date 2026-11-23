@@ -8,7 +8,7 @@ import { canonical, sameRepo } from "../github";
 import { typeFor } from "../config/profile";
 import { configCache, loadSession, promptFor } from "../config/repo-config";
 import type { AgentConfig, Config, Io, Repo, Session, Source, TaskType, Ticket, Tracker } from "../types";
-import { GIT, inDir, inRun, passLocked, put, quote, read, remove, SLOW_SECS, write } from "../util";
+import { GIT, inDir, inRun, passLocked, put, quote, read, remove, SLOW_SECS, SYSTEMD, write } from "../util";
 import { allocatePorts, type ComposeJob, composeProject, portGrants, requireLandlock } from "./needs";
 
 export const render = (tpl: string, vars: Record<string, string>) => tpl.replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? m);
@@ -27,7 +27,7 @@ export const scopeUnit = (cfg: Config, key: string, id: string) => `${scopePrefi
 
 /** SIGKILLs the session's scope, setsid'd children included (kill-window leaves them); throws if systemd --user is unreachable. */
 export const stopScope = (cfg: Config, io: Io, key: string, id: string) =>
-  write(io, ["systemctl", "--user", "kill", "--signal=KILL", scopeUnit(cfg, key, id)]).catch((e) => {
+  !SYSTEMD ? Promise.resolve() : write(io, ["systemctl", "--user", "kill", "--signal=KILL", scopeUnit(cfg, key, id)]).catch((e) => {
     if (!/ not loaded\.$/.test(e.message)) throw e;
   });
 
@@ -41,6 +41,7 @@ const cgroupOf = (pid: string) => {
 
 /** Stops this workspace's scopes that hold no pane of its tmux session; must run before any start this pass. */
 export async function sweepScopes(cfg: Config, io: Io, cgroup = cgroupOf) {
+  if (!SYSTEMD) return;
   // Units first: a scope listed already holds its pane's pid, so a session starting meanwhile is never taken for an orphan.
   const out = await read(io, ["systemctl", "--user", "list-units", "--type=scope", "--plain", "--no-legend", `${scopePrefix(cfg)}:*`]);
   const pids = await read(io, ["tmux", "list-panes", "-s", "-t", `=${cfg.tmuxSession}`, "-F", "#{pane_pid}"]);
@@ -58,7 +59,7 @@ export const socketWarning = (tmp: string) => {
 };
 
 /** `services`: the `<ID>.compose` dir whose project the script starts, on the host, before the agent. */
-export function launcher(l: Pick<Session, "agent" | "sandbox" | "path" | "model" | "effort">, wt: string, promptFile: string, unit: string, tenderDir: string, bun: string, ports: number[] = [], services?: string) {
+export function launcher(l: Pick<Session, "agent" | "sandbox" | "path" | "model" | "effort">, wt: string, promptFile: string, unit: string, tenderDir: string, bun: string, ports: number[] = [], services?: string, systemd = SYSTEMD) {
   const prompt = `"$(cat ${quote(promptFile)})"`;
   const nono = l.sandbox === "nono";
   const git = join(l.path, ".git");
@@ -71,8 +72,8 @@ export function launcher(l: Pick<Session, "agent" | "sandbox" | "path" | "model"
   // A private XDG cache: the host's ~/.cache (Claude's claude-cli-nodejs included) stays out of the sandbox.
   const box = nono ? `unset CLAUDE_CODE_OAUTH_TOKEN\nexport GH_CONFIG_DIR=${quote(wt)}.gh XDG_CACHE_HOME=${quote(join(tmp, "cache"))} TENDER_BUN=${quote(bun)}\n` : "";
   // systemd 258+ expands $$ and ${VAR} in a scope's argv (prompt, Stop hook); the flag exists only since 254. Dropped only when help works and lacks it.
-  const expand = `expand=--expand-environment=no; help=$(systemd-run --help 2>/dev/null) && [[ $help != *--expand-environment=* ]] && expand=\n`;
-  const scope = ["systemd-run", "--user", "--scope", "--quiet", "--collect", "$expand", "--unit", quote(unit), "--"];
+  const expand = !systemd ? "" : `expand=--expand-environment=no; help=$(systemd-run --help 2>/dev/null) && [[ $help != *--expand-environment=* ]] && expand=\n`;
+  const scope = !systemd ? [] : ["systemd-run", "--user", "--scope", "--quiet", "--collect", "$expand", "--unit", quote(unit), "--"];
   const vars = ports.length ? `export ${ports.map((p, i) => `TENDER_PORT_${i}=${p}`).join(" ")}\n` : "";
   // From `/`, so bun reads no bunfig.toml or .env the agent wrote in the clone.
   const up = services ? `(cd / && exec ${quote(bun)} --no-env-file ${quote(join(tenderDir, "src/session/needs.ts"))} ${quote(services)}) || exit 1\n` : "";

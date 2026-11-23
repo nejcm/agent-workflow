@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import type { KeyEvent } from "@opentui/core";
 import { repoDir } from "../config/config";
 import { helpOverlay, type Line, type Pane, palette, screen, sortRows } from "./dash-view";
-import { type IntakeInfo, intakeChip, intakeInfo, intakeScreen } from "./intake";
+import { type IntakeInfo, intakeChip, intakeInfo, intakeScreen, ruleError } from "./intake";
 import { PR_URL } from "../github";
 import { type Row, reviewLimit, snapshot } from "./status";
 import { follower } from "./tail";
@@ -21,8 +21,8 @@ export interface View {
   /** Transcript rows scrolled up from the end; 0 follows new events. */
   back: number;
   tree?: TreeSelection;
-  /** The selected rule while the intake view is open. */
-  intake?: { sel: number };
+  /** The selected rule while the intake view is open; `detail` scrolls its full error. */
+  intake?: { sel: number; detail?: number };
 }
 
 const KEYS = new Map<string, Action>([
@@ -53,11 +53,22 @@ export function action(k: { name: string; shift?: boolean; ctrl?: boolean; meta?
 }
 
 /** Applies `a` on `n` tickets, laid-out `cards`, `rules` intake rows, or transcript scroll bounded by `maxBack`. */
-export function reduce(v: View, a: Action, n: number, maxBack = Infinity, cards: ReturnType<typeof treeLayout>["cards"] = [], rules = 0): View {
+export function reduce(v: View, a: Action, n: number, maxBack = Infinity, cards: ReturnType<typeof treeLayout>["cards"] = [], rules = 0, errored = false): View {
   const last = Math.max(0, n - 1);
   if (a === "intake") return { ...v, intake: v.intake ? undefined : { sel: 0 }, tree: undefined };
   if (a === "tree") return { ...v, tree: v.tree ? undefined : { sel: 0, detail: false }, intake: undefined, pane: "list", max: false, back: 0 };
+  if (v.intake?.detail !== undefined) {
+    const d = v.intake.detail;
+    const to = (x: number) => ({ ...v, intake: { ...v.intake!, detail: Math.max(0, Math.min(maxBack, x)) } });
+    if (a === "down") return to(d + 1);
+    if (a === "up") return to(d - 1);
+    if (a === "first") return to(0);
+    if (a === "last") return to(maxBack);
+    if (a === "focus" || a === "back") return { ...v, intake: { sel: v.intake.sel } };
+    return v;
+  }
   if (v.intake) {
+    if (a === "focus") return errored ? { ...v, intake: { ...v.intake, detail: 0 } } : v;
     const pick = (sel: number) => ({ ...v, intake: { sel: Math.max(0, Math.min(rules - 1, sel)) } });
     if (a === "down") return pick(v.intake.sel + 1);
     if (a === "up") return pick(v.intake.sel - 1);
@@ -246,7 +257,7 @@ export async function dashboard(cfg: Config, io: Io, interval: number) {
     const sel = rs[view.sel];
     const model = { ...view, rs, host: cfg.host, at, every: interval, note, chip: intakeChip(info, P), msg, events: tail.lines, empty: tail.path ? "no events yet" : "no transcript yet", ctx: { now: Date.now(), home, wt: sel ? join(repoDir(cfg, sel.repo), sel.id) : "" } };
     const out = view.intake
-      ? { lines: ((l) => (view.help ? helpOverlay(l, width, P) : l))(intakeScreen(info, view.intake.sel, msg, Date.now(), width, height, P)), maxBack: 0 }
+      ? ((o) => ({ ...o, lines: view.help ? helpOverlay(o.lines, width, P) : o.lines }))(intakeScreen(info, view.intake.sel, msg, Date.now(), width, height, P, view.intake.detail))
       : view.tree
         ? treeScreen(model, width, height, P, view.tree)
         : screen(model, width, height, P, memo);
@@ -332,7 +343,7 @@ export async function dashboard(cfg: Config, io: Io, interval: number) {
     if (a === "refresh") return void refresh().then((ran) => ran || say("refresh already running"));
     const row = rs[view.sel];
     const cards = view.tree && row ? treeLayout(ticketTree(row), r.width).cards : [];
-    view = reduce(view, a, rs.length, maxBack, cards, info?.rules.length ?? 0);
+    view = reduce(view, a, rs.length, maxBack, cards, info?.rules.length ?? 0, !!(view.intake && ruleError(info, view.intake.sel)));
     paint();
   });
   r.on("resize", paint);

@@ -75,6 +75,15 @@ test("i opens the intake view, j/k move its rule, esc or i leave it", () => {
   expect(reduce({ ...open, help: true }, "back", 3)).toEqual(open);
   expect(reduce(open, "intake", 3)).toEqual(v());
   expect(reduce(open, "tree", 3).intake).toBeUndefined();
+  expect(reduce(open, "focus", 3, 4, [], 2)).toEqual(open);
+  const detail = reduce(open, "focus", 3, 4, [], 2, true);
+  expect(detail.intake).toEqual({ sel: 0, detail: 0 });
+  expect(reduce(detail, "down", 3, 4).intake?.detail).toBe(1);
+  expect(reduce({ ...detail, intake: { sel: 0, detail: 4 } }, "down", 3, 4).intake?.detail).toBe(4);
+  expect(reduce(detail, "up", 3, 4).intake?.detail).toBe(0);
+  expect(reduce(detail, "last", 3, 4).intake?.detail).toBe(4);
+  expect(reduce(detail, "back", 3, 4)).toEqual(open);
+  expect(reduce(detail, "focus", 3, 4)).toEqual(open);
 });
 
 test("reselect follows the ticket across refreshes, else clamps", () => {

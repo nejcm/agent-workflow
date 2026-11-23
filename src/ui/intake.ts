@@ -61,9 +61,9 @@ export const modeOf = (rule: IntakeRule, cfg: Config): Mode => (rule.autoLabel.l
 
 const origin = async (io: Io, path: string) => (await read(io, [...GIT, "-C", path, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"])).trim().replace(/^origin\//, "");
 
-// Local git only: the base is tender.json's or the clone's origin/HEAD, never a fetch, a partial clone's lazy fetch or the GitHub API.
+// Local git only: the base is tender.json's or the clone's origin/HEAD, never a fetch or the GitHub API. An empty GIT_ALLOW_PROTOCOL stops a partial clone's lazy fetch on git < 2.45 too.
 async function definitions(cfg: Config, parent: Io) {
-  const io: Io = { ...parent, run: (argv, cwd, secs, o) => parent.run(argv, cwd, secs, { ...o, env: { ...((o?.env ?? process.env) as Record<string, string>), GIT_NO_LAZY_FETCH: "1" } }) };
+  const io: Io = { ...parent, run: (argv, cwd, secs, o) => parent.run(argv, cwd, secs, { ...o, env: { ...((o?.env ?? process.env) as Record<string, string>), GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" } }) };
   const out = new Map<string, { rules?: IntakeRule[]; problem?: string }>();
   for (const r of Object.values(cfg.repos)) {
     try {
@@ -167,24 +167,37 @@ export function intakeChip(info: IntakeInfo | undefined, P: Palette): Line {
   return [sp(P, "dim", ` ⏲ intake${Number.isFinite(next) ? ` ~${hhmm(next)}` : ""} `, bg)];
 }
 
-function nextText(r: RuleInfo, info: IntakeInfo, now: number) {
-  if (!info.here || !r.enabled || r.problem || r.next === undefined) return "-";
+// Full and short forms: a value is never cut, so narrow terminals get the short one.
+function nextText(r: RuleInfo, info: IntakeInfo, now: number, short: boolean) {
+  if (!r.enabled) return short ? "off" : "not enabled";
+  if (!info.here || r.problem || r.next === undefined) return "-";
   if (info.timer === "ok") return `${r.due ? "due " : ""}~${hhmm(r.next)}`;
+  if (short) return r.due ? "due, no timer" : `in ${dur(r.next - now)}?`;
   return r.due ? "due, timer not running" : `in ${dur(r.next - now)} if the timer runs`;
+}
+
+const RULE_MIN = 12;
+
+// The rule's repo is cut before its name, so rows stay distinguishable.
+function ruleText(r: RuleInfo, w: number) {
+  if (Bun.stringWidth(r.id) <= w) return r.id;
+  const keep = w - Bun.stringWidth(r.name) - 2;
+  return keep > 0 ? `${r.repo.slice(0, keep)}…:${r.name}` : r.name;
 }
 
 type Col = { head: string; w: number; cell: (r: RuleInfo) => string };
 
-// Fixed columns first; rule and next share what is left, so no column falls off the edge at 50+.
+// Fixed columns first; next gets its widest value, the rule what is left.
 function columns(info: IntakeInfo, n: number, now: number): Col[] {
   const run = (f: (r: RuleInfo) => string) => (r: RuleInfo) => (info.here && r.enabled && !r.problem ? f(r) : "-");
   const num = (v?: number) => String(v ?? 0);
-  const rule: Col = { head: "rule", w: 0, cell: (r) => r.id };
-  const next: Col = { head: "next", w: 0, cell: (r) => (r.enabled ? nextText(r, info, now) : "not enabled") };
+  const rule: Col = { head: "rule", w: 0, cell: (r) => ruleText(r, rule.w) };
+  let short = false;
+  const next: Col = { head: "next", w: 0, cell: (r) => nextText(r, info, now, short) };
   const err: Col = { head: "✕", w: 1, cell: (r) => (r.error || (r.enabled && r.problem) ? "✕" : "") };
   const filed: Col = { head: n >= 80 ? "open/filed" : "o/f", w: n >= 80 ? 10 : 5, cell: run((r) => `${num((r.open ?? 0) + (r.reopened ?? 0))}/${num(r.filed)}`) };
   const mode: Col = { head: "mode", w: 10, cell: (r) => r.mode ?? "-" };
-  const last: Col = { head: "last", w: 11, cell: run((r) => (r.ranAt === undefined ? "never" : when(r.ranAt, now))) };
+  const last: Col = n >= 80 ? { head: "last", w: 11, cell: run((r) => (r.ranAt === undefined ? "never" : when(r.ranAt, now))) } : { head: "last", w: 5, cell: run((r) => (r.ranAt === undefined ? "never" : now - r.ranAt < 20 * 3600_000 ? hhmm(r.ranAt) : new Date(r.ranAt).toISOString().slice(5, 10))) };
   const cols =
     n < 50
       ? [rule, next, err]
@@ -192,19 +205,29 @@ function columns(info: IntakeInfo, n: number, now: number): Col[] {
         ? [rule, mode, last, next, err, filed]
         : [rule, mode, { head: "every", w: 5, cell: (r: RuleInfo) => r.every ?? "-" }, last, next, err, filed, { head: "reopened", w: 8, cell: run((r) => num(r.reopened)) }, { head: "gone/still", w: 10, cell: run((r) => `${num(r.gone)}/${num(r.still)}`) }];
   const avail = n - 1 - cols.reduce((a, c) => a + c.w + 1, 0);
-  next.w = Math.min(n < 50 ? 12 : n < 110 ? 22 : 30, Math.max(6, avail - 8));
+  const widest = () => Math.max(4, ...info.rules.map((r) => Bun.stringWidth(nextText(r, info, now, short))));
+  next.w = widest();
+  if (avail - next.w < RULE_MIN) (short = true), (next.w = widest());
   rule.w = Math.max(1, avail - next.w);
   return cols;
 }
 
-/** The intake view (`i`): globals, the rules (scrolled to keep the selected one in view) and its full error below them; every line exactly `n` columns. */
-export function intakeScreen(info: IntakeInfo | undefined, sel: number, msg: string, now: number, n: number, h: number, P: Palette): Line[] {
-  if (h <= 0) return [];
+/** The selected rule's failure, if any: its last run's error, else why an enabled rule could not be read. */
+export const ruleError = (info: IntakeInfo | undefined, sel: number) => {
+  const r = info?.rules[Math.max(0, Math.min(sel, info.rules.length - 1))];
+  return r && (r.error ?? (r.enabled ? r.problem : undefined));
+};
+
+/** The intake view (`i`): globals, the rules (scrolled to keep the selected one in view) and its error below them, or with `detail` the whole error scrolled by that many lines; every line exactly `n` columns. */
+export function intakeScreen(info: IntakeInfo | undefined, sel: number, msg: string, now: number, n: number, h: number, P: Palette, detail?: number): { lines: Line[]; maxBack: number } {
+  if (h <= 0) return { lines: [], maxBack: 0 };
   const bg = { bg: P.head };
   const mark: Span = P.mono ? { t: " intake ", b: true, r: true } : { t: " intake ", fg: P.ink, bg: P.accent, b: true };
   const bodyH = Math.max(0, h - 2);
   let body: Line[] = [];
   let top: Line = [mark];
+  let maxBack = 0;
+  let hint = " j/k select  i/esc back  r refresh  ? help  q quit";
   if (!info) body.push([sp(P, "dim", " no intake in tender.json")]);
   else {
     const where = sp(P, "dim", ` ${info.here ? `on ${clean(info.host, 40)} (this host)` : `intake runs on ${clean(info.host, 40)}; run data is there`} `, bg);
@@ -220,25 +243,36 @@ export function intakeScreen(info: IntakeInfo | undefined, sel: number, msg: str
     ];
     const cols = columns(info, n, now);
     const cells = (texts: string[], st: Omit<Span, "t">, tone: (i: number) => Parameters<typeof sp>[1]) => [sp(P, "fg", " ", st), ...texts.flatMap((t, i) => [...clip([sp(P, tone(i), clean(t, 300), st)], cols[i]!.w, st), sp(P, "fg", " ", st)])];
+    sel = Math.max(0, Math.min(sel, info.rules.length - 1));
     const r = info.rules[sel];
-    const why = r && (r.error ?? (r.enabled ? r.problem : undefined));
-    const lead = bodyH >= pre.length + 2 ? pre : [];
-    const room = bodyH - lead.length - 1;
-    const full = why ? wrap(clean(`${r.name}: ${why}`, 400), Math.max(1, n - 2)) : [];
-    const detail = full.slice(0, Math.max(0, room - 2));
-    if (detail.length < full.length && !msg) msg = `${r!.name}: ${why}`;
-    const vis = Math.max(1, room - (detail.length ? detail.length + 1 : 0));
-    const start = scroll(sel, info.rules.length, vis);
-    const rows = info.rules.slice(start, start + vis).map((x, i) => {
-      const st = start + i === sel ? { bg: P.sel, r: P.mono ? true : undefined } : {};
-      return cells(cols.map((c) => c.cell(x)), st, (k) => (!x.enabled ? "dim" : cols[k]!.head === "✕" ? "bad" : "fg"));
-    });
-    body = [...lead, cells(cols.map((c) => c.head), {}, () => "dim"), ...(rows.length ? rows : [[sp(P, "dim", " no rules")]])];
-    if (detail.length) body.push(...Array.from({ length: Math.max(1, bodyH - body.length - detail.length) }, () => []), ...detail.map((t) => [sp(P, "warn", ` ${t}`)]));
+    const why = ruleError(info, sel);
+    const full = why ? wrap(clean(`${r!.name}: ${why}`, 400), Math.max(1, n - 2)).map((t) => [sp(P, "warn", ` ${t}`)]) : [];
+    if (detail !== undefined && full.length) {
+      maxBack = Math.max(0, full.length - bodyH);
+      const at = Math.min(detail, maxBack);
+      body = full.slice(at, at + bodyH);
+      hint = ` j/k scroll ${at + 1}-${Math.min(full.length, at + bodyH)}/${full.length}  ⏎/esc close`;
+    } else {
+      // The globals give way first, then the rows, to the selected rule's error.
+      const fitsWith = (lead: number) => bodyH - lead - 1 - 1 - 1 >= full.length;
+      const lead = bodyH >= pre.length + 2 && (!full.length || fitsWith(pre.length)) ? pre : [];
+      if (!lead.length && info.problem && !msg) msg = info.problem;
+      const room = bodyH - lead.length - 1;
+      const shown = full.slice(0, Math.max(0, room - 2));
+      if (full.length) hint = " ⏎ full error  j/k select  i/esc back";
+      const vis = Math.max(1, room - (shown.length ? shown.length + 1 : 0));
+      const start = scroll(sel, info.rules.length, vis);
+      const rows = info.rules.slice(start, start + vis).map((x, i) => {
+        const st = start + i === sel ? { bg: P.sel, r: P.mono ? true : undefined } : {};
+        return cells(cols.map((c) => c.cell(x)), st, (k) => (!x.enabled ? "dim" : cols[k]!.head === "✕" ? "bad" : "fg"));
+      });
+      body = [...lead, cells(cols.map((c) => c.head), {}, () => "dim"), ...(rows.length ? rows : [[sp(P, "dim", " no rules")]])];
+      if (shown.length) body.push(...Array.from({ length: Math.max(1, bodyH - body.length - shown.length) }, () => []), ...shown);
+    }
   }
-  const footer = msg ? [sp(P, "warn", ` ${clean(msg, 300)} `, { b: true })] : [sp(P, "dim", " j/k select  i/esc back  r refresh  ? help  q quit")];
+  const footer = msg ? [sp(P, "warn", ` ${clean(msg, 300)} `, { b: true })] : [sp(P, "dim", hint)];
   const lines = [clip(top, n, bg), ...body.slice(0, bodyH).map((l) => clip(l, n))];
   while (lines.length < h - 1) lines.push(clip([], n));
   if (h >= 2) lines.push(clip(footer, n));
-  return lines.slice(0, h);
+  return { lines: lines.slice(0, h), maxBack };
 }

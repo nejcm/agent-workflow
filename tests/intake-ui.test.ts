@@ -105,6 +105,7 @@ test("info: an invalid config or a missing rule is a problem on the rule; no int
   expect(await intakeInfo(config(), s.io, NOW)).toBeUndefined();
 });
 
+const scr = (...a: Parameters<typeof intakeScreen>) => intakeScreen(...a).lines;
 const C = palette({});
 const M = palette({ NO_COLOR: "1" });
 const text = (l: Line) => l.map((x) => x.t).join("");
@@ -126,27 +127,27 @@ test("view: every line is exactly n columns at any width, colour or not, and the
   for (const P of [C, M])
     for (const n of [120, 80, 40, 20])
       for (const info of [INFO, { ...INFO, here: false, errors: 0 }, { ...INFO, timer: "late" as const }, undefined]) {
-        const ls = intakeScreen(info, 0, "", NOW, n, 14, P);
+        const ls = scr(info, 0, "", NOW, n, 14, P);
         expect(ls).toHaveLength(14);
         for (const l of ls) expect(Bun.stringWidth(text(l))).toBe(n);
       }
-  const wide = intakeScreen(INFO, 0, "", NOW, 120, 14, C).map(text);
+  const wide = scr(INFO, 0, "", NOW, 120, 14, C).map(text);
   expect(wide[0]).toContain("on box (this host)");
   expect(wide[0]).toContain("timer ok");
   expect(wide.join("\n")).toContain("gone/still");
   expect(wide.slice(1, -1).join("\n")).toContain("errs: errs.sh exited 1: boom");
   expect(wide.find((l) => l.includes("acme/web:lint"))).toContain("not enabled");
   expect(wide.find((l) => l.includes("acme/web:deps"))).toContain(`due ~${hm(NOW + 8 * MIN)}`);
-  expect(intakeScreen(INFO, 0, "", NOW, 120, 14, C).flat().some((x) => x.t.trim() === "✕" && x.fg === C.bad)).toBe(true);
-  const narrow = intakeScreen(INFO, 0, "", NOW, 40, 14, C).map(text).join("\n");
+  expect(scr(INFO, 0, "", NOW, 120, 14, C).flat().some((x) => x.t.trim() === "✕" && x.fg === C.bad)).toBe(true);
+  const narrow = scr(INFO, 0, "", NOW, 40, 14, C).map(text).join("\n");
   expect(narrow).not.toContain("mode");
-  expect(intakeScreen(INFO, 1, "", NOW, 80, 14, C).map(text).at(-1)).toContain("i/esc back");
-  expect(intakeScreen(INFO, 0, "", NOW, 120, 14, M).flat().some((x) => x.fg || x.bg)).toBe(false);
-  const late = intakeScreen({ ...INFO, timer: "none" }, 0, "", NOW, 120, 14, C).map(text).join("\n");
+  expect(scr(INFO, 1, "", NOW, 80, 14, C).map(text).at(-1)).toContain("i/esc back");
+  expect(scr(INFO, 0, "", NOW, 120, 14, M).flat().some((x) => x.fg || x.bg)).toBe(false);
+  const late = scr({ ...INFO, timer: "none" }, 0, "", NOW, 120, 14, C).map(text).join("\n");
   expect(late).toContain("timer not running");
   expect(late).toContain("due, timer not running");
   expect(late).toContain("in 38m if the timer runs");
-  expect(intakeScreen({ ...INFO, here: false }, 0, "", NOW, 120, 14, C).map(text)[0]).toContain("intake runs on box");
+  expect(scr({ ...INFO, here: false }, 0, "", NOW, 120, 14, C).map(text)[0]).toContain("intake runs on box");
 });
 
 test("chip: next run, errors or a stalled timer in warn; dropped before the clock on a narrow header", () => {
@@ -170,19 +171,19 @@ test("review: a named-rule run's .intake.lock is no heartbeat; render-path git n
   s.io.run = (argv, cwd, secs, o) => (argv[0] === "git" && envs.push(o?.env), run(argv, cwd, secs, o));
   expect((await s.info())!.timer).toBe("none");
   expect(envs.length).toBeGreaterThan(1);
-  for (const e of envs) expect(e?.GIT_NO_LAZY_FETCH).toBe("1");
+  for (const e of envs) expect([e?.GIT_NO_LAZY_FETCH, e?.GIT_ALLOW_PROTOCOL]).toEqual(["1", ""]);
   expect(envs[0]?.PATH).toBe(process.env.PATH!);
 });
 
 test("review: no column or timer state falls off at 50 and 40 columns", () => {
   for (const n of [50, 40]) {
-    const ls = intakeScreen({ ...INFO, timer: "late" }, 0, "", NOW, n, 20, C).map(text);
+    const ls = scr({ ...INFO, timer: "late" }, 0, "", NOW, n, 20, C).map(text);
     expect(ls[0]).toContain("timer late");
     const head = ls.find((l) => l.includes("rule"))!;
     expect(head).toContain("✕");
     if (n === 50) expect(head).toContain("o/f");
     expect(ls[ls.indexOf(head) + 1]).toContain("✕");
-    expect(ls[ls.indexOf(head) + 1]).toContain("acme/");
+    expect(ls[ls.indexOf(head) + 1]).toContain(":errs");
     for (const l of ls) expect(Bun.stringWidth(l)).toBe(n);
   }
 });
@@ -191,11 +192,36 @@ test("review: the selected rule stays in view and its full 300-char error is rea
   const rules = Array.from({ length: 22 }, (_, i) => ({ ...INFO.rules[1]!, id: `acme/web:r${i}`, name: `r${i}` }));
   const err = Array.from({ length: 60 }, (_, i) => `w${i}x`).join(" ").slice(0, 300);
   rules[21] = { ...rules[21]!, error: err };
-  const ls = intakeScreen({ ...INFO, rules }, 21, "", NOW, 120, 16, C);
+  const ls = scr({ ...INFO, rules }, 21, "", NOW, 120, 16, C);
   const row = ls.find((l) => text(l).includes("acme/web:r21"));
   expect(row?.some((x) => x.bg === C.sel)).toBe(true);
   expect(ls.map(text).join(" ").replace(/\s+/g, " ")).toContain(`r21: ${err}`);
-  const top = intakeScreen({ ...INFO, rules }, 0, "", NOW, 120, 16, C).map(text);
+  const top = scr({ ...INFO, rules }, 0, "", NOW, 120, 16, C).map(text);
   expect(top.some((l) => l.includes("acme/web:r0"))).toBe(true);
   for (const l of ls) expect(Bun.stringWidth(text(l))).toBe(120);
+});
+
+test("review 2: next values and the timer state are never cut; the repo shrinks before the rule name", () => {
+  for (const [n, timer, want] of [[50, "ok", `due ~${hm(NOW + 8 * MIN)}`], [50, "none", "in 38m?"], [40, "none", "due, no timer"], [80, "none", "in 38m if the timer runs"], [120, "late", "due, timer not running"]] as const) {
+    const ls = scr({ ...INFO, timer }, 0, "", NOW, n, 20, C).map(text);
+    expect(ls.join("\n")).toContain(want);
+    expect(ls.join("\n")).not.toMatch(/(due|in) [^ ]*…/);
+    expect(ls.some((l) => l.includes(":errs") && l.includes(":deps"))).toBe(false);
+    expect(ls.filter((l) => /:(errs|deps|lint) /.test(l))).toHaveLength(3);
+  }
+});
+
+test("review 2: the full error is reachable by scrolling its detail at 40x14 and 40x7; a lost db problem goes to the footer", () => {
+  const err = Array.from({ length: 60 }, (_, i) => `w${i}x`).join(" ").slice(0, 300);
+  const info = { ...INFO, rules: [{ ...INFO.rules[0]!, error: err }] };
+  for (const h of [14, 7]) {
+    expect(scr(info, 0, "", NOW, 40, h, C).map(text).at(-1)).toContain("⏎ full error");
+    const { maxBack } = intakeScreen(info, 0, "", NOW, 40, h, C, 0);
+    const rows: string[] = [];
+    for (let d = 0; d <= maxBack; d++) scr(info, 0, "", NOW, 40, h, C, d).slice(1, -1).forEach((l, i) => (rows[d + i] = text(l)));
+    const seen = rows.join(" ").replace(/\s+/g, " ");
+    expect(seen).toContain(`errs: ${err}`);
+    for (const l of scr(info, 0, "", NOW, 40, h, C, maxBack)) expect(Bun.stringWidth(text(l))).toBe(40);
+  }
+  expect(scr({ ...INFO, problem: "tender.db unreadable: locked" }, 1, "", NOW, 80, 7, C).map(text).at(-1)).toContain("tender.db unreadable");
 });

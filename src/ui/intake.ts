@@ -6,7 +6,7 @@ import { DB_FILE } from "../db";
 import { HEARTBEAT, ms, SLACK_MS } from "../intake";
 import type { Config, IntakeRule, Io } from "../types";
 import { clean, GIT, mtime, read, SYSTEMD } from "../util";
-import { clip, type Line, type Palette, s as sp, type Span, spread, when } from "./dash-view";
+import { clip, type Line, type Palette, s as sp, scroll, type Span, spread, when, wrap } from "./dash-view";
 import { dur } from "./status";
 
 const TICK = 15 * 60_000;
@@ -61,8 +61,9 @@ export const modeOf = (rule: IntakeRule, cfg: Config): Mode => (rule.autoLabel.l
 
 const origin = async (io: Io, path: string) => (await read(io, [...GIT, "-C", path, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"])).trim().replace(/^origin\//, "");
 
-// Local git only: the base is tender.json's or the clone's origin/HEAD, never a fetch or the GitHub API.
-async function definitions(cfg: Config, io: Io) {
+// Local git only: the base is tender.json's or the clone's origin/HEAD, never a fetch, a partial clone's lazy fetch or the GitHub API.
+async function definitions(cfg: Config, parent: Io) {
+  const io: Io = { ...parent, run: (argv, cwd, secs, o) => parent.run(argv, cwd, secs, { ...o, env: { ...((o?.env ?? process.env) as Record<string, string>), GIT_NO_LAZY_FETCH: "1" } }) };
   const out = new Map<string, { rules?: IntakeRule[]; problem?: string }>();
   for (const r of Object.values(cfg.repos)) {
     try {
@@ -174,59 +175,69 @@ function nextText(r: RuleInfo, info: IntakeInfo, now: number) {
 
 type Col = { head: string; w: number; cell: (r: RuleInfo) => string };
 
+// Fixed columns first; rule and next share what is left, so no column falls off the edge at 50+.
 function columns(info: IntakeInfo, n: number, now: number): Col[] {
   const run = (f: (r: RuleInfo) => string) => (r: RuleInfo) => (info.here && r.enabled && !r.problem ? f(r) : "-");
   const num = (v?: number) => String(v ?? 0);
   const rule: Col = { head: "rule", w: 0, cell: (r) => r.id };
-  const next: Col = { head: "next", w: n >= 110 ? 30 : 22, cell: (r) => (r.enabled ? nextText(r, info, now) : "not enabled") };
-  const err: Col = { head: "✕", w: 2, cell: (r) => (r.error || (r.enabled && r.problem) ? "✕" : "") };
-  if (n < 50) return [rule, { ...next, w: 12 }, err];
-  const cols: Col[] = [
-    rule,
-    { head: "mode", w: 11, cell: (r) => r.mode ?? "-" },
-    ...(n >= 110 ? [{ head: "every", w: 6, cell: (r: RuleInfo) => r.every ?? "-" }] : []),
-    { head: "last", w: 12, cell: run((r) => (r.ranAt === undefined ? "never" : when(r.ranAt, now))) },
-    next,
-    err,
-    { head: "open/filed", w: 11, cell: run((r) => `${num((r.open ?? 0) + (r.reopened ?? 0))}/${num(r.filed)}`) },
-  ];
-  return n >= 110 ? [...cols, { head: "reopened", w: 9, cell: run((r) => num(r.reopened)) }, { head: "gone/still", w: 10, cell: run((r) => `${num(r.gone)}/${num(r.still)}`) }] : cols;
+  const next: Col = { head: "next", w: 0, cell: (r) => (r.enabled ? nextText(r, info, now) : "not enabled") };
+  const err: Col = { head: "✕", w: 1, cell: (r) => (r.error || (r.enabled && r.problem) ? "✕" : "") };
+  const filed: Col = { head: n >= 80 ? "open/filed" : "o/f", w: n >= 80 ? 10 : 5, cell: run((r) => `${num((r.open ?? 0) + (r.reopened ?? 0))}/${num(r.filed)}`) };
+  const mode: Col = { head: "mode", w: 10, cell: (r) => r.mode ?? "-" };
+  const last: Col = { head: "last", w: 11, cell: run((r) => (r.ranAt === undefined ? "never" : when(r.ranAt, now))) };
+  const cols =
+    n < 50
+      ? [rule, next, err]
+      : n < 110
+        ? [rule, mode, last, next, err, filed]
+        : [rule, mode, { head: "every", w: 5, cell: (r: RuleInfo) => r.every ?? "-" }, last, next, err, filed, { head: "reopened", w: 8, cell: run((r) => num(r.reopened)) }, { head: "gone/still", w: 10, cell: run((r) => `${num(r.gone)}/${num(r.still)}`) }];
+  const avail = n - 1 - cols.reduce((a, c) => a + c.w + 1, 0);
+  next.w = Math.min(n < 50 ? 12 : n < 110 ? 22 : 30, Math.max(6, avail - 8));
+  rule.w = Math.max(1, avail - next.w);
+  return cols;
 }
 
-/** The intake view (`i`): globals, one row per rule, and the selected rule's error in the footer; every line exactly `n` columns. */
+/** The intake view (`i`): globals, the rules (scrolled to keep the selected one in view) and its full error below them; every line exactly `n` columns. */
 export function intakeScreen(info: IntakeInfo | undefined, sel: number, msg: string, now: number, n: number, h: number, P: Palette): Line[] {
   if (h <= 0) return [];
   const bg = { bg: P.head };
   const mark: Span = P.mono ? { t: " intake ", b: true, r: true } : { t: " intake ", fg: P.ink, bg: P.accent, b: true };
-  const body: Line[] = [];
+  const bodyH = Math.max(0, h - 2);
+  let body: Line[] = [];
   let top: Line = [mark];
   if (!info) body.push([sp(P, "dim", " no intake in tender.json")]);
   else {
-    const where = info.here ? `on ${clean(info.host, 40)} (this host)` : `intake runs on ${clean(info.host, 40)}; run data is there`;
+    const where = sp(P, "dim", ` ${info.here ? `on ${clean(info.host, 40)} (this host)` : `intake runs on ${clean(info.host, 40)}; run data is there`} `, bg);
     const timer: Line = !info.here ? [] : info.timer === "ok" ? [sp(P, "ok", `timer ok · ${ago(info.beat, now)} `, bg)] : [sp(P, "warn", info.timer === "late" ? `timer late · last ${ago(info.beat, now)} ` : "timer not running ", { ...bg, b: true })];
-    top = spread([mark, sp(P, "dim", ` ${where} `, bg)], timer, n, bg);
+    const width = (l: Line) => Bun.stringWidth(l.map((x) => x.t).join(""));
+    top = width([mark, where, ...timer]) < n ? spread([mark, where], timer, n, bg) : [mark, ...timer.map((x) => ({ ...x, t: ` ${x.t.split(" · ")[0]!.trim()} ` })), where];
     const j = info.judge;
-    body.push([sp(P, "dim", " judge "), j ? sp(P, "fg", `${clean(`${j.agent} ${j.model}`, 60)} · ${j.maxPerRun}/run · last ${info.here ? ago(j.last, now) : "-"}`) : sp(P, "dim", "off")]);
-    body.push([sp(P, "dim", " guardrails "), info.guardrails ? sp(P, "fg", `on · last ${info.here ? ago(info.guardrails.last, now) : "-"}`) : sp(P, "dim", "off")]);
-    if (info.problem) body.push([sp(P, "bad", ` ${info.problem}`)]);
-    body.push([]);
+    const pre: Line[] = [
+      [sp(P, "dim", " judge "), j ? sp(P, "fg", `${clean(`${j.agent} ${j.model}`, 60)} · ${j.maxPerRun}/run · last ${info.here ? ago(j.last, now) : "-"}`) : sp(P, "dim", "off")],
+      [sp(P, "dim", " guardrails "), info.guardrails ? sp(P, "fg", `on · last ${info.here ? ago(info.guardrails.last, now) : "-"}`) : sp(P, "dim", "off")],
+      ...(info.problem ? [[sp(P, "bad", ` ${info.problem}`)]] : []),
+      [],
+    ];
     const cols = columns(info, n, now);
-    const fixed = cols.reduce((a, c) => a + c.w + 1, 1);
-    const ruleW = Math.max(8, n - fixed);
-    const cells = (texts: string[], st: Omit<Span, "t">, tone: (i: number) => Parameters<typeof sp>[1]) => [sp(P, "fg", " ", st), ...texts.flatMap((t, i) => [...clip([sp(P, tone(i), clean(t, 300), st)], i ? cols[i]!.w : ruleW, st), sp(P, "fg", " ", st)])];
-    body.push(cells(cols.map((c) => c.head), {}, () => "dim"));
-    info.rules.forEach((r, i) => {
-      const st = i === sel ? { bg: P.sel, r: P.mono ? true : undefined } : {};
-      const off = !r.enabled;
-      body.push(cells(cols.map((c) => c.cell(r)), st, (k) => (off ? "dim" : cols[k]!.head === "✕" ? "bad" : "fg")));
-    });
-    if (!info.rules.length) body.push([sp(P, "dim", " no rules")]);
+    const cells = (texts: string[], st: Omit<Span, "t">, tone: (i: number) => Parameters<typeof sp>[1]) => [sp(P, "fg", " ", st), ...texts.flatMap((t, i) => [...clip([sp(P, tone(i), clean(t, 300), st)], cols[i]!.w, st), sp(P, "fg", " ", st)])];
     const r = info.rules[sel];
     const why = r && (r.error ?? (r.enabled ? r.problem : undefined));
-    if (why && !msg) msg = `${r.name}: ${why}`;
+    const lead = bodyH >= pre.length + 2 ? pre : [];
+    const room = bodyH - lead.length - 1;
+    const full = why ? wrap(clean(`${r.name}: ${why}`, 400), Math.max(1, n - 2)) : [];
+    const detail = full.slice(0, Math.max(0, room - 2));
+    if (detail.length < full.length && !msg) msg = `${r!.name}: ${why}`;
+    const vis = Math.max(1, room - (detail.length ? detail.length + 1 : 0));
+    const start = scroll(sel, info.rules.length, vis);
+    const rows = info.rules.slice(start, start + vis).map((x, i) => {
+      const st = start + i === sel ? { bg: P.sel, r: P.mono ? true : undefined } : {};
+      return cells(cols.map((c) => c.cell(x)), st, (k) => (!x.enabled ? "dim" : cols[k]!.head === "✕" ? "bad" : "fg"));
+    });
+    body = [...lead, cells(cols.map((c) => c.head), {}, () => "dim"), ...(rows.length ? rows : [[sp(P, "dim", " no rules")]])];
+    if (detail.length) body.push(...Array.from({ length: Math.max(1, bodyH - body.length - detail.length) }, () => []), ...detail.map((t) => [sp(P, "warn", ` ${t}`)]));
   }
   const footer = msg ? [sp(P, "warn", ` ${clean(msg, 300)} `, { b: true })] : [sp(P, "dim", " j/k select  i/esc back  r refresh  ? help  q quit")];
-  const lines = [clip(top, n, bg), ...body.slice(0, Math.max(0, h - 2)).map((l) => clip(l, n))];
+  const lines = [clip(top, n, bg), ...body.slice(0, bodyH).map((l) => clip(l, n))];
   while (lines.length < h - 1) lines.push(clip([], n));
   if (h >= 2) lines.push(clip(footer, n));
   return lines.slice(0, h);

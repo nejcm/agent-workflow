@@ -171,9 +171,9 @@ async function sandbox(cfg: Config, io: Io, work: string, r: Session, id: string
   return { script, done: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-export const HEARTBEAT = ".intake.lock";
+export const HEARTBEAT = ".intake.beat";
 
-// The dashboard reads the lock's mtime to tell whether the timer still fires.
+// Its own file: holdLock creates .intake.lock on any run, a named rule too. The dashboard reads its mtime.
 function heartbeat(cfg: Config, now: number) {
   const f = join(cfg.workspaceRoot, HEARTBEAT);
   appendFileSync(f, "");

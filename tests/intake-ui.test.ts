@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import { utimesSync, writeFileSync } from "node:fs";
+import { holdLock } from "../tender";
 import { join } from "node:path";
 import { MIGRATIONS, openDb } from "../src/db";
 import { header, type Line, palette } from "../src/ui/dash-view";
@@ -13,6 +14,7 @@ const RULES = "intake:\n  - name: errs\n    run: a.sh\n    every: 1h\n    autoLa
 const NOW = Date.parse("2026-01-01T12:07:00Z");
 const MIN = 60_000;
 const at = (t: number) => new Date(t).toISOString();
+const hm = (t: number) => new Date(t).toTimeString().slice(0, 5);
 
 function setup(over: object = {}) {
   repoFiles["config.yaml"] = RULES;
@@ -20,7 +22,7 @@ function setup(over: object = {}) {
   const cfg = config({ intake: { enabled: ["acme/web:errs", "acme/web:deps"], host: "box" }, ...over });
   return { io, cmds, logs, cfg, info: () => intakeInfo(cfg, io, NOW) };
 }
-const beat = (t: number) => (writeFileSync(join(root, ".intake.lock"), ""), utimesSync(join(root, ".intake.lock"), t / 1000, t / 1000));
+const beat = (t: number) => (writeFileSync(join(root, ".intake.beat"), ""), utimesSync(join(root, ".intake.beat"), t / 1000, t / 1000));
 const db = (fn: (d: Database) => void) => {
   const d = openDb(join(root, "tender.db"));
   fn(d);
@@ -49,7 +51,7 @@ test("info: rules with mode, last run, error, next, counts; not-enabled rules li
   expect(i).toMatchObject({ host: "box", here: true, timer: "ok", judge: { agent: "claude", model: "opus", maxPerRun: 5, last: NOW - 3 * MIN }, errors: 1 });
   expect(i.guardrails).toBeUndefined();
   expect(i.rules.map((r) => [r.name, r.enabled, r.mode, r.every])).toEqual([["errs", true, "auto", "1h"], ["deps", true, "judge", "1d"], ["lint", false, "shadow", "1h"]]);
-  expect(i.rules[0]).toMatchObject({ ranAt: NOW - 30 * MIN, error: "boom", filed: 2, open: 1, reopened: 1, gone: 1, still: 0, due: false, next: Date.parse("2026-01-01T12:45:00Z") });
+  expect(i.rules[0]).toMatchObject({ ranAt: NOW - 30 * MIN, error: "boom", filed: 2, open: 1, reopened: 1, gone: 1, still: 0, due: false, next: tickAt(NOW + 28 * MIN, NOW - 5 * MIN) });
   expect(i.rules[1]).toMatchObject({ due: true, ranAt: undefined });
   expect(i.rules[2]!.next).toBeUndefined();
   expect(s.cmds.some((c) => c.includes("fetch") || c.startsWith("gh "))).toBe(false);
@@ -120,7 +122,7 @@ const INFO: IntakeInfo = {
   errors: 1,
 };
 
-test("view: every line is exactly n columns at any width, colour or not, and the selected rule's error is in the footer", () => {
+test("view: every line is exactly n columns at any width, colour or not, and the selected rule's error is shown", () => {
   for (const P of [C, M])
     for (const n of [120, 80, 40, 20])
       for (const info of [INFO, { ...INFO, here: false, errors: 0 }, { ...INFO, timer: "late" as const }, undefined]) {
@@ -132,9 +134,9 @@ test("view: every line is exactly n columns at any width, colour or not, and the
   expect(wide[0]).toContain("on box (this host)");
   expect(wide[0]).toContain("timer ok");
   expect(wide.join("\n")).toContain("gone/still");
-  expect(wide.at(-1)).toContain("errs: errs.sh exited 1: boom");
+  expect(wide.slice(1, -1).join("\n")).toContain("errs: errs.sh exited 1: boom");
   expect(wide.find((l) => l.includes("acme/web:lint"))).toContain("not enabled");
-  expect(wide.find((l) => l.includes("acme/web:deps"))).toContain("due ~12:15");
+  expect(wide.find((l) => l.includes("acme/web:deps"))).toContain(`due ~${hm(NOW + 8 * MIN)}`);
   expect(intakeScreen(INFO, 0, "", NOW, 120, 14, C).flat().some((x) => x.t.trim() === "✕" && x.fg === C.bad)).toBe(true);
   const narrow = intakeScreen(INFO, 0, "", NOW, 40, 14, C).map(text).join("\n");
   expect(narrow).not.toContain("mode");
@@ -149,7 +151,7 @@ test("view: every line is exactly n columns at any width, colour or not, and the
 
 test("chip: next run, errors or a stalled timer in warn; dropped before the clock on a narrow header", () => {
   const ok = { ...INFO, errors: 0, rules: INFO.rules.map((r) => ({ ...r, error: undefined })) };
-  expect(text(intakeChip(ok, C))).toBe(" ⏲ intake ~12:15 ");
+  expect(text(intakeChip(ok, C))).toBe(` ⏲ intake ~${hm(NOW + 8 * MIN)} `);
   expect(intakeChip(INFO, C)[0]).toMatchObject({ t: " intake ✕1 ", fg: C.warn });
   expect(text(intakeChip({ ...ok, timer: "late" }, C))).toBe(" intake timer? ");
   expect(intakeChip(undefined, C)).toEqual([]);
@@ -158,4 +160,42 @@ test("chip: next run, errors or a stalled timer in warn; dropped before the cloc
     expect(Bun.stringWidth(top)).toBe(n);
     expect(top.includes("intake")).toBe(n === 160);
   }
+});
+
+test("review: a named-rule run's .intake.lock is no heartbeat; render-path git never lazy-fetches", async () => {
+  const s = setup();
+  expect(holdLock(join(root, ".intake.lock"))).toBe(true);
+  const envs: (Record<string, string> | undefined)[] = [];
+  const run = s.io.run;
+  s.io.run = (argv, cwd, secs, o) => (argv[0] === "git" && envs.push(o?.env), run(argv, cwd, secs, o));
+  expect((await s.info())!.timer).toBe("none");
+  expect(envs.length).toBeGreaterThan(1);
+  for (const e of envs) expect(e?.GIT_NO_LAZY_FETCH).toBe("1");
+  expect(envs[0]?.PATH).toBe(process.env.PATH!);
+});
+
+test("review: no column or timer state falls off at 50 and 40 columns", () => {
+  for (const n of [50, 40]) {
+    const ls = intakeScreen({ ...INFO, timer: "late" }, 0, "", NOW, n, 20, C).map(text);
+    expect(ls[0]).toContain("timer late");
+    const head = ls.find((l) => l.includes("rule"))!;
+    expect(head).toContain("✕");
+    if (n === 50) expect(head).toContain("o/f");
+    expect(ls[ls.indexOf(head) + 1]).toContain("✕");
+    expect(ls[ls.indexOf(head) + 1]).toContain("acme/");
+    for (const l of ls) expect(Bun.stringWidth(l)).toBe(n);
+  }
+});
+
+test("review: the selected rule stays in view and its full 300-char error is readable", () => {
+  const rules = Array.from({ length: 22 }, (_, i) => ({ ...INFO.rules[1]!, id: `acme/web:r${i}`, name: `r${i}` }));
+  const err = Array.from({ length: 60 }, (_, i) => `w${i}x`).join(" ").slice(0, 300);
+  rules[21] = { ...rules[21]!, error: err };
+  const ls = intakeScreen({ ...INFO, rules }, 21, "", NOW, 120, 16, C);
+  const row = ls.find((l) => text(l).includes("acme/web:r21"));
+  expect(row?.some((x) => x.bg === C.sel)).toBe(true);
+  expect(ls.map(text).join(" ").replace(/\s+/g, " ")).toContain(`r21: ${err}`);
+  const top = intakeScreen({ ...INFO, rules }, 0, "", NOW, 120, 16, C).map(text);
+  expect(top.some((l) => l.includes("acme/web:r0"))).toBe(true);
+  for (const l of ls) expect(Bun.stringWidth(text(l))).toBe(120);
 });

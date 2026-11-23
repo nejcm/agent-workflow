@@ -109,8 +109,8 @@ test("runs: a failing rule records its error, the next good run clears it, a dry
   expect(errors()).toEqual([null]);
 });
 
-test("heartbeat: a full run touches .intake.lock; an only run, a dry run and another host do not", async () => {
-  const lock = join(root, ".intake.lock");
+test("heartbeat: a full run touches .intake.beat; an only run, a dry run and another host do not", async () => {
+  const lock = join(root, ".intake.beat");
   const s = setup(() => ({ out: "" }));
   s.io.dry = true;
   await s.go();

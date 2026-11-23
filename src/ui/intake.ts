@@ -6,7 +6,7 @@ import { DB_FILE } from "../db";
 import { HEARTBEAT, ms, SLACK_MS } from "../intake";
 import type { Config, IntakeRule, Io } from "../types";
 import { clean, GIT, mtime, read, SYSTEMD } from "../util";
-import { clip, type Line, type Palette, s as sp, scroll, type Span, spread, when, wrap } from "./dash-view";
+import { clip, cut, type Line, type Palette, s as sp, scroll, type Span, spread, when, wrap } from "./dash-view";
 import { dur } from "./status";
 
 const TICK = 15 * 60_000;
@@ -192,6 +192,25 @@ function ruleText(r: RuleInfo, w: number, rules: RuleInfo[]) {
   return `${base.slice(0, k)}${k < base.length ? "…" : ""}:${r.name}`;
 }
 
+const shown = (t: string, w: number) => clip([{ t }], w).map((x) => x.t).join("");
+
+// Clashing labels end in `…<config position>`; the last `…` precedes only digits, so tagged labels never clash.
+function distinct(labels: string[], w: number) {
+  const out = labels.map((t) => shown(t, w));
+  for (let clash = true; clash; ) {
+    clash = false;
+    const seen = new Map<string, number[]>();
+    out.forEach((t, i) => seen.set(t, [...(seen.get(t) ?? []), i]));
+    for (const ix of seen.values())
+      for (const i of ix.length > 1 ? ix : []) {
+        const tag = Bun.stringWidth(`…${i + 1}`) <= w ? `…${i + 1}` : shown(String(i + 1), w);
+        const t = cut([{ t: labels[i]! }], w - Bun.stringWidth(tag))[0].map((x) => x.t).join("") + tag;
+        if (t !== out[i]) (out[i] = t), (clash = true);
+      }
+  }
+  return out;
+}
+
 type Col = { head: string; w: number; cell: (r: RuleInfo) => string };
 
 // Fixed columns first; next gets its widest value, the rule what is left.
@@ -216,6 +235,8 @@ function columns(info: IntakeInfo, n: number, now: number): Col[] {
   next.w = widest();
   if (avail - next.w < RULE_MIN) (short = true), (next.w = widest());
   rule.w = Math.max(1, avail - next.w);
+  const labels = distinct(info.rules.map((r) => ruleText(r, rule.w, info.rules)), rule.w);
+  rule.cell = (r) => labels[info.rules.indexOf(r)] ?? shown(r.id, rule.w);
   return cols;
 }
 
@@ -271,6 +292,7 @@ export function intakeScreen(info: IntakeInfo | undefined, sel: number, msg: str
       const shown = full.slice(0, Math.max(0, room - 2));
       if (full.length) hint = " ⏎ full error  j/k select  i/esc back";
       const vis = Math.max(1, room - (shown.length ? shown.length + 1 : 0));
+      if (r && cols[0]!.cell(r) !== r.id) hint = ` (${clean(r.id, 120)})${hint}`;
       const start = scroll(sel, info.rules.length, vis);
       const rows = info.rules.slice(start, start + vis).map((x, i) => {
         const st = start + i === sel ? { bg: P.sel, r: P.mono ? true : undefined } : {};

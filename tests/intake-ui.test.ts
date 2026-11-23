@@ -239,3 +239,29 @@ test("review 3: same-named rules in different repos stay distinct at 50 and 40 c
     }
   }
 });
+
+test("review 4: rule labels are pairwise distinct at every width, lines stay n columns and next is untouched", () => {
+  const mk = (repo: string, name: string) => ({ ...INFO.rules[1]!, id: `${repo}:${name}`, repo, name });
+  const mix = Array.from({ length: 30 }, (_, i) => mk(["acme/app", "acme/appp", "acme/web", "other/web", "acme/web-long-name-a"][i % 5]!, ["guardrails", "guard-a", "guard-b", "deps", "stale-branches-cleanup"][Math.floor(i / 5) % 5]! + (i >= 25 ? "-x" : "")));
+  const sets = [
+    [mk("acme/app", "guardrails"), mk("acme/appp", "guardrails")],
+    [mk("acme/web", "guard-a"), mk("acme/web", "guard-b")],
+    [mk("acme/a", "guardrails"), mk("acme/b", "guardrails")],
+    [mk("acme/web", "deps"), mk("acme/web", "deps-weekly"), mk("acme/web", "deps-monthly")],
+    mix,
+  ];
+  for (const rules of sets) {
+    expect(new Set(rules.map((r) => r.id)).size).toBe(rules.length);
+    for (let n = 30; n <= 140; n++) {
+      const render = (rs: typeof rules) => scr({ ...INFO, rules: rs }, 0, "", NOW, n, rules.length + 10, C).map(text);
+      const ls = render(rules);
+      const plain = render(rules.map((r, i) => ({ ...r, id: `r${i}` })));
+      expect(ls.every((l) => Bun.stringWidth(l) === n)).toBe(true);
+      const head = ls.findIndex((l) => l.startsWith(" rule"));
+      const w = /^ rule\s*/.exec(ls[head]!)![0].length - 2;
+      const rows = ls.slice(head + 1, head + 1 + rules.length);
+      expect(new Set(rows.map((l) => l.slice(1, 1 + w))).size).toBe(rules.length);
+      expect(rows.map((l) => l.slice(w + 1))).toEqual(plain.slice(head + 1, head + 1 + rules.length).map((l) => l.slice(w + 1)));
+    }
+  }
+});

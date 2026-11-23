@@ -10,6 +10,7 @@ export const MIGRATIONS = [
   "CREATE TABLE events (id INTEGER PRIMARY KEY, at TEXT NOT NULL, host TEXT NOT NULL, repo TEXT NOT NULL, ticket TEXT NOT NULL, kind TEXT NOT NULL, data TEXT, once TEXT); CREATE UNIQUE INDEX events_once ON events (kind, repo, ticket, once) WHERE once IS NOT NULL",
   "CREATE TABLE intake_seen (rule TEXT NOT NULL, key TEXT NOT NULL, ticket_url TEXT, filed_at TEXT, last_seen_at TEXT, state TEXT, PRIMARY KEY (rule, key))",
   "ALTER TABLE intake_seen ADD COLUMN facts TEXT; ALTER TABLE intake_seen ADD COLUMN commented_at TEXT; ALTER TABLE intake_seen ADD COLUMN done_at TEXT; CREATE TABLE intake_runs (rule TEXT PRIMARY KEY, ran_at TEXT NOT NULL)",
+  "ALTER TABLE intake_runs ADD COLUMN error TEXT",
 ];
 
 // Short: under contention an event is dropped and logged rather than holding up ticket handling.

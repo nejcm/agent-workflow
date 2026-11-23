@@ -225,15 +225,15 @@ export function chips(rs: Row[], P: Palette, compact: boolean): Line {
   return out;
 }
 
-export function header(rs: Row[], host: string, at: string, every: number, n: number, P: Palette, note?: string): Line {
+export function header(rs: Row[], host: string, at: string, every: number, n: number, P: Palette, note?: string, chip: Line = []): Line {
   const bg = { bg: P.head };
   const warn = note ? [s(P, "warn", ` ${clean(note, 120)} `, { ...bg, b: true })] : [];
   const mark: Span = P.mono ? { t: " tender ", b: true, r: true } : { t: " tender ", fg: P.ink, bg: P.accent, b: true };
   const h = s(P, "dim", ` ${clean(host, 40)} `, bg);
   const time = [s(P, "fg", `${at} `, bg), s(P, "dim", `· every ${every}s `, bg)];
   for (const [left, right] of [
-    [[mark, h, ...chips(rs, P, false), ...warn], time],
-    [[mark, h, ...chips(rs, P, true), ...warn], time],
+    [[mark, h, ...chips(rs, P, false), ...chip, ...warn], time],
+    [[mark, h, ...chips(rs, P, true), ...chip, ...warn], time],
     [[mark, ...chips(rs, P, true), ...warn], [s(P, "fg", `${at} `, bg)]],
     [[mark, ...warn, ...chips(rs, P, true)], []],
   ] as [Line, Line][])
@@ -263,6 +263,7 @@ export function footer(h: Hints, msg: string, n: number, P: Palette): Line {
         k("?", "help"),
         k("q", "quit"),
         k("t", "tree"),
+        k("i", "intake"),
       ];
   const flat = keys.flat();
   return msg ? clip([s(P, "warn", ` ${msg} `, { b: true }), s(P, "faint", "│"), ...flat], n) : clip(flat, n);
@@ -276,6 +277,7 @@ const HELP: [string, string][] = [
   ["a", "attach to the ticket's tmux window"],
   ["o", "open the PR in a browser"],
   ["r", "refresh now"],
+  ["i", "intake rules and timer"],
   ["?  esc", "close this help"],
   ["q  ctrl-c", "quit"],
 ];
@@ -302,7 +304,7 @@ export function helpOverlay(screen: Line[], n: number, P: Palette, tree = false)
 }
 
 const home = (p: string, h: string) => (h && (p === h || p.startsWith(h + "/")) ? "~" + p.slice(h.length) : p);
-const when = (ms: number, now: number) => {
+export const when = (ms: number, now: number) => {
   const d = new Date(ms);
   const t = d.toTimeString().slice(0, 5);
   return now - ms < 20 * 3600_000 ? t : `${d.toISOString().slice(5, 10)} ${t}`;
@@ -460,6 +462,8 @@ export interface Model {
   every: number;
   /** The `maxInReview` line, shown in the header while a limit is reached. */
   note?: string;
+  /** The intake chip, dropped first on a narrow header. */
+  chip?: Line;
   msg: string;
   events: string[];
   empty: string;
@@ -515,7 +519,7 @@ export function screen(m: Model, n: number, h: number, P: Palette, memo?: Map<st
     body = left.map((l, i) => [...l, ...(right[i] ?? [])]);
   }
   const hints = { pane: m.pane, max: m.max, help: m.help, window: !!sel?.window, pr: !!sel?.pr };
-  let lines = [header(m.rs, m.host, m.at, m.every, n, P, m.note), ...body.slice(0, L.body).map((l) => clip(l, n))];
+  let lines = [header(m.rs, m.host, m.at, m.every, n, P, m.note, m.chip), ...body.slice(0, L.body).map((l) => clip(l, n))];
   while (lines.length < h - 1) lines.push(clip([], n));
   if (h >= 2) lines.push(footer(hints, m.msg, n, P));
   lines = lines.slice(0, h);

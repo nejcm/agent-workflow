@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DB_FILE, memoryDb, openDb } from "./db";
@@ -19,7 +19,7 @@ const FACT = /^[A-Za-z][A-Za-z0-9_]{0,39}$/;
 const SHORT_ID = /^[A-Z0-9][A-Z0-9_-]{0,63}-[A-Z0-9]{1,32}$/;
 const DAY = 86_400_000;
 // The timer fires every 15 min with up to a minute of jitter, so a 1h rule must not slip to the next tick.
-const SLACK_MS = 2 * 60_000;
+export const SLACK_MS = 2 * 60_000;
 
 export type Facts = Record<string, string | number>;
 export interface Finding {
@@ -171,6 +171,15 @@ async function sandbox(cfg: Config, io: Io, work: string, r: Session, id: string
   return { script, done: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
+export const HEARTBEAT = ".intake.beat";
+
+// Its own file: holdLock creates .intake.lock on any run, a named rule too. The dashboard reads its mtime.
+function heartbeat(cfg: Config, now: number) {
+  const f = join(cfg.workspaceRoot, HEARTBEAT);
+  appendFileSync(f, "");
+  utimesSync(f, now / 1000, now / 1000);
+}
+
 /** Runs every rule enabled for this host whose `every` has passed (`only`: that rule now, by `owner/name:rule` or rule name). */
 export async function intake(cfg: Config, io: Io, tenderDir: string, { only, now = Date.now(), tracker = (s: Source) => makeTracker(s, cfg.host, io, cfg.defaultHost, Object.keys(cfg.repos)) }: { only?: string; now?: number; tracker?: (s: Source) => Tracker } = {}) {
   if (!cfg.intake) return io.log("intake: no intake in tender.json");
@@ -179,6 +188,7 @@ export async function intake(cfg: Config, io: Io, tenderDir: string, { only, now
   if (only !== undefined && !ids.length) return io.log(`intake: ${only} is not enabled in tender.json`);
   const file = join(cfg.workspaceRoot, DB_FILE);
   if (!io.dry) mkdirSync(cfg.workspaceRoot, { recursive: true });
+  if (!io.dry && only === undefined) heartbeat(cfg, now);
   const db = io.dry ? memoryDb() : openDb(file);
   let work: string | undefined;
   try {
@@ -202,7 +212,10 @@ async function runRule(cfg: Config, io: Io, db: Database, work: string, id: stri
   const rule = r.intake.find((x) => x.name === name);
   if (!rule) return io.log(`intake ${id}: no rule ${name} in .tender/config.yaml on ${r.baseBranch}`);
   const ran = db.query<{ ran_at: string }, [string]>("SELECT ran_at FROM intake_runs WHERE rule = ?").get(id)?.ran_at;
-  if (force || !ran || now - Date.parse(ran) >= ms(rule.every) - SLACK_MS) await fileRule(cfg, io, db, work, id, tenderDir, now, tracker, vis, r, rule).catch((e) => io.log(`intake ${id}: failed: ${e.message}`));
+  if (force || !ran || now - Date.parse(ran) >= ms(rule.every) - SLACK_MS) await fileRule(cfg, io, db, work, id, tenderDir, now, tracker, vis, r, rule).catch((e) => {
+      io.log(`intake ${id}: failed: ${e.message}`);
+      if (!io.dry) db.run("UPDATE intake_runs SET error = ? WHERE rule = ?", [clean(e.message, 300), id]);
+    });
   // Every run, not only when the rule is due, so tickets the cap or a failed call left over wait 15 minutes, not `every`.
   if (!cfg.judge) return;
   const s = intakeSource(cfg, r);
@@ -212,7 +225,7 @@ async function runRule(cfg: Config, io: Io, db: Database, work: string, id: stri
 async function fileRule(cfg: Config, io: Io, db: Database, work: string, id: string, tenderDir: string, now: number, tracker: (s: Source) => Tracker, vis: Map<string, string>, r: Session, rule: IntakeRule) {
   const save: Save = (sql, ...params) => void (io.dry || db.run(sql, params));
   // Marked before running: a failing script waits its interval like a working one.
-  save("INSERT INTO intake_runs (rule, ran_at) VALUES (?, ?) ON CONFLICT (rule) DO UPDATE SET ran_at = excluded.ran_at", id, new Date(now).toISOString());
+  save("INSERT INTO intake_runs (rule, ran_at) VALUES (?, ?) ON CONFLICT (rule) DO UPDATE SET ran_at = excluded.ran_at, error = NULL", id, new Date(now).toISOString());
   const missing = rule.secrets.filter((k) => !process.env[k]);
   if (missing.length) throw new Error(`secrets not set in the host's environment (.env): ${missing.join(", ")}`);
   const s = intakeSource(cfg, r);

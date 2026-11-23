@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { action, attachCmd, exclusive, installed, openable, reduce, refreshed, reselect, type View, watch } from "../src/ui/dash";
+import { action, attachCmd, exclusive, installed, openable, reduce, refreshed, reselect, settled, type View, watch } from "../src/ui/dash";
 import { statusRow as row } from "./helpers";
 import { ticketTree, treeLayout } from "../src/ui/tree";
 
@@ -61,6 +61,39 @@ test("movement scrolls the transcript within its range while it has focus", () =
   expect(reduce(t, "first", 3, 5).back).toBe(5);
   expect(reduce({ ...t, back: 3 }, "last", 3, 5).back).toBe(0);
   expect(reduce(t, "up", 3, 0).back).toBe(0);
+});
+
+test("i opens the intake view, j/k move its rule, esc or i leave it", () => {
+  expect(action({ name: "i" })).toBe("intake");
+  const open = reduce(v({ tree: { sel: 1, detail: false } }), "intake", 3);
+  expect(open).toEqual(v({ intake: { sel: 0 } }));
+  expect(reduce(open, "down", 3, 0, [], 2).intake).toEqual({ sel: 1 });
+  expect(reduce({ ...open, intake: { sel: 1 } }, "down", 3, 0, [], 2).intake).toEqual({ sel: 1 });
+  expect(reduce(open, "last", 3, 0, [], 0).intake).toEqual({ sel: 0 });
+  expect(reduce(open, "down", 3).sel).toBe(0);
+  expect(reduce(open, "back", 3)).toEqual(v());
+  expect(reduce({ ...open, help: true }, "back", 3)).toEqual(open);
+  expect(reduce(open, "intake", 3)).toEqual(v());
+  expect(reduce(open, "tree", 3).intake).toBeUndefined();
+  expect(reduce(open, "focus", 3, 4, [], 2)).toEqual(open);
+  const e = "acme/web:errs";
+  const detail = reduce({ ...open, help: true }, "focus", 3, 4, [], 2, e);
+  expect(detail).toEqual({ ...open, intake: { sel: 0, detail: 0, of: e } });
+  expect(reduce(detail, "down", 3, 4, [], 2, e).intake?.detail).toBe(1);
+  expect(reduce({ ...detail, intake: { sel: 0, detail: 4, of: e } }, "down", 3, 4, [], 2, e).intake?.detail).toBe(4);
+  expect(reduce(detail, "up", 3, 4, [], 2, e).intake?.detail).toBe(0);
+  expect(reduce(detail, "last", 3, 4, [], 2, e).intake?.detail).toBe(4);
+  expect(reduce(detail, "back", 3, 4, [], 2, e)).toEqual(open);
+  expect(reduce(detail, "focus", 3, 4, [], 2, e)).toEqual(open);
+});
+
+test("an intake detail closes once its rule's error clears or another rule is selected, so j/k select again", () => {
+  const detail: View = v({ intake: { sel: 0, detail: 2, of: "acme/web:errs" } });
+  expect(settled(detail, undefined)).toEqual(v({ intake: { sel: 0 } }));
+  expect(settled(detail, "acme/web:deps")).toEqual(v({ intake: { sel: 0 } }));
+  expect(settled(detail, "acme/web:errs")).toBe(detail);
+  expect(reduce(detail, "down", 3, 4, [], 2).intake).toEqual({ sel: 1 });
+  expect(reduce(v({ intake: { sel: 7 } }), "up", 3, 0, [], 3).intake).toEqual({ sel: 1 });
 });
 
 test("reselect follows the ticket across refreshes, else clamps", () => {

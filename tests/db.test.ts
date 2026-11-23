@@ -16,6 +16,7 @@ test("a new db is migrated to the current version in WAL mode", () => {
   expect(schemaVersion(db)).toBe(MIGRATIONS.length);
   expect(tables(db)).toEqual(["events", "intake_runs", "intake_seen", "schema_version"]);
   expect(db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get()!.journal_mode).toBe("wal");
+  expect(db.query<{ name: string }, []>("SELECT name FROM pragma_table_info('intake_runs')").all().map((r) => r.name)).toEqual(["rule", "ran_at", "error"]);
   db.close();
   const again = openDb(file());
   expect(again.query("SELECT * FROM schema_version").all()).toEqual([{ version: MIGRATIONS.length }]);

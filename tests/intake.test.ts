@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { autoLabels, changed, intake, marker, parseCollect, parseRecheck, ticketAt } from "../src/intake";
@@ -85,6 +85,43 @@ test("protocol: a failing or timed-out script fails its run and files nothing", 
   await bad.go(T0 + 2 * HOUR);
   expect(bad.logs.some((l) => l.includes("line 1: not JSON"))).toBe(true);
   expect(bad.calls).toEqual([]);
+});
+
+test("runs: a failing rule records its error, the next good run clears it, a dry run records neither", async () => {
+  const errors = () => {
+    const db = new Database(join(root, "tender.db"));
+    try {
+      return db.query<{ error: string | null }, []>("SELECT error FROM intake_runs").all().map((r) => r.error);
+    } finally {
+      db.close();
+    }
+  };
+  let code = 1;
+  const s = setup(() => ({ code, err: "boom\x1b[31m" }));
+  s.io.dry = true;
+  await s.go();
+  expect(existsSync(join(root, "tender.db"))).toBe(false);
+  s.io.dry = false;
+  await s.go();
+  expect(errors()).toEqual([".tender/intake/errs.sh exited 1: boom"]);
+  code = 0;
+  await s.go(T0 + 2 * HOUR);
+  expect(errors()).toEqual([null]);
+});
+
+test("heartbeat: a full run touches .intake.beat; an only run, a dry run and another host do not", async () => {
+  const lock = join(root, ".intake.beat");
+  const s = setup(() => ({ out: "" }));
+  s.io.dry = true;
+  await s.go();
+  expect(existsSync(lock)).toBe(false);
+  s.io.dry = false;
+  await s.go(T0, "errs");
+  expect(existsSync(lock)).toBe(false);
+  await intake({ ...s.cfg, intake: { ...s.cfg.intake!, host: "other" } }, s.io, TENDER_DIR, { now: T0 });
+  expect(existsSync(lock)).toBe(false);
+  await s.go();
+  expect(statSync(lock).mtimeMs).toBe(T0);
 });
 
 test("filing: caps in script order, autoLabel vs shadow, sanitized body with marker, seen rows and events", async () => {

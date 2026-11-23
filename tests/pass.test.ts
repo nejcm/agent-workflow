@@ -75,6 +75,14 @@ export GH_CONFIG_DIR='/ws/it'\''s'.gh XDG_CACHE_HOME='/ws/it'\''s.tmpdir/cache' 
   expect(s("codex", "none")).toBe(`${head}${codexEnv}${probe}exec ${scope}${codex("")}`);
 });
 
+test("launcher: without systemd the agent is exec'd directly, no scope and no expand probe", () => {
+  const cfg = config({ repos: [{ name: "acme/web", path: "/src/web", sandbox: "none" }] });
+  const s = launcher(ses(cfg, "codex"), "/ws/gh-2", "/ws/gh-2.prompt.md", "u.scope", "/tender", "", [], undefined, false);
+  expect(s).not.toContain("systemd-run");
+  expect(s).not.toContain("expand");
+  expect(s).toContain("\nexec codex --dangerously-bypass-hook-trust");
+});
+
 test("launcher: systemd-run gets --expand-environment=no only where it knows the flag, and the prompt reaches the agent unexpanded", () => {
   const bin = join(root, "bin");
   mkdirSync(bin, { recursive: true });

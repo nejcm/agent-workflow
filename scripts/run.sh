@@ -7,7 +7,8 @@ export PATH="$HOME/.local/bin:$PATH"
 [ -e tender.json ] || { echo "tender.json missing: run scripts/setup.sh first"; exit 1; }
 sandboxes=" $(bun -e 'import { parseConfig } from "./src/config/config"; const c = parseConfig(await Bun.file("tender.json").json(), process.cwd()); console.log([...Object.values(c.repos).map((r) => r.sandbox), c.intake?.host === c.host && "intake"].filter(Boolean).join(" "))' 2>/dev/null || echo nono) "
 case $sandboxes in *" nono "* | *" intake "*) nono=nono ;; *) nono= ;; esac
-for c in bun git gh tmux $nono systemd-run systemctl; do command -v "$c" >/dev/null || { echo "MISSING: $c (run scripts/setup.sh)"; exit 1; }; done
+mac=; [ "$(uname)" = Darwin ] && mac=1
+for c in bun git gh tmux $nono $([ -n "$mac" ] && echo gtimeout flock || echo systemd-run systemctl); do command -v "$c" >/dev/null || { echo "MISSING: $c (run scripts/setup.sh)"; exit 1; }; done
 out=$(bun tender.ts once --dry-run 2>&1) || { echo "$out"; echo "preflight failed: bun tender.ts once --dry-run"; exit 1; }
 if grep -E ' failed[:,]| unavailable' <<<"$out"; then echo "preflight failed: the errors above (full log: bun tender.ts once --dry-run)"; exit 1; fi
 
@@ -18,6 +19,37 @@ unit() {
   mkdir -p ~/.config/systemd/user
   sed "s|^WorkingDirectory=.*|WorkingDirectory=$PWD|; s|^ExecStart=.*|ExecStart=$(command -v bun) tender.ts $2 --config tender.json|; s|^Environment=PATH=.*|Environment=PATH=$path|" "systemd/$1.service" > ~/.config/systemd/user/"$1".service
 }
+
+# launchd agent for macOS: $1 label, $2 tender subcommand, $3 schedule keys (StartInterval, StartCalendarInterval) or KeepAlive.
+agent() {
+  local path f=~/Library/LaunchAgents/tender.$1.plist
+  path=$({ for c in bun claude codex gh nono tmux git gtimeout flock; do p=$(command -v "$c") && dirname "$p"; done; printf '%s\n' /opt/homebrew/bin /usr/local/bin /usr/bin /bin; } | awk '!seen[$0]++' | paste -sd:)
+  mkdir -p ~/Library/LaunchAgents ~/Library/Logs
+  cat > "$f" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>tender.$1</string>
+<key>WorkingDirectory</key><string>$PWD</string>
+<key>ProgramArguments</key><array><string>$(command -v bun)</string><string>tender.ts</string><string>$2</string><string>--config</string><string>tender.json</string></array>
+<key>EnvironmentVariables</key><dict><key>PATH</key><string>$path</string></dict>
+<key>StandardOutPath</key><string>$HOME/Library/Logs/tender-$1.log</string>
+<key>StandardErrorPath</key><string>$HOME/Library/Logs/tender-$1.log</string>
+$3
+</dict></plist>
+PLIST
+  launchctl bootout "gui/$(id -u)" "$f" 2>/dev/null || true
+  launchctl bootstrap "gui/$(id -u)" "$f"
+  echo "started tender.$1 (launchd); log: ~/Library/Logs/tender-$1.log"
+}
+
+if [ -n "$mac" ]; then
+  case "${1:-run}" in
+    service) agent run run '<key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>30</integer>'; exit ;;
+    intake-service) agent intake intake '<key>StartInterval</key><integer>900</integer>'; exit ;;
+    prs-service) agent prs prs '<key>StartCalendarInterval</key><dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>'; exit ;;
+  esac
+fi
 
 case "${1:-run}" in
   run) exec bun tender.ts run ;;

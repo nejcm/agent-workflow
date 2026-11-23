@@ -7,7 +7,7 @@ import { checkProfile, parseConfig } from "./src/config/config";
 import { dashboard, watch } from "./src/ui/dash";
 import { events } from "./src/db";
 import { handoff, shellLine, ticketClone, type Tool, TOOLS } from "./src/session/handoff";
-import { intake } from "./src/intake";
+import { HEARTBEAT, intake } from "./src/intake";
 import { prs } from "./src/prs";
 import { DEFAULT_DAYS, stats, statsTable } from "./src/stats";
 import { cloned, cloneAll, resume } from "./src/session/launcher";
@@ -236,7 +236,7 @@ async function main(argv: string[]) {
       process.exit(1);
     });
   if (cmd === "intake") {
-    const held = join(cfg.workspaceRoot, ".intake.lock");
+    const held = join(cfg.workspaceRoot, HEARTBEAT);
     if (!io.dry && !holdLock(held)) {
       console.error(`another tender intake holds ${held}`);
       process.exit(1);

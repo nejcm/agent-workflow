@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DB_FILE, memoryDb, openDb } from "./db";
@@ -171,6 +171,15 @@ async function sandbox(cfg: Config, io: Io, work: string, r: Session, id: string
   return { script, done: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
+export const HEARTBEAT = ".intake.lock";
+
+// The dashboard reads the lock's mtime to tell whether the timer still fires.
+function heartbeat(cfg: Config, now: number) {
+  const f = join(cfg.workspaceRoot, HEARTBEAT);
+  appendFileSync(f, "");
+  utimesSync(f, now / 1000, now / 1000);
+}
+
 /** Runs every rule enabled for this host whose `every` has passed (`only`: that rule now, by `owner/name:rule` or rule name). */
 export async function intake(cfg: Config, io: Io, tenderDir: string, { only, now = Date.now(), tracker = (s: Source) => makeTracker(s, cfg.host, io, cfg.defaultHost, Object.keys(cfg.repos)) }: { only?: string; now?: number; tracker?: (s: Source) => Tracker } = {}) {
   if (!cfg.intake) return io.log("intake: no intake in tender.json");
@@ -179,6 +188,7 @@ export async function intake(cfg: Config, io: Io, tenderDir: string, { only, now
   if (only !== undefined && !ids.length) return io.log(`intake: ${only} is not enabled in tender.json`);
   const file = join(cfg.workspaceRoot, DB_FILE);
   if (!io.dry) mkdirSync(cfg.workspaceRoot, { recursive: true });
+  if (!io.dry && only === undefined) heartbeat(cfg, now);
   const db = io.dry ? memoryDb() : openDb(file);
   let work: string | undefined;
   try {

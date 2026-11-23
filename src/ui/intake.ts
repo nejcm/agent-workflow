@@ -178,11 +178,18 @@ function nextText(r: RuleInfo, info: IntakeInfo, now: number, short: boolean) {
 
 const RULE_MIN = 12;
 
-// The rule's repo is cut before its name, so rows stay distinguishable.
-function ruleText(r: RuleInfo, w: number) {
+// The repo is cut before the name, but never below the prefix that tells same-named rules apart.
+function ruleText(r: RuleInfo, w: number, rules: RuleInfo[]) {
   if (Bun.stringWidth(r.id) <= w) return r.id;
-  const keep = w - Bun.stringWidth(r.name) - 2;
-  return keep > 0 ? `${r.repo.slice(0, keep)}…:${r.name}` : r.name;
+  const short = (x: RuleInfo) => x.repo.slice(x.repo.indexOf("/") + 1);
+  const base = rules.some((x) => x.repo !== r.repo && short(x) === short(r)) ? r.repo : short(r);
+  const peers = rules.filter((x) => x.name === r.name && x.repo !== r.repo).map((x) => (rules.some((y) => y.repo !== x.repo && short(y) === short(x)) ? x.repo : short(x)));
+  let k0 = 1;
+  while (k0 < base.length && peers.some((p) => p.slice(0, k0) === base.slice(0, k0))) k0++;
+  const room = w - Bun.stringWidth(r.name) - 2;
+  if (k0 > Math.max(1, room)) return `…${base.slice(k0 - 1)}:${r.name}`;
+  const k = Math.min(base.length, Math.max(k0, room));
+  return `${base.slice(0, k)}${k < base.length ? "…" : ""}:${r.name}`;
 }
 
 type Col = { head: string; w: number; cell: (r: RuleInfo) => string };
@@ -191,7 +198,7 @@ type Col = { head: string; w: number; cell: (r: RuleInfo) => string };
 function columns(info: IntakeInfo, n: number, now: number): Col[] {
   const run = (f: (r: RuleInfo) => string) => (r: RuleInfo) => (info.here && r.enabled && !r.problem ? f(r) : "-");
   const num = (v?: number) => String(v ?? 0);
-  const rule: Col = { head: "rule", w: 0, cell: (r) => ruleText(r, rule.w) };
+  const rule: Col = { head: "rule", w: 0, cell: (r) => ruleText(r, rule.w, info.rules) };
   let short = false;
   const next: Col = { head: "next", w: 0, cell: (r) => nextText(r, info, now, short) };
   const err: Col = { head: "✕", w: 1, cell: (r) => (r.error || (r.enabled && r.problem) ? "✕" : "") };
@@ -217,6 +224,9 @@ export const ruleError = (info: IntakeInfo | undefined, sel: number) => {
   const r = info?.rules[Math.max(0, Math.min(sel, info.rules.length - 1))];
   return r && (r.error ?? (r.enabled ? r.problem : undefined));
 };
+
+/** The selected rule's id while it has an error. */
+export const errorOf = (info: IntakeInfo | undefined, sel: number) => (ruleError(info, sel) ? info!.rules[Math.max(0, Math.min(sel, info!.rules.length - 1))]!.id : undefined);
 
 /** The intake view (`i`): globals, the rules (scrolled to keep the selected one in view) and its error below them, or with `detail` the whole error scrolled by that many lines; every line exactly `n` columns. */
 export function intakeScreen(info: IntakeInfo | undefined, sel: number, msg: string, now: number, n: number, h: number, P: Palette, detail?: number): { lines: Line[]; maxBack: number } {

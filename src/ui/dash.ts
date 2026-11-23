@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import type { KeyEvent } from "@opentui/core";
 import { repoDir } from "../config/config";
 import { helpOverlay, type Line, type Pane, palette, screen, sortRows } from "./dash-view";
-import { type IntakeInfo, intakeChip, intakeInfo, intakeScreen, ruleError } from "./intake";
+import { errorOf, type IntakeInfo, intakeChip, intakeInfo, intakeScreen } from "./intake";
 import { PR_URL } from "../github";
 import { type Row, reviewLimit, snapshot } from "./status";
 import { follower } from "./tail";
@@ -21,8 +21,8 @@ export interface View {
   /** Transcript rows scrolled up from the end; 0 follows new events. */
   back: number;
   tree?: TreeSelection;
-  /** The selected rule while the intake view is open; `detail` scrolls its full error. */
-  intake?: { sel: number; detail?: number };
+  /** The selected rule while the intake view is open; `detail` scrolls the full error of rule `of`. */
+  intake?: { sel: number; detail?: number; of?: string };
 }
 
 const KEYS = new Map<string, Action>([
@@ -52,8 +52,12 @@ export function action(k: { name: string; shift?: boolean; ctrl?: boolean; meta?
   return KEYS.get(k.name);
 }
 
-/** Applies `a` on `n` tickets, laid-out `cards`, `rules` intake rows, or transcript scroll bounded by `maxBack`. */
-export function reduce(v: View, a: Action, n: number, maxBack = Infinity, cards: ReturnType<typeof treeLayout>["cards"] = [], rules = 0, errored = false): View {
+/** `v` without an intake detail that no longer matches `errored`, the selected rule's id while it has an error. */
+export const settled = (v: View, errored?: string): View => (v.intake?.detail !== undefined && v.intake.of !== errored ? { ...v, intake: { sel: v.intake.sel } } : v);
+
+/** Applies `a` on `n` tickets, laid-out `cards`, `rules` intake rows (`errored`: see settled), or transcript scroll bounded by `maxBack`. */
+export function reduce(v: View, a: Action, n: number, maxBack = Infinity, cards: ReturnType<typeof treeLayout>["cards"] = [], rules = 0, errored?: string): View {
+  v = settled(v, errored);
   const last = Math.max(0, n - 1);
   if (a === "intake") return { ...v, intake: v.intake ? undefined : { sel: 0 }, tree: undefined };
   if (a === "tree") return { ...v, tree: v.tree ? undefined : { sel: 0, detail: false }, intake: undefined, pane: "list", max: false, back: 0 };
@@ -68,10 +72,11 @@ export function reduce(v: View, a: Action, n: number, maxBack = Infinity, cards:
     return v;
   }
   if (v.intake) {
-    if (a === "focus") return errored ? { ...v, intake: { ...v.intake, detail: 0 } } : v;
+    if (a === "focus") return errored ? { ...v, help: false, intake: { ...v.intake, detail: 0, of: errored } } : v;
     const pick = (sel: number) => ({ ...v, intake: { sel: Math.max(0, Math.min(rules - 1, sel)) } });
-    if (a === "down") return pick(v.intake.sel + 1);
-    if (a === "up") return pick(v.intake.sel - 1);
+    const cur = Math.min(v.intake.sel, rules - 1);
+    if (a === "down") return pick(cur + 1);
+    if (a === "up") return pick(cur - 1);
     if (a === "first") return pick(0);
     if (a === "last") return pick(rules - 1);
     if (a === "back") return v.help ? { ...v, help: false } : { ...v, intake: undefined };
@@ -286,6 +291,7 @@ export async function dashboard(cfg: Config, io: Io, interval: number) {
       at = new Date().toTimeString().slice(0, 8);
       note = reviewLimit(cfg);
       info = await intakeInfo(cfg, io);
+      view = settled(view, errorOf(info, view.intake?.sel ?? 0));
     } catch (e) {
       say(`refresh failed: ${(e as Error).message}`);
     }
@@ -343,7 +349,7 @@ export async function dashboard(cfg: Config, io: Io, interval: number) {
     if (a === "refresh") return void refresh().then((ran) => ran || say("refresh already running"));
     const row = rs[view.sel];
     const cards = view.tree && row ? treeLayout(ticketTree(row), r.width).cards : [];
-    view = reduce(view, a, rs.length, maxBack, cards, info?.rules.length ?? 0, !!(view.intake && ruleError(info, view.intake.sel)));
+    view = reduce(view, a, rs.length, maxBack, cards, info?.rules.length ?? 0, errorOf(info, view.intake?.sel ?? 0));
     paint();
   });
   r.on("resize", paint);

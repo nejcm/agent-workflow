@@ -225,3 +225,17 @@ test("review 2: the full error is reachable by scrolling its detail at 40x14 and
   }
   expect(scr({ ...INFO, problem: "tender.db unreadable: locked" }, 1, "", NOW, 80, 7, C).map(text).at(-1)).toContain("tender.db unreadable");
 });
+
+test("review 3: same-named rules in different repos stay distinct at 50 and 40 columns", () => {
+  const twin = (repo: string) => ({ ...INFO.rules[1]!, id: `${repo}:guardrails`, repo, name: "guardrails" });
+  for (const repos of [["acme/a", "acme/b"], ["acme/web-long-name-a", "acme/web-long-name-b"], ["acme/web", "other/web"]]) {
+    const info = { ...INFO, rules: repos.map(twin) };
+    for (const n of [50, 40, 30]) {
+      const ls = scr(info, 5, "", NOW, n, 12, C).map(text);
+      const head = ls.findIndex((l) => l.includes("rule"));
+      const rows = ls.slice(head + 1, head + 3);
+      expect(rows[0]).not.toBe(rows[1]);
+      expect(rows.every((l) => l.includes(":"))).toBe(true);
+    }
+  }
+});

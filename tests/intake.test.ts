@@ -87,6 +87,28 @@ test("protocol: a failing or timed-out script fails its run and files nothing", 
   expect(bad.calls).toEqual([]);
 });
 
+test("runs: a failing rule records its error, the next good run clears it, a dry run records neither", async () => {
+  const errors = () => {
+    const db = new Database(join(root, "tender.db"));
+    try {
+      return db.query<{ error: string | null }, []>("SELECT error FROM intake_runs").all().map((r) => r.error);
+    } finally {
+      db.close();
+    }
+  };
+  let code = 1;
+  const s = setup(() => ({ code, err: "boom\x1b[31m" }));
+  s.io.dry = true;
+  await s.go();
+  expect(existsSync(join(root, "tender.db"))).toBe(false);
+  s.io.dry = false;
+  await s.go();
+  expect(errors()).toEqual([".tender/intake/errs.sh exited 1: boom"]);
+  code = 0;
+  await s.go(T0 + 2 * HOUR);
+  expect(errors()).toEqual([null]);
+});
+
 test("filing: caps in script order, autoLabel vs shadow, sanitized body with marker, seen rows and events", async () => {
   const s = setup(() => ({ out: [line("a", { events: 500, level: "error" }), line("b", { events: 5, level: "error" }), line("c")].join("\n") }));
   await s.go();

@@ -19,7 +19,7 @@ const FACT = /^[A-Za-z][A-Za-z0-9_]{0,39}$/;
 const SHORT_ID = /^[A-Z0-9][A-Z0-9_-]{0,63}-[A-Z0-9]{1,32}$/;
 const DAY = 86_400_000;
 // The timer fires every 15 min with up to a minute of jitter, so a 1h rule must not slip to the next tick.
-const SLACK_MS = 2 * 60_000;
+export const SLACK_MS = 2 * 60_000;
 
 export type Facts = Record<string, string | number>;
 export interface Finding {
@@ -202,7 +202,10 @@ async function runRule(cfg: Config, io: Io, db: Database, work: string, id: stri
   const rule = r.intake.find((x) => x.name === name);
   if (!rule) return io.log(`intake ${id}: no rule ${name} in .tender/config.yaml on ${r.baseBranch}`);
   const ran = db.query<{ ran_at: string }, [string]>("SELECT ran_at FROM intake_runs WHERE rule = ?").get(id)?.ran_at;
-  if (force || !ran || now - Date.parse(ran) >= ms(rule.every) - SLACK_MS) await fileRule(cfg, io, db, work, id, tenderDir, now, tracker, vis, r, rule).catch((e) => io.log(`intake ${id}: failed: ${e.message}`));
+  if (force || !ran || now - Date.parse(ran) >= ms(rule.every) - SLACK_MS) await fileRule(cfg, io, db, work, id, tenderDir, now, tracker, vis, r, rule).catch((e) => {
+      io.log(`intake ${id}: failed: ${e.message}`);
+      if (!io.dry) db.run("UPDATE intake_runs SET error = ? WHERE rule = ?", [clean(e.message, 300), id]);
+    });
   // Every run, not only when the rule is due, so tickets the cap or a failed call left over wait 15 minutes, not `every`.
   if (!cfg.judge) return;
   const s = intakeSource(cfg, r);
@@ -212,7 +215,7 @@ async function runRule(cfg: Config, io: Io, db: Database, work: string, id: stri
 async function fileRule(cfg: Config, io: Io, db: Database, work: string, id: string, tenderDir: string, now: number, tracker: (s: Source) => Tracker, vis: Map<string, string>, r: Session, rule: IntakeRule) {
   const save: Save = (sql, ...params) => void (io.dry || db.run(sql, params));
   // Marked before running: a failing script waits its interval like a working one.
-  save("INSERT INTO intake_runs (rule, ran_at) VALUES (?, ?) ON CONFLICT (rule) DO UPDATE SET ran_at = excluded.ran_at", id, new Date(now).toISOString());
+  save("INSERT INTO intake_runs (rule, ran_at) VALUES (?, ?) ON CONFLICT (rule) DO UPDATE SET ran_at = excluded.ran_at, error = NULL", id, new Date(now).toISOString());
   const missing = rule.secrets.filter((k) => !process.env[k]);
   if (missing.length) throw new Error(`secrets not set in the host's environment (.env): ${missing.join(", ")}`);
   const s = intakeSource(cfg, r);

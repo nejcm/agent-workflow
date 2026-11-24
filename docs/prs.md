@@ -6,7 +6,7 @@
 bun tender.ts prs [--dry-run]
 ```
 
-`scripts/run.sh prs-service` installs `systemd/tender-prs.service` and `.timer`, which run it every Monday at 09:00 (a missed run catches up at the next boot). Install it on one host: each run rewrites the digest, and a live session is only seen on the host that runs it. Like `intake`, it is a separate command with its own lock (`<workspaceRoot>/.prs.lock`) and never runs inside the poll.
+`scripts/run.sh prs-service` installs the `tender-prs` timer (launchd on macOS) through oncue, which runs it every Monday at 09:00 (systemd runs a missed slot at the next boot or resume; launchd runs one missed during sleep on wake, but not one missed while powered off). Install it on one host: each run rewrites the digest, and a live session is only seen on the host that runs it. Like `intake`, it is a separate command with its own lock (`<workspaceRoot>/.prs.lock`) and never runs inside the poll.
 
 ## Listing
 

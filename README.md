@@ -16,6 +16,7 @@ Move a GitHub issue or Linear ticket to **ready**, and `tender` starts a Claude 
 **Picking up work**
 - **Sources:** GitHub issues, with labels over the repos you allowlist, or Linear tickets from a team. Several sources can run side by side.
 - **Ready means:** the `agent` label plus `host:<host>`, so a laptop and a VM never take the same ticket. One machine can also take unlabelled tickets (`defaultHost`).
+- **[Blockers](docs/lifecycle.md):** a ready ticket waits while a "blocked by" ticket (GitHub issue dependency, Linear `blocks` relation) is still open, in any repo or team.
 - **Which repo, in what order:**
   - Repo allowlist, checked against GitHub renames and redirects.
   - A Linear ticket names its repo with a label or a `repo:` line in the ticket; otherwise its project picks the repo that claims it in `.tender/config.yaml`.

@@ -2,10 +2,18 @@ When the work is done:
 
 1. `git push -u origin {{branch}}`
 2. Write the merge file (below).
-3. `gh pr create --repo {{repo}} --base {{base}} --head {{branch}} --fill --body "<summary of
-   the change, how it was tested and verified, and who reviewed it>\n\nTicket: {{url}}"` (`--body` overrides the autofilled body).
-   If {{id}} is a GitHub issue (`gh-<n>`), add a line `Closes #<n>` to the body.
-4. Reply with the PR URL and stop.
+3. Write the PR file (below).
+4. Stop.
+
+PR file: `.tender/run/pr.md` in this clone (git ignores `.tender/run/`; never commit it). A tool outside
+this session opens the PR from it, for `{{branch}}` into `{{base}}`. The first line is the PR title: one line,
+max 120 chars, a Conventional Commits subject. The rest is the body: a summary of the change, how it was
+tested and verified, and who reviewed it, max 16,000 chars. That tool adds the ticket link and any `Closes` line.
+Write it to a temp file in `.tender/run/` and rename it into place, last, after the push and the merge file.
+Once the PR is open, rewriting the file changes nothing.
+
+Read GitHub only with `gh api repos/{{repo}}/...` (GET; no `-f`/`-F`, which turn it into a POST). `gh pr` and
+`gh issue` commands and every GitHub write fail in this session.
 
 If you split the work into phases, record them in the phases file (below) before you start the first one,
 and keep it current as you go.
@@ -26,7 +34,7 @@ It is not a gate: never wait for it, and do not touch the tracker yourself. Form
 - `status`: `todo`, `in-progress` or `done`. Set `in-progress` when you start a phase and
   `done` when it is finished. Status only moves forward; going back is ignored.
 - Add new phases by appending entries; do not delete entries. Rewrite the whole file as valid JSON.
-- Mark every finished phase `done` before you open the PR.
+- Mark every finished phase `done` before you write the PR file.
 
 Findings file: `.tender/run/findings.json` in this clone (git ignores `.tender/run/`; never commit it), out-of-scope
 problems you noticed but did not touch. A tool outside this session files each one once as a new,

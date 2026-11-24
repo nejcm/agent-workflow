@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { closeSync, constants as C, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { AGENTS, CLAUDE_TOKEN, claudeHome, codexHome, recordedAgentConfig, tmpHome } from "./agents";
+import { AGENTS, agentLabel, CLAUDE_TOKEN, claudeHome, codexHome, recordedAgentConfig, tmpHome } from "./agents";
 import { checkLogin, findBun, readLogin } from "./claude-auth";
 import { repoDir } from "../config/config";
 import { canonical, sameRepo } from "../github";
@@ -76,9 +76,10 @@ export function launcher(l: Pick<Session, "agent" | "sandbox" | "path" | "model"
   const expand = !systemd ? "" : `expand=--expand-environment=no; help=$(systemd-run --help 2>/dev/null) && [[ $help != *--expand-environment=* ]] && expand=\n`;
   const scope = !systemd ? [] : ["systemd-run", "--user", "--scope", "--quiet", "--collect", "$expand", "--unit", quote(unit), "--"];
   const vars = ports.length ? `export ${ports.map((p, i) => `TENDER_PORT_${i}=${p}`).join(" ")}\n` : "";
+  const author = `export GIT_AUTHOR_NAME=${quote(`Tender ${agentLabel(l.agent, l.model)}`)} GIT_AUTHOR_EMAIL=tender@tender.invalid\n`;
   // From `/`, so bun reads no bunfig.toml or .env the agent wrote in the clone.
   const up = services ? `(cd / && exec ${quote(bun)} --no-env-file ${quote(join(tenderDir, "src/session/needs.ts"))} ${quote(services)}) || exit 1\n` : "";
-  return `#!/usr/bin/env bash\ncd ${quote(wt)} || exit 1\nunset LINEAR_API_KEY\n${up}export TMPDIR=${quote(tmp)} TMP=${quote(tmp)} TEMP=${quote(tmp)}\n${vars}${box}${env}\n${expand}exec ${[...scope, ...wrap, ...cmd].join(" ")}\n`;
+  return `#!/usr/bin/env bash\ncd ${quote(wt)} || exit 1\nunset LINEAR_API_KEY\n${up}export TMPDIR=${quote(tmp)} TMP=${quote(tmp)} TEMP=${quote(tmp)}\n${vars}${box}${env}\n${author}${expand}exec ${[...scope, ...wrap, ...cmd].join(" ")}\n`;
 }
 
 /** Kills the session's scope, then its window, as for a canceled ticket; drops it from `wins`. */
@@ -409,11 +410,11 @@ export async function start(cfg: Config, s: Source, host: Repo, t: Ticket, tr: T
   return true;
 }
 
-const RESTART = "You are restarting ticket {{id}}: an earlier session worked on it. Before changing anything, read `.tender/run/history.md` and the rest of `.tender/run/`, `git status`, `git log origin/{{base}}..HEAD`, `origin/{{branch}}` after `git fetch origin` (continue from it if it holds earlier work) and the PR for branch {{branch}} if there is one, then do the task below from where it stands.\n\n";
+const RESTART = "You are restarting ticket {{id}}: an earlier session worked on it. Before changing anything, read `.tender/run/history.md` and the rest of `.tender/run/`, `git status`, `git log origin/{{base}}..HEAD`, `origin/{{branch}}` after `git fetch origin` (continue from it if it holds earlier work) and the PR for branch {{branch}} (`gh api 'repos/{{repo}}/pulls?head={{owner}}:{{branch}}&state=all'`) if there is one, then do the task below from where it stands.\n\n";
 
-const CONTINUE = "You are taking ticket {{id}} back after a human worked on it outside tender. Before changing anything, read `git status`, `git log origin/{{base}}..HEAD`, the PR for branch {{branch}} if there is one, and `.tender/run/`, then finish the task below from where it stands.\n\n";
+const CONTINUE = "You are taking ticket {{id}} back after a human worked on it outside tender. Before changing anything, read `git status`, `git log origin/{{base}}..HEAD`, the PR for branch {{branch}} (`gh api 'repos/{{repo}}/pulls?head={{owner}}:{{branch}}&state=all'`) if there is one, and `.tender/run/`, then finish the task below from where it stands. Open the PR by writing `.tender/run/pr.md` (first line the title, the rest the body); `gh pr create` is not available.\n\n";
 
-const RELAUNCH = "Your earlier session on ticket {{id}} ended while its PR had feedback waiting. Before changing anything, read `.tender/run/feedback.md`, `git status`, `git log origin/{{base}}..HEAD` and the PR for branch {{branch}}, then address the feedback and push; the original task follows.\n\n";
+const RELAUNCH = "Your earlier session on ticket {{id}} ended while its PR had feedback waiting. Before changing anything, read `.tender/run/feedback.md`, `git status`, `git log origin/{{base}}..HEAD` and the PR for branch {{branch}} (`gh api 'repos/{{repo}}/pulls?head={{owner}}:{{branch}}&state=all'`), then address the feedback and push; the original task follows.\n\n";
 
 /** Starts a new session in `<ID>`'s existing clone after a hand-off, with the original prompt behind a continue note. */
 export const resume = (cfg: Config, io: Io, target: { key: string; id: string }, tenderDir: string) => passLocked(cfg, io.log, () => resumeLocked(cfg, io, target, tenderDir));
@@ -458,7 +459,7 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
   const promptFile = join(dir, `${id}.prompt.md`);
   const script = join(dir, `${id}.sh`);
   const nono = r.sandbox === "nono";
-  const text = prompt({ id, branch, base: r.baseBranch, verify: "the project's checks (find how they run: README, CI config, package or build files)", repo: r.key });
+  const text = prompt({ id, branch, base: r.baseBranch, verify: "the project's checks (find how they run: README, CI config, package or build files)", repo: r.key, owner: r.key.slice(0, r.key.indexOf("/")) });
   const kib = Buffer.byteLength(text) / 1024;
   if (kib > MAX_PROMPT_KIB) throw new Error(`${id}: prompt is ${Math.ceil(kib)} KiB, over ${MAX_PROMPT_KIB} KiB`);
   const token = join(io.home, CLAUDE_TOKEN);
@@ -496,6 +497,7 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
     remove(io, join(dir, `${id}.ended`));
     remove(io, join(dir, `${id}.reassigned`));
     remove(io, join(dir, `${id}.question`));
+    remove(io, join(dir, `${id}.prfile`));
     put(io, join(dir, `${id}.steer`), JSON.stringify({ seenAt }));
   }
   put(io, join(dir, `${id}.agent`), r.model || r.effort ? JSON.stringify({ name: r.agent, model: r.model, effort: r.effort }) : r.agent);
@@ -515,7 +517,7 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
     // Unlink + exclusive create: never write through a symlink or hardlink the agent left there.
     inRun(wt, (d) => (rmSync(`${d}/.gitignore`, { force: true }), writeFileSync(`${d}/.gitignore`, "*\n", { flag: "wx" })));
     // The last run's question was never asked by this session; its answer would be delivered to it.
-    if (source !== undefined) inRun(wt, (d) => ["question.md", "answer.md", "message.md", "history.md"].forEach((f) => rmSync(`${d}/${f}`, { recursive: true, force: true })));
+    if (source !== undefined) inRun(wt, (d) => ["question.md", "answer.md", "message.md", "history.md", "pr.md"].forEach((f) => rmSync(`${d}/${f}`, { recursive: true, force: true })));
     if (source !== undefined && history) writeRun(wt, "history.md", history);
     if (feedback !== undefined) writeRun(wt, "feedback.md", feedback);
   }

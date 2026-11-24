@@ -322,3 +322,11 @@ test("refresher when another host Claude refreshed first: a refresh racing ours 
   expect(calls()).toHaveLength(1);
   expect(logs).toEqual(["claude login refresh ok, exit 0"]);
 });
+
+test("both profiles give the session a read-only GitHub API token and pass its commit author through", () => {
+  for (const name of ["tender-claude", "tender-codex"]) {
+    const p = JSON.parse(readFileSync(join(TENDER_DIR, "nono", `${name}.json`), "utf8"));
+    expect(p.network.custom_credentials.github.endpoint_rules).toEqual([{ method: "GET", path: "/repos/**" }, { method: "GET", path: "/user" }]);
+    expect(p.environment.allow_vars).toEqual(expect.arrayContaining(["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL"]));
+  }
+});

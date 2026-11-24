@@ -235,11 +235,11 @@ The last type must be `default`, with no `match`: it takes every ticket no other
 
 ### Prompt
 
-A session's prompt is tender's `prompts/header.md` (the ticket and the rules that always hold), then the type's instruction file, then tender's `prompts/protocol.md` (push, merge file, `gh pr create`, and the phases, findings, question, message, feedback and merge files). The header and protocol are fixed, so every prompt keeps tender's required guidance; that is not an enforcement boundary, see [Auto-merge](auto-merge.md). A ticket body over 24,000 characters is cut, with a note to read the full ticket at its URL; a prompt over 120 KiB stops the start before the ticket's clone, session or claim (the repo's base clone and fetch, needed to read `.tender/`, come first).
+A session's prompt is tender's `prompts/header.md` (the ticket and the rules that always hold), then the type's instruction file, then tender's `prompts/protocol.md` (push, merge file, PR file, and the phases, findings, question, message, feedback and merge files). The header and protocol are fixed, so every prompt keeps tender's required guidance; that is not an enforcement boundary, see [Auto-merge](auto-merge.md). A ticket body over 24,000 characters is cut, with a note to read the full ticket at its URL; a prompt over 120 KiB stops the start before the ticket's clone, session or claim (the repo's base clone and fetch, needed to read `.tender/`, come first).
 
 ### Prompt placeholders
 
-`{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{verify}} {{repo}}`, in tender's prompt files and instruction files alike. The whole prompt is rendered once, so placeholders in ticket text stay literal. `{{verify}}` is "the project's checks (find how they run: README, CI config, package or build files)".
+`{{id}} {{title}} {{body}} {{url}} {{branch}} {{base}} {{verify}} {{repo}} {{owner}}`, in tender's prompt files and instruction files alike. The whole prompt is rendered once, so placeholders in ticket text stay literal. `{{verify}}` is "the project's checks (find how they run: README, CI config, package or build files)"; `{{owner}}` is the owner part of `{{repo}}`.
 
 ## Environment
 

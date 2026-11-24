@@ -236,3 +236,14 @@ test("resume waits for a running poll's lock, so a pass never sees its window li
   expect(cmds.some((c) => c.includes("new-window"))).toBe(true);
   expect(existsSync(join(root, "acme/web/gh-1.handoff"))).toBe(false);
 });
+
+test("resume tells an old-protocol prompt to open its PR through the PR file and reads the PR over REST", async () => {
+  clone();
+  writeFileSync(join(root, "acme/web/gh-1.prompt.md"), "3. `gh pr create --repo acme/web`\n");
+  writeFileSync(join(root, "acme/web/gh-1.handoff"), "claude\n");
+  await resume(config(), tmux([]).io, { key: "acme/web", id: "gh-1" }, "/tender");
+  const prompt = readFileSync(join(root, "acme/web/gh-1.prompt.md"), "utf8");
+  expect(prompt).toContain("`gh api 'repos/acme/web/pulls?head=acme:agent/gh-1&state=all'`");
+  expect(prompt).toContain("Open the PR by writing `.tender/run/pr.md`");
+  expect(prompt).not.toContain("{{");
+});

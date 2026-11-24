@@ -70,4 +70,4 @@ Done when: existing tests pass with the renamed `readRun` and the new comment te
 ## Risks
 
 - `gh issue view --json comments` cost grows with comment count; only paid for tickets with an open question or an idle steerable session (`<ID>.steer`, no PR), and once per start.
-- On GitHub the sandboxed agent still has `gh`, so it could post its own "answer" or operator message. The allowlist stops that only if the agent's token belongs to a different login than the operator; otherwise it is a prompt rule, as with phases.
+- Under nono the agent's GitHub API token is read-only, so it cannot post its own "answer" or operator message. With `sandbox: "none"` it has the operator's `gh` login and could; the allowlist stops that only if the agent's token belongs to a different login than the operator, otherwise it is a prompt rule, as with phases.

@@ -65,14 +65,15 @@ export GH_CONFIG_DIR='/ws/it'\''s'.gh XDG_CACHE_HOME='/ws/it'\''s.tmpdir/cache' 
 `;
   const own = String.raw`--allow '/ws/it'\''s.claude' --allow '/ws/it'\''s.codex' `;
   const probe = "expand=--expand-environment=no; help=$(systemd-run --help 2>/dev/null) && [[ $help != *--expand-environment=* ]] && expand=\n";
-  expect(s("claude", "nono")).toBe(`${head}${box}${claudeNonoEnv}${probe}exec ${scope}${nono("claude", own)}${claude}`);
-  expect(s("claude", "none")).toBe(`${head}${claudeEnv}${probe}exec ${scope}${claude}`);
+  const author = (a: string) => `export GIT_AUTHOR_NAME='Tender ${a}' GIT_AUTHOR_EMAIL=tender@tender.invalid\n`;
+  expect(s("claude", "nono")).toBe(`${head}${box}${claudeNonoEnv}${author("Claude")}${probe}exec ${scope}${nono("claude", own)}${claude}`);
+  expect(s("claude", "none")).toBe(`${head}${claudeEnv}${author("Claude")}${probe}exec ${scope}${claude}`);
   const codexEnv = String.raw`export CODEX_HOME='/ws/it'\''s'.codex
 `;
   const codexNonoEnv = String.raw`export CODEX_HOME='/ws/it'\''s'.codex CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CLAUDE_CODE_TMPDIR='/ws/it'\''s'.tmpdir
 `;
-  expect(s("codex", "nono")).toBe(`${head}${box}${codexNonoEnv}${probe}exec ${scope}${nono("codex", own)}${codex("--no-daemon ")}`);
-  expect(s("codex", "none")).toBe(`${head}${codexEnv}${probe}exec ${scope}${codex("")}`);
+  expect(s("codex", "nono")).toBe(`${head}${box}${codexNonoEnv}${author("Codex")}${probe}exec ${scope}${nono("codex", own)}${codex("--no-daemon ")}`);
+  expect(s("codex", "none")).toBe(`${head}${codexEnv}${author("Codex")}${probe}exec ${scope}${codex("")}`);
 });
 
 test("launcher: without systemd the agent is exec'd directly, no scope and no expand probe", () => {
@@ -726,7 +727,7 @@ test("cleanup treats a window already closed by the scope kill as gone, but fail
 
 test("done: kills window, removes the session clone, files and config dir; keeps them all when the delete fails", async () => {
   const c = config();
-  for (const id of ["gh-1", "gh-2", "gh-3"]) {
+  for (const id of ["gh-1", "gh-2", "gh-3", "gh-4"]) {
     mkdirSync(join(root, "acme/web", id, ".git"), { recursive: true });
     for (const ext of [".prompt.md", ".sh", ".ended", ".pr", ".question", ".findings", ".ready", ".handoff"]) writeFileSync(join(root, "acme/web", id + ext), "");
     writeFileSync(join(root, "acme/web", `${id}.source`), "web\n");
@@ -1927,4 +1928,56 @@ test("a dry-run restart logs history.md and writes nothing", async () => {
   await pass(withOp(), io, () => tr, "/tender");
   expect(logs).toContain(`[web] dry: write ${root}/acme/web/gh-1/.tender/run/history.md`);
   expect(existsSync(history())).toBe(false);
+});
+
+test("in-progress: a pushed PR file opens the PR and moves to review in the same poll; failures log once and hold back the ended notice", async () => {
+  const c = config();
+  const pull = "https://github.com/acme/web/pull/9";
+  for (const id of ["gh-1", "gh-2", "gh-3", "gh-4"]) {
+    worktree(id);
+    mkdirSync(join(root, "acme/web", id, ".tender/run"), { recursive: true });
+    writeFileSync(join(root, "acme/web", id, ".tender/run/pr.md"), `fix: ${id}\n`);
+  }
+  const { tr, calls } = fakeTracker({ inProgress: [ticket(1), ticket(2), ticket(3), { ...ticket(4), labels: ["needs-human"] }] });
+  let opened = false;
+  const { io, cmds, logs } = fakeIo((a) => {
+    if (a[1] === "pr") return { out: opened && a.includes("agent/gh-1") ? JSON.stringify([{ url: pull, state: "OPEN" }]) : "[]" };
+    if (a.includes("head=agent/gh-1")) opened = true;
+    if (a[3] === "ls-remote") return a.at(-1) === "refs/heads/agent/gh-3" ? { out: "" } : { out: `${"b".repeat(40)}\t${a.at(-1)}\n` };
+    if (a[4] === "repos/acme/web/pulls") return a.includes("head=agent/gh-1") ? { out: JSON.stringify({ number: 9, html_url: pull }) } : { code: 1, err: "gh: HTTP 502" };
+  });
+  await pass(c, io, () => tr, "/tender");
+  await pass(c, io, () => tr, "/tender");
+  expect(calls.filter((x) => !x.startsWith("review gh-1"))).toEqual(["comment gh-3 session ended without a PR"]);
+  expect(calls.filter((x) => x === `review gh-1 PR: ${pull}`)).toHaveLength(2);
+  expect(cmds.filter((x) => x.includes("head=agent/gh-1"))).toHaveLength(1);
+  expect(logs.filter((l) => l === "[web] open pr gh-2 failed: gh api pulls: gh: HTTP 502")).toHaveLength(1);
+  expect(logs.filter((l) => l === "[web] open pr gh-3 failed: pr.md: agent/gh-3 is not pushed")).toHaveLength(1);
+  expect(cmds.some((x) => x.includes("refs/heads/agent/gh-4") || x.includes("head=agent/gh-4"))).toBe(false);
+});
+
+test("a fresh start drops the last run's PR file and its record", async () => {
+  const c = config();
+  mkdirSync(join(root, "acme/web/gh-1/.tender/run"), { recursive: true });
+  for (const f of ["gh-1.prfile", "gh-1/.tender/run/pr.md"]) writeFileSync(join(root, "acme/web", f), "x");
+  const { tr } = fakeTracker({ ready: [ticket(1)] });
+  const { io } = fakeIo((a) => (a[5] === "--quiet" ? { out: "abc123\n" } : noPr(a)));
+  await pass(c, io, () => tr, "/tender");
+  for (const f of ["gh-1.prfile", "gh-1/.tender/run/pr.md"]) expect(existsSync(join(root, "acme/web", f))).toBe(false);
+});
+
+test("launcher: session commits are authored as tender with the agent and model, in both sandbox modes", () => {
+  for (const sandbox of ["nono", "none"]) {
+    const c = config({ repos: [{ name: "acme/web", path: "/src/web", sandbox }] });
+    expect(launcher({ ...ses(c), model: "claude-opus-5-5" }, "/w", "/p", "u.scope", "/tender", "/b/bun")).toContain("\nexport GIT_AUTHOR_NAME='Tender Claude (claude-opus-5-5)' GIT_AUTHOR_EMAIL=tender@tender.invalid\n");
+    expect(launcher(ses(c, "codex"), "/w", "/p", "u.scope", "/tender", "/b/bun")).toContain("\nexport GIT_AUTHOR_NAME='Tender Codex' GIT_AUTHOR_EMAIL=tender@tender.invalid\n");
+  }
+});
+
+test("a start sets no git identity in the clone, so a hand-off commits as the operator", async () => {
+  const { tr } = fakeTracker({ ready: [ticket(1)] });
+  const { io, cmds } = fakeIo((a) => (a[5] === "--quiet" ? { out: "abc123\n" } : noPr(a)));
+  await pass(config(), io, () => tr, "/tender");
+  expect(cmds.some((x) => x.includes("tmux new-window"))).toBe(true);
+  expect(cmds.some((x) => /user\.(name|email)|--author/.test(x))).toBe(false);
 });

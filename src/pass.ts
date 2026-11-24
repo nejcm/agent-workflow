@@ -4,7 +4,7 @@ import { allowedRepo, repoDir, validRepo } from "./config/config";
 import { deliverFeedback, feedbackFields } from "./session/feedback";
 import { fileFindings } from "./review/findings";
 import { agentOf, codexHome } from "./session/agents";
-import { baseBranch, canonical, findPr, sameRepo } from "./github";
+import { BadPr, baseBranch, canonical, findPr, openPr, sameRepo } from "./github";
 import { authStamp, claim, cloned, CODEX_AUTH, codexIdentity, codexLogin, codexRecorded, handedOff, nonoRun, refreshCodexCopy, relaunch, scopeUnit, start, stopSession, sweepScopes, windows, winName } from "./session/launcher";
 import { autoMerge, checkState, policyBlocked, PR_FIELDS, prMode, prReady, viewPr } from "./review/merge";
 import { syncPhases } from "./review/phases";
@@ -195,7 +195,18 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
         if (t.otherAssignee) return stopReassigned(cfg, tr, io, w, wins);
         const dir = repoDir(cfg, key);
         const parked = hasLabel(t.labels, s.needsHumanLabel) || handedOff(dir, t.id);
-        const pr = await findPr(key, t.id, io, dir);
+        let pr = await findPr(key, t.id, io, dir);
+        // A PR file that could still become a PR holds back the ended notice for that poll.
+        let pending = false;
+        if (!pr && !parked)
+          await step(io, `open pr ${t.id}`, async () => {
+            try {
+              pr = await openPr(cfg.repos[key]!, w, io, dir);
+            } catch (e) {
+              pending = !(e instanceof BadPr);
+              throw e;
+            }
+          });
         await step(io, `phases ${t.id}`, () => syncPhases(w, tr, io, dir, !!pr));
         if (pr) {
           if (!parked) await step(io, `findings ${t.id}`, () => fileFindings(w, tr, io, dir));
@@ -219,7 +230,7 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
           return step(io, `answer ${t.id}`, () => deliverAnswer(r, w, comments, io, dir, win, unit, () => state(dir, t.id)));
         }
         // The in-progress listing can lag a close that cleanup already acted on.
-        if (parked) return;
+        if (parked || pending) return;
         if (existsSync(ended)) {
           const seen = `${ended}@${statSync(ended).mtimeMs}`;
           if (warned.has(seen) || (await tr.closed(t.id, key))) return;

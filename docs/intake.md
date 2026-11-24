@@ -46,8 +46,34 @@ Example scripts live in tender's [`intake/`](../intake) dir; copy one into the r
 - `posthog-errors.ts`: one ticket per active PostHog error tracking issue, most frequent first, keyed `posthog:<issue id>`. See [PostHog](#posthog).
 - `pg-lint.ts` and `pg-slow.ts`: one ticket per Supabase database lint, and one per query that got slow since the last run. See [Postgres and Supabase](#postgres-and-supabase).
 - `contract.ts`: one ticket per broken piece of the repo's tender contract. See [Contract](#contract).
+- Recurring tickets need no script of tender's: see [Recurring tickets](#recurring-tickets).
 
 The plan named a shell script for the contract; it is TypeScript like the others, so it is tested.
+
+### Recurring tickets
+
+Intake files each key at most once, so a key that names a period is a schedule: a script that prints one line keyed by the current week files one ticket a week, and nothing else is needed. For a weekly dependency update, `.tender/intake/weekly.ts` (executable):
+
+```ts
+#!/usr/bin/env -S bun --no-env-file
+if (process.argv.includes("--recheck")) console.log(JSON.stringify({ state: "gone" }));
+else {
+  const monday = new Date(Date.now() - ((new Date().getUTCDay() + 6) % 7) * 864e5).toISOString().slice(0, 10);
+  console.log(JSON.stringify({ key: `deps:${monday}`, title: `chore: update dependencies (week of ${monday})`, body: "Update every dependency to its latest compatible version, run the tests, and note any breaking change in the PR.", facts: { kind: "recurring" } }));
+}
+```
+
+```yaml
+intake:
+  - name: weekly-deps
+    run: .tender/intake/weekly.ts
+    every: 1d                      # checks daily; the key changes once a week
+    labels: [deps]                 # a profile type matching `deps` picks its instructions
+    autoLabel: [{ kind: recurring }]
+    recheck: false
+```
+
+The key sets the period (a date for daily, the first of the month for monthly); `autoLabel` on the fixed fact makes each ticket ready, so leave it out to review each one first. A new period files a new ticket even while the last one is still open. The label must exist, like any rule label.
 
 ### Sentry
 

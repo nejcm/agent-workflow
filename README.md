@@ -62,7 +62,7 @@ Move a GitHub issue or Linear ticket to **ready**, and `tender` starts a Claude 
 - `prs`: weekly, closes open `agent/<ID>` PRs whose ticket is done or canceled, and reports conflicting, failing, stale and ready-but-unmerged PRs to the journal and an optional digest issue. Never touches other PRs.
 
 **[Intake](docs/intake.md)**
-- `intake`: repo scripts that print JSON lines become deduped, sanitized tickets, carrying the rule's `labels`, without the ready label until its `autoLabel` trusts them, and rechecked after they are Done. Runs on one host, on a 15-minute timer, in nono.
+- `intake`: repo scripts that print JSON lines become deduped, sanitized tickets, carrying the rule's `labels`, without the ready label until its `autoLabel` trusts them, and rechecked after they are Done. Runs on one host, on a 15-minute timer, in nono. A key that names a period gives [recurring tickets](docs/intake.md#recurring-tickets).
 
 ## How it works
 

@@ -727,7 +727,7 @@ test("cleanup treats a window already closed by the scope kill as gone, but fail
 
 test("done: kills window, removes the session clone, files and config dir; keeps them all when the delete fails", async () => {
   const c = config();
-  for (const id of ["gh-1", "gh-2", "gh-3", "gh-4"]) {
+  for (const id of ["gh-1", "gh-2", "gh-3"]) {
     mkdirSync(join(root, "acme/web", id, ".git"), { recursive: true });
     for (const ext of [".prompt.md", ".sh", ".ended", ".pr", ".question", ".findings", ".ready", ".handoff"]) writeFileSync(join(root, "acme/web", id + ext), "");
     writeFileSync(join(root, "acme/web", `${id}.source`), "web\n");

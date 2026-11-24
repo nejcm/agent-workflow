@@ -67,7 +67,7 @@ export function prText(raw: string) {
 
 /** Opens the PR from the session's `.tender/run/pr.md` once per version of that file; the URL, or undefined if there is nothing to open (or a dry run). */
 export async function openPr(r: Repo, t: Ticket & { repo: string }, io: Io, dir: string): Promise<string | undefined> {
-  const bad = (m: string) => new BadPr(`pr.md: ${m}`, `${t.id}:pr:${m}`);
+  const bad = (m: string) => new BadPr(`pr.md: ${m}`, `${t.repo}/${t.id}:pr:${m}`);
   let raw: string | undefined;
   try {
     raw = readRun(join(dir, t.id), "pr.md", 64 * 1024);
@@ -88,33 +88,33 @@ export async function openPr(r: Repo, t: Ticket & { repo: string }, io: Io, dir:
     const closes = /^gh-(\d+)$/.exec(t.id)?.[1];
     const footer = ["---", `Ticket: ${t.url}`, ...(closes ? [`Closes #${closes}`] : []), `Opened by tender for ${t.id}${a ? ` with ${agentLabel(a.name, a.model)}` : ""}.`].join("\n");
     const argv = ["gh", "api", "-X", "POST", `repos/${t.repo}/pulls`, "-f", `title=${title}`, "-f", `head=${branch}`, "-f", `base=${await baseBranch(io, r)}`, "-f", `body=${body ? `${body}\n\n` : ""}${footer}`];
-    io.log(`${io.dry ? "dry: " : ""}${argv.join(" ")}`);
+    io.log(`${io.dry ? "dry: " : ""}${[...argv.slice(0, -1), `body=(${argv.at(-1)!.length - 5} chars)`].join(" ")}`);
     if (io.dry) return;
     const res = await io.run(argv);
     const exists = res.code !== 0 && /pull request already exists/i.test(res.out + res.err);
     if (res.code !== 0 && !exists) {
       const msg = `gh api pulls: ${res.err.trim() || `exit ${res.code}`}`;
-      throw /HTTP 422/.test(res.err) ? bad(msg) : new Kept(msg, `${t.id}:pr:${msg}`);
+      throw /HTTP 422/.test(res.err) ? bad(msg) : new Kept(msg, `${t.repo}/${t.id}:pr:${msg}`);
     }
     let url: string | undefined;
     if (!exists) {
       url = JSON.parse(res.out).html_url;
       if (typeof url !== "string" || !PR_URL.test(url)) throw new Error("gh api pulls: no PR URL in the response");
     }
-    put(io, mark, hash);
     if (url) put(io, join(dir, `${t.id}.pr`), url);
     url ??= await findPr(t.repo, t.id, io, dir);
     if (!url) throw new Error("gh api pulls: GitHub says the PR exists but does not list it yet");
+    put(io, mark, hash);
     await label(io, t.repo, url.slice(url.lastIndexOf("/") + 1)).catch((e) => io.log(`${t.id}: tender label not added: ${(e as Error).message}`));
     return url;
   } catch (e) {
-    throw e instanceof Kept ? e : new Kept((e as Error).message, `${t.id}:pr:${(e as Error).message}`);
+    throw e instanceof Kept ? e : new Kept((e as Error).message, `${t.repo}/${t.id}:pr:${(e as Error).message}`);
   }
 }
 
 async function label(io: Io, repo: string, n: string) {
   if (!labelCache.has(repo) && (await io.run(["gh", "api", `repos/${repo}/labels/tender`])).code !== 0)
     await write(io, ["gh", "api", "-X", "POST", `repos/${repo}/labels`, "-f", "name=tender", "-f", "color=5319e7", "-f", "description=Opened by tender"]).catch(() => undefined);
-  labelCache.add(repo);
   await write(io, ["gh", "api", "-X", "POST", `repos/${repo}/issues/${n}/labels`, "-f", "labels[]=tender"]);
+  labelCache.add(repo);
 }

@@ -496,6 +496,7 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
     remove(io, join(dir, `${id}.ended`));
     remove(io, join(dir, `${id}.reassigned`));
     remove(io, join(dir, `${id}.question`));
+    remove(io, join(dir, `${id}.prfile`));
     put(io, join(dir, `${id}.steer`), JSON.stringify({ seenAt }));
   }
   put(io, join(dir, `${id}.agent`), r.model || r.effort ? JSON.stringify({ name: r.agent, model: r.model, effort: r.effort }) : r.agent);
@@ -515,7 +516,7 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
     // Unlink + exclusive create: never write through a symlink or hardlink the agent left there.
     inRun(wt, (d) => (rmSync(`${d}/.gitignore`, { force: true }), writeFileSync(`${d}/.gitignore`, "*\n", { flag: "wx" })));
     // The last run's question was never asked by this session; its answer would be delivered to it.
-    if (source !== undefined) inRun(wt, (d) => ["question.md", "answer.md", "message.md", "history.md"].forEach((f) => rmSync(`${d}/${f}`, { recursive: true, force: true })));
+    if (source !== undefined) inRun(wt, (d) => ["question.md", "answer.md", "message.md", "history.md", "pr.md"].forEach((f) => rmSync(`${d}/${f}`, { recursive: true, force: true })));
     if (source !== undefined && history) writeRun(wt, "history.md", history);
     if (feedback !== undefined) writeRun(wt, "feedback.md", feedback);
   }

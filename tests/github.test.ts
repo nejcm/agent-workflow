@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import { github } from "../src/trackers/github";
 import { LINEAR_ISSUES, linear, linearTicket } from "../src/trackers/linear";
-import { byPriority, labelPriority } from "../src/util";
+import { byPriority, Kept, labelPriority } from "../src/util";
 import { makeTracker, pass } from "../src/pass";
-import { findPr } from "../src/github";
-import { writeFileSync } from "node:fs";
+import { BadPr, findPr, openPr, PR_BODY_MAX, PR_TITLE_MAX, prText } from "../src/github";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { config, fakeIo, root, gh, lin, phase, src, ticket, useTempRoot, web, windowsOut, withLinearKey, writePhases } from "./helpers";
 
@@ -306,4 +306,91 @@ test("github adapter: defaultHost lists past 100 other-host tickets; at the 1000
   expect(await tr.listReady()).toHaveLength(900);
   expect(logs).toEqual(["repo acme/web: 1000 issues listed, the rest unknown"]);
   await expect(tr.listInReview(true)).rejects.toThrow("repo acme/web: 1000 issues listed, the rest unknown");
+});
+
+const prMd = (text: string, id = "gh-1") => {
+  mkdirSync(join(root, "acme/web", id, ".tender/run"), { recursive: true });
+  writeFileSync(join(root, "acme/web", id, ".tender/run/pr.md"), text);
+};
+const PULL = "https://github.com/acme/web/pull/7";
+const prIo = (over: (a: string[]) => { code?: number; out?: string; err?: string } | undefined = () => undefined, dry = false) =>
+  fakeIo((a) => {
+    const hit = over(a);
+    if (hit) return hit;
+    if (a[3] === "ls-remote") return { out: `${"b".repeat(40)}\trefs/heads/agent/gh-1\n` };
+    if (a[1] === "api" && a[4] === "repos/acme/web/pulls") return { out: JSON.stringify({ number: 7, html_url: PULL }) };
+    if (a[1] === "api" && a[2] === "repos/acme/web/labels/tender") return { code: 1, err: "gh: Not Found (HTTP 404)" };
+    if (a[1] === "pr") return { out: "[]" };
+  }, dry);
+const dirOf = () => join(root, "acme/web");
+const t1 = () => ({ ...ticket(1), repo: "acme/web" });
+
+test("openPr: posts the sanitized PR file with tender's footer, records it, labels it, and opens it once per file version", async () => {
+  const c = config();
+  prMd("# feat: add thing\r\n\r\nDid it, cc @alice.\n");
+  writeFileSync(join(dirOf(), "gh-1.agent"), JSON.stringify({ name: "claude", model: "claude-opus-5-5" }));
+  const { io, cmds } = prIo();
+  expect(await openPr(web(c), t1(), io, dirOf())).toBe(PULL);
+  const post = cmds.find((x) => x.startsWith("gh api -X POST repos/acme/web/pulls"))!;
+  expect(post).toBe(`gh api -X POST repos/acme/web/pulls -f title=feat: add thing -f head=agent/gh-1 -f base=main -f body=Did it, cc @​alice.\n\n---\nTicket: https://x/1\nCloses #1\nOpened by tender for gh-1 with Claude (claude-opus-5-5).`);
+  expect(cmds).toContain(`git -C ${web(c).path} ls-remote origin refs/heads/agent/gh-1`);
+  expect(cmds).toContain("gh api -X POST repos/acme/web/labels -f name=tender -f color=5319e7 -f description=Opened by tender");
+  expect(cmds).toContain("gh api -X POST repos/acme/web/issues/7/labels -f labels[]=tender");
+  expect(readFileSync(join(dirOf(), "gh-1.pr"), "utf8")).toBe(PULL);
+  expect(existsSync(join(dirOf(), "gh-1.prfile"))).toBe(true);
+  const again = prIo();
+  expect(await openPr(web(c), t1(), again.io, dirOf())).toBeUndefined();
+  expect(again.cmds).toEqual([]);
+  prMd("feat: add thing, v2\n");
+  expect(await openPr(web(c), t1(), again.io, dirOf())).toBe(PULL);
+  expect(again.cmds.filter((x) => x.startsWith("gh api -X POST repos/acme/web/pulls"))).toHaveLength(1);
+  expect(again.cmds.filter((x) => x.includes("/labels/tender"))).toHaveLength(0);
+});
+
+test("openPr: no file or an unpushed branch opens nothing; an existing PR is adopted; other failures keep the file pending", async () => {
+  const c = config();
+  const none = prIo();
+  expect(await openPr(web(c), t1(), none.io, dirOf())).toBeUndefined();
+  expect(none.cmds).toEqual([]);
+  prMd("fix: x\n");
+  const unpushed = prIo((a) => (a[3] === "ls-remote" ? { out: "" } : undefined));
+  await expect(openPr(web(c), t1(), unpushed.io, dirOf())).rejects.toBeInstanceOf(BadPr);
+  expect(unpushed.cmds.some((x) => x.includes("/pulls"))).toBe(false);
+  const empty = prIo();
+  prMd("\n  \n\x1b[2J\n");
+  await expect(openPr(web(c), t1(), empty.io, dirOf())).rejects.toThrow("pr.md: no title on its first line");
+  prMd("fix: x\n");
+  const exists = prIo((a) => {
+    if (a[4] === "repos/acme/web/pulls") return { code: 1, out: '{"message":"Validation Failed","errors":[{"message":"A pull request already exists for acme:agent/gh-1."}]}', err: "gh: Validation Failed (HTTP 422)" };
+    if (a[1] === "pr") return { out: JSON.stringify([{ url: PULL, state: "OPEN" }]) };
+  });
+  expect(await openPr(web(c), t1(), exists.io, dirOf())).toBe(PULL);
+  expect(exists.cmds).toContain("gh api -X POST repos/acme/web/issues/7/labels -f labels[]=tender");
+  rmSync(join(dirOf(), "gh-1.prfile"));
+  const noCommits = prIo((a) => (a[4] === "repos/acme/web/pulls" ? { code: 1, err: "gh: Validation Failed: No commits between main and agent/gh-1 (HTTP 422)" } : undefined));
+  await expect(openPr(web(c), t1(), noCommits.io, dirOf())).rejects.toBeInstanceOf(BadPr);
+  const down = prIo((a) => (a[4] === "repos/acme/web/pulls" ? { code: 1, err: "gh: HTTP 502" } : undefined));
+  const e = await openPr(web(c), t1(), down.io, dirOf()).catch((x) => x);
+  expect(e).toBeInstanceOf(Kept);
+  expect(e).not.toBeInstanceOf(BadPr);
+  expect(existsSync(join(dirOf(), "gh-1.prfile"))).toBe(false);
+});
+
+test("openPr: a dry run logs the POST and records nothing", async () => {
+  const c = config();
+  prMd("fix: x\n");
+  const { io, cmds, logs } = prIo(undefined, true);
+  expect(await openPr(web(c), t1(), io, dirOf())).toBeUndefined();
+  expect(logs.some((l) => l.startsWith("dry: gh api -X POST repos/acme/web/pulls -f title=fix: x"))).toBe(true);
+  expect(cmds.some((x) => x.includes("/pulls"))).toBe(false);
+  expect(existsSync(join(dirOf(), "gh-1.prfile"))).toBe(false);
+});
+
+test("prText: title from the first non-empty line, controls and mentions neutralized, caps applied after unmention", () => {
+  expect(prText("\n## fix: a‮\x1b[31mb\nbody\x07 line  \r\n")).toEqual({ title: "fix: a b", body: "body  line" });
+  const t = prText(`${"@a ".repeat(60)}\n${"@b ".repeat(10_000)}`);
+  expect(t.title.length).toBe(PR_TITLE_MAX);
+  expect(t.body.length).toBe(PR_BODY_MAX);
+  expect(t.body.startsWith("@​b")).toBe(true);
+  expect(prText("")).toEqual({ title: "", body: "" });
 });

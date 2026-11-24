@@ -43,6 +43,8 @@ export function recordedAgentConfig(dir: string, id: string): AgentConfig | unde
 /** The agent a session was started with; undefined for one started before tender recorded it. */
 export const recordedAgent = (dir: string, id: string) => recordedAgentConfig(dir, id)?.name;
 export const agentOf = (dir: string, id: string) => recordedAgent(dir, id) ?? "claude";
+/** "Claude (claude-opus-5-5)", or "Codex" with no model. */
+export const agentLabel = (name: AgentName, model?: string) => `${name[0]!.toUpperCase()}${name.slice(1)}${model ? ` (${model})` : ""}`;
 
 /** The ticket's own Claude config dir, a sidecar of its worktree. */
 export const claudeHome = (wt: string) => `${wt}.claude`;

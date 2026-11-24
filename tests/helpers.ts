@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { CLAUDE_TOKEN, claudeDir } from "../src/session/agents";
 import { CREDENTIALS } from "../src/session/claude-auth";
 import { parseConfig } from "../src/config/config";
-import { canonCache } from "../src/github";
+import { canonCache, labelCache } from "../src/github";
 import { hatchCache } from "../src/review/merge";
 import { configCache } from "../src/config/repo-config";
 import type { Config, GitHubSource, Io, LinearSource, Ticket, Tracker } from "../src/types";
@@ -34,6 +34,7 @@ export function useTempRoot() {
     mkdirSync(join(root, ".claude"));
     writeFileSync(join(root, CREDENTIALS), JSON.stringify({ claudeAiOauth: { accessToken: "a", refreshToken: "r", expiresAt: Date.now() + 3_600_000, refreshTokenExpiresAt: Date.now() + 7 * 86_400_000, scopes: ["user:inference"] } }));
     canonCache.clear();
+    labelCache.clear();
     configCache.clear();
     hatchCache.clear();
     repoFiles = {};

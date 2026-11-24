@@ -70,7 +70,7 @@ case $sandboxes in
 esac
 
 for repo in "${repos[@]}"; do
-  for l in agent in-progress in-review ready-to-merge needs-human "host:$host"; do
+  for l in agent in-progress in-review ready-to-merge needs-human tender "host:$host"; do
     gh label create "$l" --repo "$repo" --force >/dev/null && echo "label $repo $l"
   done
 done

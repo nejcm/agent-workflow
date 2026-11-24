@@ -186,12 +186,8 @@
         "credential_format": "token {}",
         "endpoint_rules": [
           {
-            "method": "*",
+            "method": "GET",
             "path": "/repos/**"
-          },
-          {
-            "method": "POST",
-            "path": "/graphql"
           },
           {
             "method": "GET",

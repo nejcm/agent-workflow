@@ -1,6 +1,6 @@
 # tender — agent workflow
 
-Move a GitHub issue or Linear ticket to **ready**, and `tender` starts a Claude Code or Codex session for it: in its own git clone, inside the [nono](https://github.com/nolabs-ai/nono) sandbox, in a tmux window you can attach to. The agent implements the ticket, runs the tests, pushes `agent/<ID>` and opens a PR; `tender` then moves the ticket to **In Review**.
+Move a GitHub issue or Linear ticket to **ready**, and `tender` starts a Claude Code or Codex session for it: in its own git clone, inside the [nono](https://github.com/nolabs-ai/nono) sandbox, in a tmux window you can attach to. The agent implements the ticket, runs the tests, pushes `agent/<ID>` and writes a PR file; `tender` opens the PR, labelled `tender`, and moves the ticket to **In Review**.
 
 - **Watch and steer locally.** `tmux attach -t tender`, or open its clone in your editor. Codex sessions are interactive, so they also land in the ChatGPT/Codex app history. Claude sessions run without Remote Control: they hold an inference-only token (nono's phantom, or the setup-token without a sandbox), which cannot open Remote Control sessions.
 - **Runs where you are.** Directly on your machine (sandboxed by nono), or on a VM (`sandbox: "none"`, the VM is the boundary). Same code, same config.
@@ -71,7 +71,7 @@ Every poll (default 60 s), `tender` looks for ready tickets (the `agent` label p
 1. clones the repo and makes a session clone on branch `agent/<ID>`;
 2. starts the agent in a tmux window, sandboxed by nono, with a prompt built from the ticket and the repo's `.tender/` config;
 3. mirrors the agent's phases, questions and findings to the tracker;
-4. moves the ticket to In Review when the PR exists, feeds review comments, failed checks and conflicts back to the session (relaunching it in the same clone if it has ended), and optionally auto-merges.
+4. opens the PR from the agent's PR file and moves the ticket to In Review, feeds review comments, failed checks and conflicts back to the session (relaunching it in the same clone if it has ended), and optionally auto-merges.
 
 ## History: `tender.db`
 

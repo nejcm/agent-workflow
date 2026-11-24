@@ -37,7 +37,7 @@ Idempotent, never overwrites real files. It creates `~/.claude-tender` and `~/.c
 **GitHub:** create the labels in each repo (`scripts/setup.sh` prints these with your host name):
 
 ```bash
-for l in agent in-progress in-review ready-to-merge needs-human "host:$(hostname -s)"; do gh label create "$l" --repo owner/repo --force; done
+for l in agent in-progress in-review ready-to-merge needs-human tender "host:$(hostname -s)"; do gh label create "$l" --repo owner/repo --force; done
 ```
 
 **Linear:** create the labels `agent`, `needs-human` and `host:<host>` in the team (`needs-human` may be a workspace label; `tender` does not create it and parking fails with an error naming it when it is missing), make sure it has `Todo`, `In Progress`, `In Review`, `Done` states (or set your names in the config) and, for [Ready to merge](lifecycle.md#ready-to-merge), a state named in `readyToMerge`, and set `LINEAR_API_KEY` to a personal API key in `.env` (gitignored, loaded by Bun from the working directory; `scripts/setup.sh` writes it from `.env.example` with the key commented out).
@@ -99,11 +99,11 @@ Prove the sandbox boundaries on a throwaway repo first. Not yet exercised live, 
 - [ ] Inside a sandboxed session, `cat ~/.ssh/id_*`, `ls ~/Work/<other-repo>`, `ls ~/.config` fail.
 - [ ] Writing `~/.claude/CLAUDE.md`, `~/.claude/settings.json` or anything in `~/.claude-tender` fails, and so does reading `~/.claude/.credentials.json`; your CLAUDE.md, AGENTS.md and skills load.
 - [ ] `env | grep -iE 'token|key'` shows only phantom values; `LINEAR_API_KEY` is absent.
-- [ ] `git push -u origin agent/<ID>` and `gh pr create` work, also with an SSH `origin`.
+- [ ] `git push -u origin agent/<ID>` works, also with an SSH `origin`, and `tender` opens the PR from `.tender/run/pr.md`, labelled `tender`.
 - [ ] Sandboxed Codex reaches its backend (`chatgpt.com`, `auth.openai.com`).
 - [ ] Codex session is in the app history.
 - [ ] Inside a sandboxed session, `tmux -S /tmp/tmux-$(id -u)/default list-sessions` fails with `Permission denied`.
 - [ ] Inside a sandboxed session, `mktemp` prints a path under `<ID>.tmpdir` and `touch /tmp/x` fails.
-- [ ] Inside a sandboxed session, writing anything under `~/agent-repos` (the base clone's objects, refs, config included) or another session's clone fails; commit, fetch, rebase, `push -u` and `gh pr create` still work.
+- [ ] Inside a sandboxed session, writing anything under `~/agent-repos` (the base clone's objects, refs, config included) or another session's clone fails; commit, fetch, rebase and `push -u` still work; `gh api user` works, and `gh api -X POST repos/<owner>/<name>/issues/<n>/comments -f body=x` and `gh pr view` fail with HTTP 401.
 - [ ] A Linear ticket for a repo not in `repos` gets one comment and no worktree, also after restarting `tender`.
 - [ ] Issue → PR → `in-review`; closing the issue removes the window and the session clone.

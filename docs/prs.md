@@ -56,4 +56,4 @@ The report is printed to stdout (the journal under the timer). With `prs.digestI
 
 See [Config reference](config.md#prs). Without `prs`, `tender prs` runs with the defaults and no digest.
 
-On GitHub the agent shares the operator's `gh` login, so a PR comment it posts counts as the operator's and is fed back as a new round (bounded by the round limit); not replying on the PR is a prompt rule. Use a separate agent account to make it a boundary.
+Under nono the agent's GitHub API token is read-only, so it cannot comment on the PR. With `sandbox: "none"` it shares the operator's `gh` login, so a PR comment it posts counts as the operator's and is fed back as a new round (bounded by the round limit); not replying on the PR is then a prompt rule.

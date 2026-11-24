@@ -69,5 +69,5 @@ Done when: existing tests pass with the renamed `readRun` and the new comment te
 
 ## Risks
 
-- `gh issue view --json comments` cost grows with comment count; only paid for tickets with an open question.
-- On GitHub the sandboxed agent still has `gh`, so it could post its own "answer". The allowlist stops that only if the agent's token belongs to a different login than the operator; otherwise it is a prompt rule, as with phases.
+- `gh issue view --json comments` cost grows with comment count; only paid for tickets with an open question or an idle steerable session (`<ID>.steer`, no PR).
+- On GitHub the sandboxed agent still has `gh`, so it could post its own "answer" or operator message. The allowlist stops that only if the agent's token belongs to a different login than the operator; otherwise it is a prompt rule, as with phases.

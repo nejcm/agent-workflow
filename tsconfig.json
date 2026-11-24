@@ -6,7 +6,8 @@
     "types": ["bun-types"],
     "strict": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "skipLibCheck": true
   },
-  "include": ["tender.ts", "src", "tests"]
+  "include": ["tender.ts", "src", "tests", "scripts"]
 }

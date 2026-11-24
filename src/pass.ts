@@ -103,6 +103,9 @@ async function startReady(cfg: Config, s: Source, tr: Tracker, io: Io, t: Ticket
   if (owner !== undefined && owner !== s.name) return io.log(`skip ${t.id}: ${key}/${t.id} belongs to source ${JSON.stringify(owner)}`);
   const other = tr.globalIds && startedElsewhere(cfg, key, t.id, wins);
   if (other) return io.log(`skip ${t.id}: already started in ${other}`);
+  const open = await tr.blockers(t).then((b) => [...b].sort(), (e: Error) => void once(io, `skip ${key}/${t.id}: blockers unknown: ${e.message}`));
+  if (!open) return;
+  if (open.length) return once(io, `skip ${key}/${t.id}: blocked by ${open.join(", ")}`);
   // Uncached: a transfer must stop new clones and starts at once, not after the listing cache expires.
   const name = await canonical(io, key, true);
   if (!name) return;

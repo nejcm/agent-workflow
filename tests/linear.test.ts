@@ -206,6 +206,7 @@ test("pass: the project map comes from every allowlisted repo's .tender/ on its 
     if (query.includes("issues(")) return Response.json({ data: { issues: { nodes: variables.f.state.name.eq === "Todo" ? ready : [] } } });
     if (query.includes("commentCreate")) return comments.push(`${variables.i.issueId} ${variables.i.body}`), Response.json({ data: { commentCreate: { success: true } } });
     if (query.includes("workflowStates")) return Response.json({ data: { workflowStates: { nodes: [{ id: "s", name: "In Progress", team: { id: "t" } }] } } });
+    if (query.includes("inverseRelations")) return Response.json({ data: { issue: { inverseRelations: { nodes: [], pageInfo: { hasNextPage: false } } } } });
     return Response.json({ data: { issueUpdate: { success: true }, viewer: { id: "me" } } });
   }) as any;
   await withLinearKey(() => pass(c, io, makeTracker, "/tender"));
@@ -238,6 +239,7 @@ test("pass: while any repo's claims cannot be read, project-routed tickets wait 
     if (query.includes("issues(")) return Response.json({ data: { issues: { nodes: variables.f.state.name.eq === "Todo" ? ready : [] } } });
     if (query.includes("commentCreate")) return comments.push(`${variables.i.issueId} ${variables.i.body}`), Response.json({ data: { commentCreate: { success: true } } });
     if (query.includes("workflowStates")) return Response.json({ data: { workflowStates: { nodes: [{ id: "s", name: "In Progress", team: { id: "t" } }] } } });
+    if (query.includes("inverseRelations")) return Response.json({ data: { issue: { inverseRelations: { nodes: [], pageInfo: { hasNextPage: false } } } } });
     return Response.json({ data: { issueUpdate: { success: true }, viewer: { id: "me" } } });
   }) as any;
   await withLinearKey(() => pass(c, io, makeTracker, "/tender"));
@@ -267,6 +269,7 @@ test("pass: a failed map waits for every clone it started, so an explicit start 
     const { query, variables } = JSON.parse(init.body);
     if (query.includes("issues(")) return Response.json({ data: { issues: { nodes: variables.f.state.name.eq === "Todo" ? ready : [] } } });
     if (query.includes("workflowStates")) return Response.json({ data: { workflowStates: { nodes: [{ id: "s", name: "In Progress", team: { id: "t" } }] } } });
+    if (query.includes("inverseRelations")) return Response.json({ data: { issue: { inverseRelations: { nodes: [], pageInfo: { hasNextPage: false } } } } });
     return Response.json({ data: { issueUpdate: { success: true }, commentCreate: { success: true }, viewer: { id: "me" } } });
   }) as any;
   await withLinearKey(() => pass(c, fake.io, makeTracker, "/tender"));
@@ -371,6 +374,30 @@ test("linear adapter: park adds an ungrouped team or workspace label, fails clea
     success = false;
     await expect(tr.park(t)).rejects.toThrow("linear issueAddLabel: not successful for ENG-1");
     expect(await tr.parked(t)).toBe(true);
+  });
+});
+
+test("linear adapter: only open blocks relations block, any team, by state type; a page past 50, a missing issue or GraphQL errors throw", async () => {
+  const l = lin(config({ sources: [src({ tracker: "linear", team: "ENG" })] }));
+  const { io } = fakeIo();
+  const rel = (type: string, identifier: string, stateType: string, trashed = false) => ({ type, issue: { identifier, trashed, state: { type: stateType } } });
+  let reply: object = {};
+  const bodies: any[] = [];
+  io.fetch = (async (_url: string, init: any) => (bodies.push(JSON.parse(init.body)), Response.json(reply))) as any;
+  const tr = linear(l, "box", io);
+  const t = { id: "ENG-1", ref: "uuid-1", title: "", body: "", url: "" };
+  const page = (nodes: unknown[], hasNextPage = false) => ({ data: { issue: { inverseRelations: { nodes, pageInfo: { hasNextPage } } } } });
+  await withLinearKey(async () => {
+    reply = page([rel("blocks", "ENG-2", "started"), rel("blocks", "OPS-3", "unstarted"), rel("related", "ENG-4", "started"), rel("blocks", "ENG-5", "completed"), rel("blocks", "ENG-6", "canceled"), rel("blocks", "ENG-7", "duplicate"), rel("blocks", "ENG-8", "started", true)]);
+    expect(await tr.blockers(t)).toEqual(["ENG-2", "OPS-3"]);
+    expect(bodies[0].variables).toEqual({ id: "uuid-1" });
+    expect(bodies[0].query).toContain("inverseRelations(first: 50)");
+    reply = page([]);
+    expect(await tr.blockers(t)).toEqual([]);
+    for (const bad of [page([rel("blocks", "ENG-2", "started")], true), page([{ type: "blocks", issue: null }]), page([null]), { data: { issue: null } }, { errors: [{ message: "boom" }] }]) {
+      reply = bad;
+      await expect(tr.blockers(t)).rejects.toThrow();
+    }
   });
 });
 

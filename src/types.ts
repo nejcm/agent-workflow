@@ -205,6 +205,8 @@ export interface Tracker {
   reopen(t: Ticket): Promise<void>;
   /** The ticket's current title, body, labels and whether it is open, read fresh. */
   view(t: Ticket): Promise<{ title: string; body: string; labels: string[]; open: boolean }>;
+  /** Open tickets blocking `t`, as ids or URLs; throws when they cannot all be read. */
+  blockers(t: Ticket): Promise<string[]>;
   addLabels(t: Ticket, labels: string[]): Promise<void>;
   listPhases(parent: Ticket): Promise<{ ref: string; title: string; body: string }[]>;
   setPhase(parent: Ticket, ref: string, status: "in-progress" | "done"): Promise<void>;

@@ -1106,6 +1106,43 @@ test("concurrency: per-repo limit and global limit both apply", async () => {
   expect(busy.calls).toEqual(["claim gh-6"]);
 });
 
+test("blockers: a blocked ticket is not started or commented, logged once per blocker set, and starts once unblocked", async () => {
+  const blocked: Record<string, string[] | Error> = { "gh-41": ["#43", "#42"] };
+  const { tr, calls } = fakeTracker({ ready: [ticket(41)], blocked });
+  const { io, cmds, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : a[5] === "--quiet" ? { code: 1 } : noPr(a)));
+  await pass(config(), io, () => tr, "/tender");
+  await pass(config(), io, () => tr, "/tender");
+  expect(calls).toEqual([]);
+  expect(cmds.some((x) => x.includes("new-window"))).toBe(false);
+  expect(logs.filter((l) => l.includes("gh-41"))).toEqual(["[web] skip acme/web/gh-41: blocked by #42, #43"]);
+  blocked["gh-41"] = ["#42"];
+  await pass(config(), io, () => tr, "/tender");
+  expect(logs.filter((l) => l.includes("gh-41"))).toEqual(["[web] skip acme/web/gh-41: blocked by #42, #43", "[web] skip acme/web/gh-41: blocked by #42"]);
+  blocked["gh-41"] = [];
+  await pass(config(), io, () => tr, "/tender");
+  expect(calls).toEqual(["claim gh-41"]);
+});
+
+test("blockers: a failed lookup fails closed, with no start or comment and one log line", async () => {
+  const { tr, calls } = fakeTracker({ ready: [ticket(44)], blocked: { "gh-44": new Error("blocker list truncated or malformed") } });
+  const { io, cmds, logs } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : noPr(a)));
+  await pass(config(), io, () => tr, "/tender");
+  await pass(config(), io, () => tr, "/tender");
+  expect(calls).toEqual([]);
+  expect(cmds.some((x) => x.includes("new-window"))).toBe(false);
+  expect(logs.filter((l) => l.includes("gh-44"))).toEqual(["[web] skip acme/web/gh-44: blockers unknown: blocker list truncated or malformed"]);
+});
+
+test("blockers: a blocked ticket holds no concurrency slot, and none are asked once the limit is reached", async () => {
+  const c = config({ maxConcurrent: 1 });
+  const { tr, calls, asked } = fakeTracker({ ready: [ticket(45), ticket(46), ticket(47)], blocked: { "gh-45": ["#1"] } });
+  const { io, cmds } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut([]) : a[5] === "--quiet" ? { code: 1 } : noPr(a)));
+  await pass(c, io, () => tr, "/tender");
+  expect(calls).toEqual(["claim gh-46"]);
+  expect(asked).toEqual(["gh-45", "gh-46"]);
+  expect(cmds.filter((x) => x.startsWith("gh repo view"))).toHaveLength(1);
+});
+
 test("priority: ready tickets from all sources start most urgent first, before the maxConcurrent cut", async () => {
   const c = two();
   c.maxConcurrent = 2;

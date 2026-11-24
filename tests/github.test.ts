@@ -235,6 +235,32 @@ test("github adapter: an issue type adds a type:<name> label unless one is there
   expect((await github(gh(), "box", io, false, ["acme/web"]).listReady()).map((t) => t.labels)).toEqual([["agent", "type:bug"], ["agent"], ["agent", "Type:Bug"]]);
 });
 
+test("github adapter: blockers come from the listing; open, cross-repo and closed read right; truncated, malformed or unlisted throws", async () => {
+  const node = (number: number, state: string, repo = "acme/web") => ({ id: `I_${number}`, number, state, title: "b", url: `https://github.com/${repo}/issues/${number}` });
+  const issue = (number: number, blockedBy?: unknown) => ({ number, title: "t", body: "", url: "u", labels: [{ name: "agent" }], assignees: [], ...(blockedBy !== undefined && { blockedBy }) });
+  const issues = [
+    issue(1, { nodes: [node(5, "OPEN"), node(6, "CLOSED"), node(7, "OPEN", "acme/api")], totalCount: 3 }),
+    issue(2, { nodes: [node(6, "CLOSED")], totalCount: 1 }),
+    issue(3),
+    issue(4, { nodes: [node(5, "OPEN")], totalCount: 60 }),
+    issue(8, { nodes: [null], totalCount: 1 }),
+    issue(9, { totalCount: 0 }),
+    issue(10, { nodes: [{ id: "", number: 0, state: "", title: "", url: "" }], totalCount: 1 }),
+    issue(11, { nodes: [node(5, "OPEN")], totalCount: null }),
+  ];
+  const { io, cmds } = fakeIo((a) => (a[2] === "list" ? { out: JSON.stringify(issues) } : undefined));
+  const tr = github(gh(), "box", io, false, ["acme/web"]);
+  const ready = await tr.listReady();
+  expect(cmds.find((x) => x.startsWith("gh issue list"))).toEndWith("--json number,title,body,url,labels,assignees,issueType,blockedBy");
+  const n = cmds.length;
+  expect(await tr.blockers(ready[0]!)).toEqual(["https://github.com/acme/web/issues/5", "https://github.com/acme/api/issues/7"]);
+  expect(await tr.blockers(ready[1]!)).toEqual([]);
+  expect(await tr.blockers(ready[2]!)).toEqual([]);
+  for (const t of ready.slice(3)) await expect(tr.blockers(t)).rejects.toThrow("blocker list truncated or malformed");
+  await expect(tr.blockers({ ...ready[0]! })).rejects.toThrow("gh-1: blockers not listed");
+  expect(cmds).toHaveLength(n);
+});
+
 test("github adapter: intake files with labels, finds a marker only in a body that holds it, reopens without the ready label", async () => {
   const m = "tender-intake: acme/web:errs:a";
   const found = [{ url: "https://github.com/acme/web/issues/1", body: "mentions tender intake acme web errs a" }, { url: "https://github.com/acme/web/issues/4", body: `x\n${m}bc` }, { url: "https://github.com/acme/web/issues/5", body: `quoted ${m} inline` }, { url: "https://github.com/acme/web/issues/2", body: `x\n${m}` }];

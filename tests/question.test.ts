@@ -5,7 +5,7 @@ import { INBOX_WAITER } from "../src/session/agents";
 import { pass } from "../src/pass";
 import { agentPane, answerFrame, historyFrame, liveStates, MESSAGE_POINTER, pickAnswer, POINTER } from "../src/session/question";
 import type { State } from "../src/session/state";
-import type { TicketComment } from "../src/types";
+import type { Ticket, TicketComment } from "../src/types";
 import { config, fakeIo, fakeTracker, noPr, root, ticket, useTempRoot, windowsOut, worktree } from "./helpers";
 
 useTempRoot();
@@ -331,9 +331,9 @@ test("answer: the last round's answer never counts for a new question, even with
   expect(existsSync(question())).toBe(true);
 });
 
-test("answer: a fresh start drops the last run's open question, and its window (no @id yet) gets nothing", async () => {
+test("answer: a fresh start drops the last run's open question and pastes nothing", async () => {
   worktree("gh-1");
-  const f = fakeTracker({ ready: [ticket(1)], inProgress: [ticket(1)] });
+  const f = fakeTracker({ ready: [ticket(1)] });
   const { io, cmds } = fakeIo((a) => noPr(a));
   ask("Which DB?");
   writeFileSync(sidecar(), JSON.stringify({ hash: new Bun.CryptoHasher("sha256").update("Which DB?").digest("hex"), postedAt: 1 }));
@@ -564,9 +564,9 @@ test("message: dry-run writes no cursor, file or keys; a pane in copy mode keeps
   expect(bad.keys()).toEqual(pasted(POINTER));
 });
 
-test("message: a fresh start writes the cursor and drops a stale message.md; its new window gets nothing", async () => {
+test("message: a fresh start writes the cursor, drops a stale message.md and pastes nothing", async () => {
   worktree("gh-1");
-  const f = fakeTracker({ ready: [ticket(1)], inProgress: [ticket(1)] });
+  const f = fakeTracker({ ready: [ticket(1)] });
   const { io, cmds } = fakeIo((a) => noPr(a));
   steer(1);
   writeFileSync(message(), "stale");
@@ -621,13 +621,14 @@ test("historyFrame: frame tags in any body are escaped in any case, with whitesp
 function restart(list: TicketComment[]) {
   worktree("gh-1");
   const ready = [ticket(1)];
-  const f = fakeTracker({ ready, inProgress: [ticket(1)] });
+  const inProgress: Ticket[] = [];
+  const f = fakeTracker({ ready, inProgress });
   f.tr.comments = async () => list;
   let open: string[] = [];
   const panes = (a: string[]) => (a[1] === "list-panes" ? { out: `%5 0 ${join(root, "acme/web/gh-1")}.sh\n` } : undefined);
   const { io, cmds } = fakeIo((a) => (a[1] === "list-windows" ? windowsOut(open) : panes(a) ?? noPr(a)));
   const run = () => pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), feedbackAuthors: ["op"] }] }), io, () => f.tr, "/tender", async () => "idle");
-  const later = async () => ((ready.length = 0), (open = ["acme/web/gh-1"]), run());
+  const later = async () => ((ready.length = 0), (inProgress[0] = ticket(1)), (open = ["acme/web/gh-1"]), run());
   return { run, later, keys: () => cmds.filter((c) => /^tmux (set-buffer|paste-buffer|send-keys)/.test(c)) };
 }
 

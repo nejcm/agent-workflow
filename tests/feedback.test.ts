@@ -20,7 +20,8 @@ function setup(o: { agent?: string; waiter?: boolean; authors?: string[]; open?:
   writeFileSync(join(root, "acme/web/gh-1.agent"), o.agent ?? "codex");
   mkdirSync(join(root, "acme/web/gh-1/.tender/run"), { recursive: true });
   const t = ticket(1);
-  const f = fakeTracker({ inReview: [t, ...(o.more ?? [])] });
+  const ready: Ticket[] = [];
+  const f = fakeTracker({ ready, inReview: [t, ...(o.more ?? [])] });
   const pr: any = { url: URL, state: "OPEN", baseRefName: "main", headRefOid: "a", mergeStateStatus: "CLEAN", statusCheckRollup: [okCheck], reviews: [], comments: [] };
   let lines: any[] = [];
   const log = Array.from({ length: 100 }, (_, i) => `line ${i}`).join("\n");
@@ -36,7 +37,7 @@ function setup(o: { agent?: string; waiter?: boolean; authors?: string[]; open?:
   const cfg = config({ repos: [{ name: "acme/web", path: join(root, "src-web"), feedbackAuthors: o.authors ?? ["op"], feedback: o.feedback }], ...(o.max && { maxConcurrent: o.max }) });
   let state: State = "idle";
   return {
-    ...f, t, pr, cmds, logs,
+    ...f, t, pr, cmds, logs, ready,
     lines: (l: any[]) => void (lines = l),
     setState: (s: State) => void (state = s),
     run: () => pass(cfg, io, () => f.tr, "/tender", async () => state),
@@ -369,4 +370,14 @@ test("feedback: relaunches count toward maxConcurrent within the pass", async ()
   await d.run();
   expect(d.launches()).toEqual([`tmux new-window -d -t =tender: -n acme/web/gh-1 ${root}/acme/web/gh-1.sh`]);
   expect(d.logs.some((l) => l.endsWith(notice.replace("gh-1:", "gh-2:")))).toBe(true);
+});
+
+test("feedback: after a reboot a dead In Review session with feedback takes the last slot before a Ready ticket starts", async () => {
+  const d = setup({ authors: [], open: [], max: 1 });
+  dead();
+  d.pr.statusCheckRollup = [fail];
+  d.ready.push(ticket(2));
+  await d.run();
+  expect(d.launches()).toEqual([`tmux new-window -d -t =tender: -n acme/web/gh-1 ${root}/acme/web/gh-1.sh`]);
+  expect(d.calls).toEqual([]);
 });

@@ -547,6 +547,14 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
   const running = (key?: string) => [...wins.keys()].map((n) => n.slice(0, n.lastIndexOf("/"))).filter((k) => Object.hasOwn(cfg.repos, k) && (key === undefined || k === key)).length;
   // A dry pass may run on an unknown window list, where every session would read as dead.
   const room = (key: string) => wins.listed && running() < cfg.maxConcurrent && running(key) < (cfg.repos[key]!.maxConcurrent ?? Infinity);
+  // Before new starts, so a session relaunched for PR feedback gets a slot ahead of new work.
+  for (const { s, io: sio, tr } of srcs.values()) {
+    try {
+      await reconcileSource(cfg, s, tr, sio, wins, state, sessions, room, tenderDir);
+    } catch (e) {
+      sio.log(`source failed: ${(e as Error).message}`);
+    }
+  }
   const reviewing = await countInReview(cfg, io, srcs);
   if (reviewing && running() < cfg.maxConcurrent && [...reviewing.values()].reduce((a, b) => a + b, 0) < (cfg.maxInReview ?? Infinity)) {
     const ready: { s: Source; io: Io; tr: Tracker; t: Ticket }[] = [];
@@ -556,13 +564,6 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
     for (const { s, io: sio, tr, t } of ready) {
       if (running() >= cfg.maxConcurrent) break;
       await step(sio, `ready ${t.id}`, () => startReady(cfg, s, tr, sio, t, wins, running, reviewing, tenderDir));
-    }
-  }
-  for (const { s, io: sio, tr } of srcs.values()) {
-    try {
-      await reconcileSource(cfg, s, tr, sio, wins, state, sessions, room, tenderDir);
-    } catch (e) {
-      sio.log(`source failed: ${(e as Error).message}`);
     }
   }
 }

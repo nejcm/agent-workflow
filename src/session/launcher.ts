@@ -413,6 +413,8 @@ const RESTART = "You are restarting ticket {{id}}: an earlier session worked on 
 
 const CONTINUE = "You are taking ticket {{id}} back after a human worked on it outside tender. Before changing anything, read `git status`, `git log origin/{{base}}..HEAD`, the PR for branch {{branch}} if there is one, and `.tender/run/`, then finish the task below from where it stands.\n\n";
 
+const RELAUNCH = "Your earlier session on ticket {{id}} ended while its PR had feedback waiting. Before changing anything, read `.tender/run/feedback.md`, `git status`, `git log origin/{{base}}..HEAD` and the PR for branch {{branch}}, then address the feedback and push; the original task follows.\n\n";
+
 /** Starts a new session in `<ID>`'s existing clone after a hand-off, with the original prompt behind a continue note. */
 export const resume = (cfg: Config, io: Io, target: { key: string; id: string }, tenderDir: string) => passLocked(cfg, io.log, () => resumeLocked(cfg, io, target, tenderDir));
 
@@ -427,18 +429,29 @@ async function resumeLocked(cfg: Config, io: Io, { key, id }: { key: string; id:
   if (wins.has(winName(key, id))) throw new Error(`${key}/${id} already has a tmux window`);
   const r = await loadSession(io, host, SLOW_SECS);
   if (!r) throw new Error(`${key}'s .tender/ on its base branch is invalid; run \`bun tender.ts check <repo> --config <tender.json>\` for details`);
+  await again(cfg, io, r, id, CONTINUE, tenderDir);
+  remove(io, join(dir, `${id}.handoff`));
+}
+
+/** Starts a new session in `<ID>`'s existing clone whose window is gone, with `feedback` as `.tender/run/feedback.md` and the original prompt behind a relaunch note. */
+export const relaunch = (cfg: Config, io: Io, r: Session, id: string, tenderDir: string, feedback: string) => again(cfg, io, r, id, RELAUNCH, tenderDir, feedback);
+
+async function again(cfg: Config, io: Io, r: Session, id: string, note: string, tenderDir: string, feedback?: string) {
+  const dir = repoDir(cfg, r.key);
   const old = readFileSync(join(dir, `${id}.prompt.md`), "utf8");
   await launch(cfg, io, withAgent(r, recordedAgentConfig(dir, id)), id, (vars) => {
-    const head = render(CONTINUE, vars);
-    return old.startsWith(head) ? old : head + old;
-  }, tenderDir);
-  remove(io, join(dir, `${id}.handoff`));
+    const notes = [CONTINUE, RELAUNCH].map((n) => render(n, vars));
+    let task = old;
+    let head: string | undefined;
+    while ((head = notes.find((n) => task.startsWith(n)))) task = task.slice(head.length);
+    return render(note, vars) + task;
+  }, tenderDir, undefined, undefined, undefined, undefined, feedback);
 }
 
 export const handedOff = (dir: string, id: string) => existsSync(join(dir, `${id}.handoff`));
 
-// `source` marks a fresh start: it records the owner, clears the end markers and the last question, starts the message cursor at `seenAt`, writes `history` on a restart and `<ID>.claim` for the caller's claim.
-async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars: Record<string, string>) => string, tenderDir: string, source?: string, type?: TaskType, history?: string, seenAt = Date.now()) {
+// `source` marks a fresh start: it records the owner, clears the end markers and the last question, starts the message cursor at `seenAt`, writes `history` on a restart and `<ID>.claim` for the caller's claim; `feedback` becomes `.tender/run/feedback.md`.
+async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars: Record<string, string>) => string, tenderDir: string, source?: string, type?: TaskType, history?: string, seenAt = Date.now(), feedback?: string) {
   const dir = repoDir(cfg, r.key);
   const wt = join(dir, id);
   const branch = `agent/${id}`;
@@ -495,6 +508,7 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
   if (r.agent === "claude" || nono) seedClaude(io, claudeHome(wt), root);
   io.log(`${io.dry ? "dry: " : ""}write ${join(wt, ".tender", "run", ".gitignore")}`);
   if (source !== undefined && history) io.log(`${io.dry ? "dry: " : ""}write ${join(wt, ".tender", "run", "history.md")}`);
+  if (feedback !== undefined) io.log(`${io.dry ? "dry: " : ""}write ${join(wt, ".tender", "run", "feedback.md")}`);
   if (!io.dry) {
     mkdirSync(join(wt, ".tender"), { recursive: true });
     inDir(join(wt, ".tender"), (d) => mkdirSync(`${d}/run`, { recursive: true }));
@@ -503,6 +517,7 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
     // The last run's question was never asked by this session; its answer would be delivered to it.
     if (source !== undefined) inRun(wt, (d) => ["question.md", "answer.md", "message.md", "history.md"].forEach((f) => rmSync(`${d}/${f}`, { recursive: true, force: true })));
     if (source !== undefined && history) writeRun(wt, "history.md", history);
+    if (feedback !== undefined) writeRun(wt, "feedback.md", feedback);
   }
   put(io, promptFile, text);
   put(io, script, launcher(r, wt, promptFile, scopeUnit(cfg, r.key, id), tenderDir, bun, ports, services), 0o755);

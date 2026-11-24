@@ -3,10 +3,11 @@ import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync
 import { basename, dirname, join } from "node:path";
 import { claudeDir, codexHome } from "../src/session/agents";
 import { handoff, shellLine, ticketClone, toolArgv } from "../src/session/handoff";
-import { resume, scopeUnit } from "../src/session/launcher";
+import { relaunch, resume, scopeUnit } from "../src/session/launcher";
+import { loadSession } from "../src/config/repo-config";
 import { passLocked } from "../src/util";
 import { pass } from "../src/pass";
-import { claudeFile, config, fakeIo, fakeTracker, noPr, root, ticket, useTempRoot, windowsOut, worktree } from "./helpers";
+import { claudeFile, config, fakeIo, fakeTracker, noPr, root, ticket, useTempRoot, web, windowsOut, worktree } from "./helpers";
 
 useTempRoot();
 
@@ -157,6 +158,31 @@ test("resume starts a new window in the same clone with a continue note before t
   writeFileSync(join(root, "acme/web/gh-1.handoff"), "claude\n");
   await expect(resume(config(), tmux([]).io, { key: "acme/web", id: "gh-1" }, "/tender")).rejects.toThrow("ENOENT");
   expect(existsSync(join(root, "acme/web/gh-1.handoff"))).toBe(true);
+});
+
+test("relaunch starts a new window in the same clone with the feedback and one relaunch note in place of a continue note, claims nothing and keeps the run files", async () => {
+  clone();
+  const run = join(wt(), ".tender/run");
+  mkdirSync(run, { recursive: true });
+  writeFileSync(join(run, "history.md"), "earlier");
+  const promptFile = join(root, "acme/web/gh-1.prompt.md");
+  writeFileSync(promptFile, "Original task\n");
+  writeFileSync(join(root, "acme/web/gh-1.handoff"), "claude\n");
+  await resume(config(), tmux([]).io, { key: "acme/web", id: "gh-1" }, "/tender");
+  for (const batch of ["one", "two"]) {
+    const { io, cmds } = tmux([]);
+    await relaunch(config(), io, (await loadSession(io, web(config())))!, "gh-1", "/tender", batch);
+    expect(cmds).toContain(`tmux new-window -d -t =tender: -n acme/web/gh-1 ${root}/acme/web/gh-1.sh`);
+    expect(cmds.some((c) => c.includes(" clone "))).toBe(false);
+    expect(readFileSync(join(run, "feedback.md"), "utf8")).toBe(batch);
+  }
+  const prompt = readFileSync(promptFile, "utf8");
+  expect(prompt.startsWith("Your earlier session on ticket gh-1 ended while its PR had feedback waiting.")).toBe(true);
+  expect(prompt.match(/feedback waiting/g)).toHaveLength(1);
+  expect(prompt).not.toContain("taking ticket gh-1 back");
+  expect(prompt.endsWith("\n\nOriginal task\n")).toBe(true);
+  expect(readFileSync(join(run, "history.md"), "utf8")).toBe("earlier");
+  expect(existsSync(join(root, "acme/web/gh-1.claim"))).toBe(false);
 });
 
 test("a handed-off ticket listed Ready is not started again, and its pending claim is still retried", async () => {

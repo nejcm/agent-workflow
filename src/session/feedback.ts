@@ -62,9 +62,9 @@ async function failedLog(io: Io, repo: string, run: string) {
 /** Fields deliverFeedback reads beyond autoMerge's view. */
 export const feedbackFields = (r: Repo) => (r.feedbackAuthors.length ? ",reviews,comments" : "");
 
-// The cursor is recorded first: a crash or failure after it loses the paste, never repeats it. Text never goes through keys.
+// To a live window the cursor is recorded first: a crash or failure after it loses the paste, never repeats it. Text never goes through keys.
 // True when nothing is left to deliver, false when feedback is pending or was just delivered, undefined when not checked.
-export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, dir: string, win: string | undefined, unit: string, state: () => Promise<State>, warned: Set<string>, share?: { fields: string; pr?: any }): Promise<boolean | undefined> {
+export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, dir: string, win: string | undefined, unit: string, state: () => Promise<State>, warned: Set<string>, share?: { fields: string; pr?: any }, relaunch?: (feedback: string) => Promise<void>): Promise<boolean | undefined> {
   const prFile = join(dir, `${t.id}.pr`);
   const url = existsSync(prFile) ? readFileSync(prFile, "utf8") : "";
   const n = /\/pull\/(\d+)$/.exec(url)?.[1];
@@ -91,12 +91,6 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
   const failed = !cur.ciShas?.includes(pr.headRefOid) && !checks.some((c) => checkState(c) === "pending") ? checks.filter((c) => checkState(c) === "failed") : [];
   const dirty = pr.mergeStateStatus === "DIRTY" && !cur.dirtyShas?.includes(pr.headRefOid);
   if (!items.length && !failed.length && !dirty) return true;
-  if (!win) {
-    const seen = `${file}@${newest ?? cur.seenAt}@${pr.headRefOid}`;
-    if (!warned.has(seen)) io.log(`${t.id}: PR feedback pending but the session's window is gone; restart it or act on ${url} by hand`);
-    warned.add(seen);
-    return false;
-  }
   if (cur.rounds >= r.feedbackRounds) {
     // Label first: if adding it fails, this retries next poll instead of leaving a capped cursor that reads as resumed.
     await tr.park(t);
@@ -105,13 +99,17 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
     await tr.comment(t, `PR feedback stopped after ${r.feedbackRounds} rounds on ${url}: a human is needed`);
     return false;
   }
-  if ((await state()) !== "idle") return false;
-  const pane = await deliveryPane(io, agentOf(dir, t.id), win, `${join(dir, t.id)}.sh`, unit);
+  if (!win && !relaunch) {
+    const seen = `${file}@${newest ?? cur.seenAt}@${pr.headRefOid}`;
+    if (!warned.has(seen)) io.log(`${t.id}: PR feedback pending but the session's window is gone and cannot be relaunched now (needs a free session slot, the clone and its prompt, a valid .tender/ and a ticket not ended); act on ${url} by hand or free a slot`);
+    warned.add(seen);
+    return false;
+  }
+  if (win && (await state()) !== "idle") return false;
+  const pane = win ? await deliveryPane(io, agentOf(dir, t.id), win, `${join(dir, t.id)}.sh`, unit) : null;
   if (pane === undefined) return false;
   const runs = [...new Set(failed.map((c) => /\/actions\/runs\/(\d+)/.exec(c.detailsUrl ?? c.targetUrl ?? "")?.[1]).filter((x): x is string => !!x))].slice(0, MAX_RUNS);
   const logs = await Promise.all(runs.map((id) => failedLog(io, r.key, id)));
-  put(io, file, JSON.stringify({ seenAt: newest ?? cur.seenAt, ciShas: failed.length ? [...(cur.ciShas ?? []), pr.headRefOid].slice(-10) : cur.ciShas, dirtyShas: dirty ? [...(cur.dirtyShas ?? []), pr.headRefOid].slice(-10) : cur.dirtyShas, rounds: cur.rounds + 1 } satisfies FeedbackCursor));
-  io.event?.("feedback-round", r.key, t.id, { round: cur.rounds + 1, comments: items.length, failedChecks: failed.length, conflict: dirty });
   const text = [
     `<feedback ticket="${t.id}" pr="${attr(url)}">`,
     ...items.map((c) => `<comment from="${attr(c.author!)}"${c.on ? ` on="${attr(c.on)}"` : ""}>\n${esc(c.body)}\n</comment>`),
@@ -120,7 +118,26 @@ export async function deliverFeedback(r: Repo, t: Ticket, tr: Tracker, io: Io, d
     ...(dirty ? [`<conflict>The PR conflicts with origin/${attr(pr.baseRefName)}: rebase on it, resolve the conflicts, run the tests and push with --force-with-lease.</conflict>`] : []),
     "</feedback>\n",
   ].join("\n");
+  const record = () => {
+    put(io, file, JSON.stringify({ seenAt: newest ?? cur.seenAt, ciShas: failed.length ? [...(cur.ciShas ?? []), pr.headRefOid].slice(-10) : cur.ciShas, dirtyShas: dirty ? [...(cur.dirtyShas ?? []), pr.headRefOid].slice(-10) : cur.dirtyShas, rounds: cur.rounds + 1 } satisfies FeedbackCursor));
+    io.event?.("feedback-round", r.key, t.id, { round: cur.rounds + 1, comments: items.length, failedChecks: failed.length, conflict: dirty, relaunch: !win });
+  };
   const wt = join(dir, t.id);
+  // Launched before the cursor moves: a failed launch keeps the batch for the next poll.
+  if (!win) {
+    try {
+      await relaunch!(text);
+    } catch (e) {
+      const msg = `relaunch ${r.key}/${t.id} failed: ${(e as Error).message}`;
+      if (!warned.has(`${file}@${msg}`)) io.log(msg);
+      warned.add(`${file}@${msg}`);
+      return false;
+    }
+    record();
+    io.log(`${io.dry ? "dry: " : ""}feedback ${t.id} round ${cur.rounds + 1}: relaunched in ${wt} with .tender/run/feedback.md`);
+    return false;
+  }
+  record();
   io.log(`${io.dry ? "dry: " : ""}feedback ${t.id} round ${cur.rounds + 1} to ${wt}/.tender/run/feedback.md`);
   // The round is spent either way; false still tells Ready to merge to move it back.
   try {

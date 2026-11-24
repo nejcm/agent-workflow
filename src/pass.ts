@@ -5,7 +5,7 @@ import { deliverFeedback, feedbackFields } from "./session/feedback";
 import { fileFindings } from "./review/findings";
 import { agentOf, codexHome } from "./session/agents";
 import { baseBranch, canonical, findPr, sameRepo } from "./github";
-import { authStamp, claim, cloned, CODEX_AUTH, codexIdentity, codexLogin, codexRecorded, handedOff, nonoRun, refreshCodexCopy, scopeUnit, start, stopSession, sweepScopes, windows, winName } from "./session/launcher";
+import { authStamp, claim, cloned, CODEX_AUTH, codexIdentity, codexLogin, codexRecorded, handedOff, nonoRun, refreshCodexCopy, relaunch, scopeUnit, start, stopSession, sweepScopes, windows, winName } from "./session/launcher";
 import { autoMerge, checkState, policyBlocked, PR_FIELDS, prMode, prReady, viewPr } from "./review/merge";
 import { syncPhases } from "./review/phases";
 import { composeError, composeTeardown } from "./session/needs";
@@ -89,7 +89,7 @@ const startedElsewhere = (cfg: Config, key: string, id: string, wins: Map<string
   [...wins.keys()].find((n) => n.endsWith(`/${id}`) && n !== winName(key, id))?.slice(0, -id.length - 1) ??
   diskRepos(cfg).find((k) => k !== key && hasTrace(cfg, k, id));
 
-async function startReady(cfg: Config, s: Source, tr: Tracker, io: Io, t: Ticket, wins: Map<string, string>, running: Map<string, number>, reviewing: Map<string, number>, tenderDir: string) {
+async function startReady(cfg: Config, s: Source, tr: Tracker, io: Io, t: Ticket, wins: Map<string, string>, running: (key: string) => number, reviewing: Map<string, number>, tenderDir: string) {
   if (!SAFE_ID.test(t.id)) return;
   // GitHub tickets always carry an allowlisted repo, so only Linear tickets are ever rejected.
   const key = allowedRepo(cfg, t.repo);
@@ -98,7 +98,7 @@ async function startReady(cfg: Config, s: Source, tr: Tracker, io: Io, t: Ticket
     return;
   }
   const r = cfg.repos[key]!;
-  if (wins.has(winName(key, t.id)) || handedOff(repoDir(cfg, key), t.id) || (running.get(key) ?? 0) >= (r.maxConcurrent ?? Infinity) || (reviewing.get(key) ?? 0) >= (r.maxInReview ?? Infinity)) return;
+  if (wins.has(winName(key, t.id)) || handedOff(repoDir(cfg, key), t.id) || running(key) >= (r.maxConcurrent ?? Infinity) || (reviewing.get(key) ?? 0) >= (r.maxInReview ?? Infinity)) return;
   const owner = sourceOf(repoDir(cfg, key), t.id);
   if (owner !== undefined && owner !== s.name) return io.log(`skip ${t.id}: ${key}/${t.id} belongs to source ${JSON.stringify(owner)}`);
   const other = tr.globalIds && startedElsewhere(cfg, key, t.id, wins);
@@ -116,7 +116,6 @@ async function startReady(cfg: Config, s: Source, tr: Tracker, io: Io, t: Ticket
   await step(io, `start ${t.id}`, async () => {
     if (!(await start(cfg, s, r, { ...t, repo: key }, tr, io, tenderDir))) return;
     wins.set(winName(key, t.id), "new");
-    running.set(key, (running.get(key) ?? 0) + 1);
   });
 }
 
@@ -186,7 +185,7 @@ async function stopReassigned(cfg: Config, tr: Tracker, io: Io, t: Ticket & { re
   }
 }
 
-async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins: Map<string, string>, state: ReturnType<typeof liveStates>, sessions: Map<string, Promise<Session | undefined>>) {
+async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins: Map<string, string>, state: ReturnType<typeof liveStates>, sessions: Map<string, Promise<Session | undefined>>, room: (key: string) => boolean, tenderDir: string) {
   await step(io, "list in-progress", async () => {
     for (const t of await tr.listInProgress())
       await step(io, `check ${t.id}`, async () => {
@@ -278,8 +277,11 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
       }
       let clear: boolean | undefined;
       // Loaded whatever the merge mode; an invalid config or failed fetch keeps the host's maxRounds.
-      const rounds = (await sessionOf(io, sessions, r).catch((e) => void (fresh || io.log(`feedback ${t.id}: .tender/ unavailable, using the host's feedback rounds: ${e.message}`))))?.feedbackRounds ?? r.feedbackRounds;
-      await step(io, `feedback ${t.id}`, async () => void (clear = await deliverFeedback({ ...r, feedbackRounds: rounds }, w, tr, io, dir, win, scopeUnit(cfg, key, t.id), () => state(dir, t.id), warned, share)));
+      const loaded = await sessionOf(io, sessions, r).catch((e) => void (fresh || io.log(`feedback ${t.id}: .tender/ unavailable, using the host's feedback rounds: ${e.message}`)));
+      const rounds = loaded?.feedbackRounds ?? r.feedbackRounds;
+      const relaunchable = !win && loaded && room(key) && lstatSync(join(dir, t.id), { throwIfNoEntry: false })?.isDirectory() && lstatSync(join(dir, `${t.id}.prompt.md`), { throwIfNoEntry: false })?.isFile() && !existsSync(join(dir, `${t.id}.ended`));
+      const again = relaunchable ? async (text: string) => void (await relaunch(cfg, io, loaded, t.id, tenderDir, text), wins.set(winName(key, t.id), "new")) : undefined;
+      await step(io, `feedback ${t.id}`, async () => void (clear = await deliverFeedback({ ...r, feedbackRounds: rounds }, w, tr, io, dir, win, scopeUnit(cfg, key, t.id), () => state(dir, t.id), warned, share, again)));
       pr &&= share!.pr;
       // Never from the live state, which the session writes: ended is a listing without the window, idle is tmux's own output clock.
       // Listed again with its clock at the decision, since a pass can outlast IDLE_SECS.
@@ -541,28 +543,27 @@ export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir
     }
   }
 
-  const running = new Map<string, number>();
-  for (const n of wins.keys()) {
-    const k = n.slice(0, n.lastIndexOf("/"));
-    if (Object.hasOwn(cfg.repos, k)) running.set(k, (running.get(k) ?? 0) + 1);
+  // Read from `wins` each time, so a start, relaunch or stop this pass counts at once.
+  const running = (key?: string) => [...wins.keys()].map((n) => n.slice(0, n.lastIndexOf("/"))).filter((k) => Object.hasOwn(cfg.repos, k) && (key === undefined || k === key)).length;
+  // A dry pass may run on an unknown window list, where every session would read as dead.
+  const room = (key: string) => wins.listed && running() < cfg.maxConcurrent && running(key) < (cfg.repos[key]!.maxConcurrent ?? Infinity);
+  // Before new starts, so a session relaunched for PR feedback gets a slot ahead of new work.
+  for (const { s, io: sio, tr } of srcs.values()) {
+    try {
+      await reconcileSource(cfg, s, tr, sio, wins, state, sessions, room, tenderDir);
+    } catch (e) {
+      sio.log(`source failed: ${(e as Error).message}`);
+    }
   }
-  const total = () => [...running.values()].reduce((a, b) => a + b, 0);
   const reviewing = await countInReview(cfg, io, srcs);
-  if (reviewing && total() < cfg.maxConcurrent && [...reviewing.values()].reduce((a, b) => a + b, 0) < (cfg.maxInReview ?? Infinity)) {
+  if (reviewing && running() < cfg.maxConcurrent && [...reviewing.values()].reduce((a, b) => a + b, 0) < (cfg.maxInReview ?? Infinity)) {
     const ready: { s: Source; io: Io; tr: Tracker; t: Ticket }[] = [];
     for (const x of srcs.values()) await step(x.io, "list ready", async () => void ready.push(...(await listReady(x)).map((t) => ({ ...x, t }))));
     // Stable sort: equal priorities keep source order, then tracker order.
     ready.sort((a, b) => byPriority(a.t, b.t));
     for (const { s, io: sio, tr, t } of ready) {
-      if (total() >= cfg.maxConcurrent) break;
+      if (running() >= cfg.maxConcurrent) break;
       await step(sio, `ready ${t.id}`, () => startReady(cfg, s, tr, sio, t, wins, running, reviewing, tenderDir));
-    }
-  }
-  for (const { s, io: sio, tr } of srcs.values()) {
-    try {
-      await reconcileSource(cfg, s, tr, sio, wins, state, sessions);
-    } catch (e) {
-      sio.log(`source failed: ${(e as Error).message}`);
     }
   }
 }

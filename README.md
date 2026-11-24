@@ -41,7 +41,7 @@ Move a GitHub issue or Linear ticket to **ready**, and `tender` starts a Claude 
 **After the PR**
 - **Ticket status:** moves to In Review once the PR exists, then to [Ready to merge](docs/lifecycle.md#ready-to-merge) once the PR is clean and nothing waits on the agent; back to In Review on new commits, a failed check or new feedback.
 - **[PR feedback](docs/lifecycle.md#pr-feedback):**
-  - Review comments, failed checks and merge conflicts are delivered to the live session.
+  - Review comments, failed checks and merge conflicts are delivered to the live session; a dead session is relaunched to handle them.
   - After `feedback.maxRounds` rounds (default 3) the ticket is parked with `needs-human`.
 - **[Auto-merge](docs/auto-merge.md#auto-merge):** modes `off`, `all`, `shadow` and `intelligent`, set per path by the repo's `trust` rules. Critical paths and escape hatches (`@ts-ignore`, `eslint-disable`, …) on added lines hold back any mode, and a medium or large PR with no CI check never auto-merges; `intelligent` adds gates for deleted tests, PR size and the agent's own confidence.
 - **Cleanup:**
@@ -71,7 +71,7 @@ Every poll (default 60 s), `tender` looks for ready tickets (the `agent` label p
 1. clones the repo and makes a session clone on branch `agent/<ID>`;
 2. starts the agent in a tmux window, sandboxed by nono, with a prompt built from the ticket and the repo's `.tender/` config;
 3. mirrors the agent's phases, questions and findings to the tracker;
-4. moves the ticket to In Review when the PR exists, feeds review comments, failed checks and conflicts back to the live session, and optionally auto-merges.
+4. moves the ticket to In Review when the PR exists, feeds review comments, failed checks and conflicts back to the session (relaunching it in the same clone if it has ended), and optionally auto-merges.
 
 ## History: `tender.db`
 

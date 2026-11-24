@@ -206,7 +206,7 @@ The script's flags (e.g. the Sentry script's `--org`, `--min-events`, `--no-fixe
 
 ## Profile
 
-A profile is a directory with `types.yaml` and the instruction files it names. tender ships one in [`profile/`](../profile): types `bug` (label `type:bug`: reproduce the bug with a failing test first, fix the root cause, keep the test), `docs` (label `type:docs`: change docs only, add no tests, check every changed command, snippet and link) and `default` (clarify, plan and implement, test, verify, review by a model of another family, commit). Point `profile` in `tender.json` at your own to change what agents are told; an instruction file can name any skill the session's agent has (committed in the repo, or installed in `~/.claude/skills` or the template config dirs).
+A profile is a directory with `types.yaml` and the instruction files it names. Types are yours to define: add as many as you need (up to 50), each with its own label, instruction file, and optionally its own agent and `needs`, so a label is how a ticket picks its workflow and the skills it loads. tender ships a starting profile in [`profile/`](../profile) with three types: `bug` (label `type:bug`: reproduce the bug with a failing test first, fix the root cause, keep the test), `docs` (label `type:docs`: change docs only, add no tests, check every changed command, snippet and link) and `default` (clarify, plan and implement, test, verify, review by a model of another family, commit). Point `profile` in `tender.json` at your own to change what agents are told; an instruction file can name any skill the session's agent has (committed in the repo, or installed in `~/.claude/skills` or the template config dirs).
 
 ```yaml
 types:
@@ -214,6 +214,9 @@ types:
     match: { labels: ["type:bug"] }
     instructions: instructions/bug.md
     agent: { name: codex, effort: high }
+  - name: migration
+    match: { labels: ["type:migration", "db"] }
+    instructions: instructions/migration.md
   - name: default
     instructions: instructions/default.md
 ```
@@ -225,7 +228,7 @@ types:
 | `types[].match.labels` | list of 1–20 labels | required, except on `default` | labels match case-insensitively; a GitHub issue type adds the label `type:<name>` (lowercased) unless the ticket already has it, and a Linear label group `Type` gives `Type:<name>` |
 | `types[].instructions` | relative path to a `.md` file | required | resolved inside the profile, symlinks included; `..` or a path that leaves it is rejected |
 | `types[].agent` | like the repo's `agent` | the repo's `agent` | replaces the repo's `agent` whole, so a provider switch never keeps the repo's model or effort |
-| `types[].output` | `pr` | `pr` | |
+| `types[].output` | `pr` | `pr` | every type must end in a PR: the lifecycle after a session (In Review, feedback, merge) assumes one, so a type whose work only posts a comment or changes nothing does not fit yet |
 | `types[].needs` | `{ ports: 1-10, compose?: <path in the repo> }` | none | TCP ports the session may listen on and connect to, as `TENDER_PORT_0`…, and a Compose file `tender` starts for it from the base commit; nono grants a port on every host, so the session (which holds `GH_TOKEN`) can reach that port anywhere, see [Ports and services](sandbox.md#ports-and-services) |
 
 The last type must be `default`, with no `match`: it takes every ticket no other type matches. A repo's own `types` replace a profile type of the same name in place and add new ones just before `default`; their `instructions` still name files in the host's profile, so a repo cannot point the agent at a file of its own. A type never changes a merge decision: those stay per repo. `tender` reads `types.yaml` at startup (restart it after editing, or after fixing an instruction file a repo's `types` names) and each instruction file when a ticket starts, refusing the start if the file was replaced by a symlink or moved under one since; it records the chosen type and file in `<ID>.type` for `tender watch`.

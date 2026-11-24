@@ -29,7 +29,7 @@ Move a GitHub issue or Linear ticket to **ready**, and `tender` starts a Claude 
 - **Sandbox:** [nono](https://github.com/nolabs-ai/nono), or none on a VM where the VM is the boundary.
 - **Your config, read-only:** a fresh agent config dir per ticket. Agents use your `CLAUDE.md`, `AGENTS.md` and skills but cannot change them.
 - **Claude login:** the sandbox holds only a phantom token. `tender` refreshes the host login itself before it expires ([Claude auth](docs/auth.md#claude-auth)).
-- **[Task types](docs/config.md#profile):** a ticket's labels pick a type from your profile, and the type picks the one instruction file the session follows. How to plan, build, test, verify and review lives there and in your skills, not in `tender`.
+- **[Task types](docs/config.md#profile):** a ticket's labels pick a type from your profile, and the type picks the one instruction file the session follows (and optionally its agent). Define as many types as you need; the shipped `bug`, `docs` and `default` are a starting point. How to plan, build, test, verify and review lives there and in your skills, not in `tender`.
 - **[Ports and services](docs/sandbox.md#ports-and-services):** a type can declare `needs`: assigned ports the sandbox allows, and a Compose file `tender` starts outside the sandbox and stops when the ticket ends.
 
 **While it works**

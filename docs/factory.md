@@ -45,7 +45,7 @@ services:
 
 ## What is left to skills
 
-- **The flow.** A [profile](config.md#profile) is `types.yaml` plus `instructions/*.md`. The first type whose `match.labels` the ticket has wins, and `default` comes last. tender ships [`profile/`](../profile) (`bug`, `docs`, `default`). Point `"profile"` in `tender.json` at your own. The instruction file names the skills the session loads (for example `orchestration`). tender has no step list and no per-step sessions.
+- **The flow.** A [profile](config.md#profile) is `types.yaml` plus `instructions/*.md`. The first type whose `match.labels` the ticket has wins, and `default` comes last. tender ships [`profile/`](../profile) (`bug`, `docs`, `default`) as a starting point; point `"profile"` in `tender.json` at your own and add as many types as your workflows need. The instruction file names the skills the session loads (for example `orchestration`). tender has no step list and no per-step sessions.
 - **Repo setup.** `tender-setup` writes `.tender/config.yaml` and type overrides from CI config and manifests. `tender-maintain` proposes repairs for what the contract check reports. Both live in this repo, tied to its schema; see [Setup](setup.md).
 - **Verification.** How a session proves its change (tests, driving the app, screenshots or video) is the repo's verification skill, which the instruction files tell the session to use. `create-verification` can write one (`.agents/skills/verify-<app>/`), and `maintain-verification` keeps it current. Both are adapted from pstack (MIT) and live with your other skills, reaching sessions through the template links.
 - **Out of tender.** Measurement, cost and budgets belong where all your agents run. Also out: a separate verifier session, multi-tenant use and Symphony.

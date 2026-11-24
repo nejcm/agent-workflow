@@ -1,4 +1,4 @@
-# First match in file order wins; default takes every other ticket and stays last.
+# Add your own types above default. First match in file order wins; default takes every other ticket and stays last.
 types:
   - name: bug
     match: { labels: ["type:bug"] }

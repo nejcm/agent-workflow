@@ -8,7 +8,8 @@ import { canonical, sameRepo } from "../github";
 import { typeFor } from "../config/profile";
 import { configCache, loadSession, promptFor } from "../config/repo-config";
 import type { AgentConfig, Config, Io, Repo, Session, Source, TaskType, Ticket, Tracker } from "../types";
-import { GIT, inDir, inRun, passLocked, put, quote, read, remove, SLOW_SECS, SYSTEMD, write } from "../util";
+import { GIT, inDir, inRun, passLocked, put, quote, read, remove, SLOW_SECS, SYSTEMD, write, writeRun } from "../util";
+import { byOperator, historyFrame } from "./question";
 import { allocatePorts, type ComposeJob, composeProject, portGrants, requireLandlock } from "./needs";
 
 export const render = (tpl: string, vars: Record<string, string>) => tpl.replace(/\{\{(\w+)\}\}/g, (m, k) => vars[k] ?? m);
@@ -396,11 +397,19 @@ export async function start(cfg: Config, s: Source, host: Repo, t: Ticket, tr: T
   const body = t.body.length > MAX_BODY ? `${t.body.slice(0, MAX_BODY)}\n[truncated: read the full ticket at its URL]` : t.body;
   const type = typeFor(r.types, t.labels);
   const ses = withAgent(r, type.agent);
-  await launch(cfg, io, ses, t.id, (vars) => render(promptFor(type), { ...vars, title: t.title, body, url: t.url }), tenderDir, s.name, type);
+  const t0 = Date.now();
+  const cs = await tr.comments(t, 0);
+  const rerun = existsSync(join(dir, t.id)) || cs.some((c) => /^\s*(aw|tender): picked up on /i.test(c.body));
+  const history = rerun ? historyFrame(cs, t.id, host.feedbackAuthors) : undefined;
+  // Past every included operator comment, so none is re-sent as a message even when the tracker's clock is ahead.
+  const seenAt = cs.filter(byOperator(host.feedbackAuthors)).reduce((m, c) => Math.max(m, Date.parse(c.createdAt) || 0), t0);
+  await launch(cfg, io, ses, t.id, (vars) => (history ? render(RESTART, vars) : "") + render(promptFor(type), { ...vars, title: t.title, body, url: t.url }), tenderDir, s.name, type, history, seenAt);
   io.event?.("start", host.key, t.id, { agent: ses.agent, source: s.name });
   await claim(io, tr, join(dir, `${t.id}.claim`), t).catch((e) => io.log(`${t.id}: claim failed, session left running and the claim retried next poll: ${e.message}`));
   return true;
 }
+
+const RESTART = "You are restarting ticket {{id}}: an earlier session worked on it. Before changing anything, read `.tender/run/history.md` and the rest of `.tender/run/`, `git status`, `git log origin/{{base}}..HEAD`, `origin/{{branch}}` after `git fetch origin` (continue from it if it holds earlier work) and the PR for branch {{branch}} if there is one, then do the task below from where it stands.\n\n";
 
 const CONTINUE = "You are taking ticket {{id}} back after a human worked on it outside tender. Before changing anything, read `git status`, `git log origin/{{base}}..HEAD`, the PR for branch {{branch}} if there is one, and `.tender/run/`, then finish the task below from where it stands.\n\n";
 
@@ -428,8 +437,8 @@ async function resumeLocked(cfg: Config, io: Io, { key, id }: { key: string; id:
 
 export const handedOff = (dir: string, id: string) => existsSync(join(dir, `${id}.handoff`));
 
-// `source` marks a fresh start: it records the owner, clears the end markers and the last question, starts the message cursor, and writes `<ID>.claim` for the caller's claim.
-async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars: Record<string, string>) => string, tenderDir: string, source?: string, type?: TaskType) {
+// `source` marks a fresh start: it records the owner, clears the end markers and the last question, starts the message cursor at `seenAt`, writes `history` on a restart and `<ID>.claim` for the caller's claim.
+async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars: Record<string, string>) => string, tenderDir: string, source?: string, type?: TaskType, history?: string, seenAt = Date.now()) {
   const dir = repoDir(cfg, r.key);
   const wt = join(dir, id);
   const branch = `agent/${id}`;
@@ -474,7 +483,7 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
     remove(io, join(dir, `${id}.ended`));
     remove(io, join(dir, `${id}.reassigned`));
     remove(io, join(dir, `${id}.question`));
-    put(io, join(dir, `${id}.steer`), JSON.stringify({ seenAt: Date.now() }));
+    put(io, join(dir, `${id}.steer`), JSON.stringify({ seenAt }));
   }
   put(io, join(dir, `${id}.agent`), r.model || r.effort ? JSON.stringify({ name: r.agent, model: r.model, effort: r.effort }) : r.agent);
   if (type) put(io, join(dir, `${id}.type`), JSON.stringify({ name: type.name, instructions: type.instructions }));
@@ -485,13 +494,15 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
   seedCodex(io, codexHome(wt), login, root);
   if (r.agent === "claude" || nono) seedClaude(io, claudeHome(wt), root);
   io.log(`${io.dry ? "dry: " : ""}write ${join(wt, ".tender", "run", ".gitignore")}`);
+  if (source !== undefined && history) io.log(`${io.dry ? "dry: " : ""}write ${join(wt, ".tender", "run", "history.md")}`);
   if (!io.dry) {
     mkdirSync(join(wt, ".tender"), { recursive: true });
     inDir(join(wt, ".tender"), (d) => mkdirSync(`${d}/run`, { recursive: true }));
     // Unlink + exclusive create: never write through a symlink or hardlink the agent left there.
     inRun(wt, (d) => (rmSync(`${d}/.gitignore`, { force: true }), writeFileSync(`${d}/.gitignore`, "*\n", { flag: "wx" })));
     // The last run's question was never asked by this session; its answer would be delivered to it.
-    if (source !== undefined) inRun(wt, (d) => ["question.md", "answer.md", "message.md"].forEach((f) => rmSync(`${d}/${f}`, { recursive: true, force: true })));
+    if (source !== undefined) inRun(wt, (d) => ["question.md", "answer.md", "message.md", "history.md"].forEach((f) => rmSync(`${d}/${f}`, { recursive: true, force: true })));
+    if (source !== undefined && history) writeRun(wt, "history.md", history);
   }
   put(io, promptFile, text);
   put(io, script, launcher(r, wt, promptFile, scopeUnit(cfg, r.key, id), tenderDir, bun, ports, services), 0o755);

@@ -35,8 +35,6 @@ test("nextRun: never ran is due at the next tick; every less the slack, rounded 
   expect(nextRun(NOW - 57 * MIN, "1h", NOW)).toEqual({ at: Date.parse("2026-01-01T12:15:00Z"), due: false });
   expect(nextRun(NOW - 10 * MIN, "1h", NOW)).toEqual({ at: Date.parse("2026-01-01T13:00:00Z"), due: false });
   expect(tickAt(Date.parse("2026-01-01T12:15:00Z"))).toBe(Date.parse("2026-01-01T12:15:00Z"));
-  expect(tickAt(NOW, NOW - 4 * MIN, false)).toBe(NOW + 11 * MIN);
-  expect(tickAt(NOW, undefined, false)).toBe(Date.parse("2026-01-01T12:15:00Z"));
 });
 
 test("info: rules with mode, last run, error, next, counts; not-enabled rules listed; local git only", async () => {
@@ -51,7 +49,7 @@ test("info: rules with mode, last run, error, next, counts; not-enabled rules li
   expect(i).toMatchObject({ host: "box", here: true, timer: "ok", judge: { agent: "claude", model: "opus", maxPerRun: 5, last: NOW - 3 * MIN }, errors: 1 });
   expect(i.guardrails).toBeUndefined();
   expect(i.rules.map((r) => [r.name, r.enabled, r.mode, r.every])).toEqual([["errs", true, "auto", "1h"], ["deps", true, "judge", "1d"], ["lint", false, "shadow", "1h"]]);
-  expect(i.rules[0]).toMatchObject({ ranAt: NOW - 30 * MIN, error: "boom", filed: 2, open: 1, reopened: 1, gone: 1, still: 0, due: false, next: tickAt(NOW + 28 * MIN, NOW - 5 * MIN) });
+  expect(i.rules[0]).toMatchObject({ ranAt: NOW - 30 * MIN, error: "boom", filed: 2, open: 1, reopened: 1, gone: 1, still: 0, due: false, next: tickAt(NOW + 28 * MIN) });
   expect(i.rules[1]).toMatchObject({ due: true, ranAt: undefined });
   expect(i.rules[2]!.next).toBeUndefined();
   expect(s.cmds.some((c) => c.includes("fetch") || c.startsWith("gh "))).toBe(false);

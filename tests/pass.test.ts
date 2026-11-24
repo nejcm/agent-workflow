@@ -65,14 +65,15 @@ export GH_CONFIG_DIR='/ws/it'\''s'.gh XDG_CACHE_HOME='/ws/it'\''s.tmpdir/cache' 
 `;
   const own = String.raw`--allow '/ws/it'\''s.claude' --allow '/ws/it'\''s.codex' `;
   const probe = "expand=--expand-environment=no; help=$(systemd-run --help 2>/dev/null) && [[ $help != *--expand-environment=* ]] && expand=\n";
-  expect(s("claude", "nono")).toBe(`${head}${box}${claudeNonoEnv}${probe}exec ${scope}${nono("claude", own)}${claude}`);
-  expect(s("claude", "none")).toBe(`${head}${claudeEnv}${probe}exec ${scope}${claude}`);
+  const author = (a: string) => `export GIT_AUTHOR_NAME='Tender ${a}' GIT_AUTHOR_EMAIL=tender@tender.invalid\n`;
+  expect(s("claude", "nono")).toBe(`${head}${box}${claudeNonoEnv}${author("Claude")}${probe}exec ${scope}${nono("claude", own)}${claude}`);
+  expect(s("claude", "none")).toBe(`${head}${claudeEnv}${author("Claude")}${probe}exec ${scope}${claude}`);
   const codexEnv = String.raw`export CODEX_HOME='/ws/it'\''s'.codex
 `;
   const codexNonoEnv = String.raw`export CODEX_HOME='/ws/it'\''s'.codex CLAUDE_CONFIG_DIR='/ws/it'\''s'.claude CLAUDE_CODE_TMPDIR='/ws/it'\''s'.tmpdir
 `;
-  expect(s("codex", "nono")).toBe(`${head}${box}${codexNonoEnv}${probe}exec ${scope}${nono("codex", own)}${codex("--no-daemon ")}`);
-  expect(s("codex", "none")).toBe(`${head}${codexEnv}${probe}exec ${scope}${codex("")}`);
+  expect(s("codex", "nono")).toBe(`${head}${box}${codexNonoEnv}${author("Codex")}${probe}exec ${scope}${nono("codex", own)}${codex("--no-daemon ")}`);
+  expect(s("codex", "none")).toBe(`${head}${codexEnv}${author("Codex")}${probe}exec ${scope}${codex("")}`);
 });
 
 test("launcher: without systemd the agent is exec'd directly, no scope and no expand probe", () => {
@@ -1963,4 +1964,20 @@ test("a fresh start drops the last run's PR file and its record", async () => {
   const { io } = fakeIo((a) => (a[5] === "--quiet" ? { out: "abc123\n" } : noPr(a)));
   await pass(c, io, () => tr, "/tender");
   for (const f of ["gh-1.prfile", "gh-1/.tender/run/pr.md"]) expect(existsSync(join(root, "acme/web", f))).toBe(false);
+});
+
+test("launcher: session commits are authored as tender with the agent and model, in both sandbox modes", () => {
+  for (const sandbox of ["nono", "none"]) {
+    const c = config({ repos: [{ name: "acme/web", path: "/src/web", sandbox }] });
+    expect(launcher({ ...ses(c), model: "claude-opus-5-5" }, "/w", "/p", "u.scope", "/tender", "/b/bun")).toContain("\nexport GIT_AUTHOR_NAME='Tender Claude (claude-opus-5-5)' GIT_AUTHOR_EMAIL=tender@tender.invalid\n");
+    expect(launcher(ses(c, "codex"), "/w", "/p", "u.scope", "/tender", "/b/bun")).toContain("\nexport GIT_AUTHOR_NAME='Tender Codex' GIT_AUTHOR_EMAIL=tender@tender.invalid\n");
+  }
+});
+
+test("a start sets no git identity in the clone, so a hand-off commits as the operator", async () => {
+  const { tr } = fakeTracker({ ready: [ticket(1)] });
+  const { io, cmds } = fakeIo((a) => (a[5] === "--quiet" ? { out: "abc123\n" } : noPr(a)));
+  await pass(config(), io, () => tr, "/tender");
+  expect(cmds.some((x) => x.includes("tmux new-window"))).toBe(true);
+  expect(cmds.some((x) => /user\.(name|email)|--author/.test(x))).toBe(false);
 });

@@ -162,7 +162,9 @@
       "CLAUDE_CONFIG_DIR",
       "CLAUDE_CODE_TMPDIR",
       "CODEX_HOME",
-      "GH_CONFIG_DIR"
+      "GH_CONFIG_DIR",
+      "GIT_AUTHOR_NAME",
+      "GIT_AUTHOR_EMAIL"
     ]
   },
   "network": {

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { closeSync, constants as C, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { AGENTS, CLAUDE_TOKEN, claudeHome, codexHome, recordedAgentConfig, tmpHome } from "./agents";
+import { AGENTS, agentLabel, CLAUDE_TOKEN, claudeHome, codexHome, recordedAgentConfig, tmpHome } from "./agents";
 import { checkLogin, findBun, readLogin } from "./claude-auth";
 import { repoDir } from "../config/config";
 import { canonical, sameRepo } from "../github";
@@ -76,9 +76,10 @@ export function launcher(l: Pick<Session, "agent" | "sandbox" | "path" | "model"
   const expand = !systemd ? "" : `expand=--expand-environment=no; help=$(systemd-run --help 2>/dev/null) && [[ $help != *--expand-environment=* ]] && expand=\n`;
   const scope = !systemd ? [] : ["systemd-run", "--user", "--scope", "--quiet", "--collect", "$expand", "--unit", quote(unit), "--"];
   const vars = ports.length ? `export ${ports.map((p, i) => `TENDER_PORT_${i}=${p}`).join(" ")}\n` : "";
+  const author = `export GIT_AUTHOR_NAME=${quote(`Tender ${agentLabel(l.agent, l.model)}`)} GIT_AUTHOR_EMAIL=tender@tender.invalid\n`;
   // From `/`, so bun reads no bunfig.toml or .env the agent wrote in the clone.
   const up = services ? `(cd / && exec ${quote(bun)} --no-env-file ${quote(join(tenderDir, "src/session/needs.ts"))} ${quote(services)}) || exit 1\n` : "";
-  return `#!/usr/bin/env bash\ncd ${quote(wt)} || exit 1\nunset LINEAR_API_KEY\n${up}export TMPDIR=${quote(tmp)} TMP=${quote(tmp)} TEMP=${quote(tmp)}\n${vars}${box}${env}\n${expand}exec ${[...scope, ...wrap, ...cmd].join(" ")}\n`;
+  return `#!/usr/bin/env bash\ncd ${quote(wt)} || exit 1\nunset LINEAR_API_KEY\n${up}export TMPDIR=${quote(tmp)} TMP=${quote(tmp)} TEMP=${quote(tmp)}\n${vars}${box}${env}\n${author}${expand}exec ${[...scope, ...wrap, ...cmd].join(" ")}\n`;
 }
 
 /** Kills the session's scope, then its window, as for a canceled ticket; drops it from `wins`. */

@@ -14,8 +14,8 @@ const LIST_CAP = 1000;
 // Undefined when unreadable: only an absent field means none, so a truncated or malformed list never starts a ticket.
 function openBlockers(b: any): string[] | undefined {
   if (b === undefined) return [];
-  if (!Array.isArray(b?.nodes) || !(b.totalCount <= b.nodes.length) || b.nodes.some((n: any) => typeof n?.state !== "string")) return;
-  return b.nodes.filter((n: any) => n.state !== "CLOSED").map((n: any) => String(n.url || `#${n.number}`));
+  if (!Array.isArray(b?.nodes) || !(typeof b.totalCount === "number" && b.totalCount <= b.nodes.length) || b.nodes.some((n: any) => !n?.state || !n.url)) return;
+  return b.nodes.filter((n: any) => n.state !== "CLOSED").map((n: any) => String(n.url));
 }
 
 export function github(l: GitHubSource, host: string, io: Io, defaultHost: boolean, repos: string[]): Tracker {
@@ -26,8 +26,8 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
       if (!x.trim()) throw new Error("gh api user: no login");
       return x.trim().toLowerCase();
     }));
-  // GitHub allows several assignees: a ticket is someone else's only while the tender user is not among them.
   const blockedBy = new WeakMap<Ticket, string[] | undefined>();
+  // GitHub allows several assignees: a ticket is someone else's only while the tender user is not among them.
   const otherAssignee = async (logins: string[]) => (logins.length && !logins.map((x) => x.toLowerCase()).includes(await viewer()) ? logins.join(", ") : undefined);
   const listMine = (labels: string[], search?: string, complete = false) =>
     defaultHost ? list(labels, search, complete).then((r) => r.filter((t) => ours(t, host, true))) : list([...labels, hostLabel], search, complete);

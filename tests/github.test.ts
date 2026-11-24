@@ -245,6 +245,8 @@ test("github adapter: blockers come from the listing; open, cross-repo and close
     issue(4, { nodes: [node(5, "OPEN")], totalCount: 60 }),
     issue(8, { nodes: [null], totalCount: 1 }),
     issue(9, { totalCount: 0 }),
+    issue(10, { nodes: [{ id: "", number: 0, state: "", title: "", url: "" }], totalCount: 1 }),
+    issue(11, { nodes: [node(5, "OPEN")], totalCount: null }),
   ];
   const { io, cmds } = fakeIo((a) => (a[2] === "list" ? { out: JSON.stringify(issues) } : undefined));
   const tr = github(gh(), "box", io, false, ["acme/web"]);

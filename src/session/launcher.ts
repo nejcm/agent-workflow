@@ -409,11 +409,11 @@ export async function start(cfg: Config, s: Source, host: Repo, t: Ticket, tr: T
   return true;
 }
 
-const RESTART = "You are restarting ticket {{id}}: an earlier session worked on it. Before changing anything, read `.tender/run/history.md` and the rest of `.tender/run/`, `git status`, `git log origin/{{base}}..HEAD`, `origin/{{branch}}` after `git fetch origin` (continue from it if it holds earlier work) and the PR for branch {{branch}} if there is one, then do the task below from where it stands.\n\n";
+const RESTART = "You are restarting ticket {{id}}: an earlier session worked on it. Before changing anything, read `.tender/run/history.md` and the rest of `.tender/run/`, `git status`, `git log origin/{{base}}..HEAD`, `origin/{{branch}}` after `git fetch origin` (continue from it if it holds earlier work) and the PR for branch {{branch}} (`gh api 'repos/{{repo}}/pulls?head={{owner}}:{{branch}}&state=all'`) if there is one, then do the task below from where it stands.\n\n";
 
-const CONTINUE = "You are taking ticket {{id}} back after a human worked on it outside tender. Before changing anything, read `git status`, `git log origin/{{base}}..HEAD`, the PR for branch {{branch}} if there is one, and `.tender/run/`, then finish the task below from where it stands.\n\n";
+const CONTINUE = "You are taking ticket {{id}} back after a human worked on it outside tender. Before changing anything, read `git status`, `git log origin/{{base}}..HEAD`, the PR for branch {{branch}} (`gh api 'repos/{{repo}}/pulls?head={{owner}}:{{branch}}&state=all'`) if there is one, and `.tender/run/`, then finish the task below from where it stands. Open the PR by writing `.tender/run/pr.md` (first line the title, the rest the body); `gh pr create` is not available.\n\n";
 
-const RELAUNCH = "Your earlier session on ticket {{id}} ended while its PR had feedback waiting. Before changing anything, read `.tender/run/feedback.md`, `git status`, `git log origin/{{base}}..HEAD` and the PR for branch {{branch}}, then address the feedback and push; the original task follows.\n\n";
+const RELAUNCH = "Your earlier session on ticket {{id}} ended while its PR had feedback waiting. Before changing anything, read `.tender/run/feedback.md`, `git status`, `git log origin/{{base}}..HEAD` and the PR for branch {{branch}} (`gh api 'repos/{{repo}}/pulls?head={{owner}}:{{branch}}&state=all'`), then address the feedback and push; the original task follows.\n\n";
 
 /** Starts a new session in `<ID>`'s existing clone after a hand-off, with the original prompt behind a continue note. */
 export const resume = (cfg: Config, io: Io, target: { key: string; id: string }, tenderDir: string) => passLocked(cfg, io.log, () => resumeLocked(cfg, io, target, tenderDir));
@@ -458,7 +458,7 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
   const promptFile = join(dir, `${id}.prompt.md`);
   const script = join(dir, `${id}.sh`);
   const nono = r.sandbox === "nono";
-  const text = prompt({ id, branch, base: r.baseBranch, verify: "the project's checks (find how they run: README, CI config, package or build files)", repo: r.key });
+  const text = prompt({ id, branch, base: r.baseBranch, verify: "the project's checks (find how they run: README, CI config, package or build files)", repo: r.key, owner: r.key.slice(0, r.key.indexOf("/")) });
   const kib = Buffer.byteLength(text) / 1024;
   if (kib > MAX_PROMPT_KIB) throw new Error(`${id}: prompt is ${Math.ceil(kib)} KiB, over ${MAX_PROMPT_KIB} KiB`);
   const token = join(io.home, CLAUDE_TOKEN);

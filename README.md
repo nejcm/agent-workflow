@@ -33,7 +33,7 @@ Move a GitHub issue or Linear ticket to **ready**, and `tender` starts a Claude 
 
 **While it works**
 - **[Phases](docs/lifecycle.md#phases):** a phased plan is mirrored into sub-tickets that track its status.
-- **[Questions](docs/lifecycle.md#questions):** a blocked agent's question is posted to the ticket, and your reply is delivered back to the session.
+- **[Questions](docs/lifecycle.md#questions):** a blocked agent's question is posted to the ticket, and your reply is delivered back to the session; any other comment you add to the ticket before the PR is delivered to the running session too.
 - **[Findings](docs/lifecycle.md#findings):** problems outside the ticket's scope become new tickets, not drive-by fixes.
 - **Stall detection:** a session that writes nothing for `stallMinutes` gets `needs-human` and a comment with its last pane lines.
 

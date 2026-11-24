@@ -428,7 +428,7 @@ async function resumeLocked(cfg: Config, io: Io, { key, id }: { key: string; id:
 
 export const handedOff = (dir: string, id: string) => existsSync(join(dir, `${id}.handoff`));
 
-// `source` marks a fresh start: it records the owner, clears the end markers and the last question, and writes `<ID>.claim` for the caller's claim.
+// `source` marks a fresh start: it records the owner, clears the end markers and the last question, starts the message cursor, and writes `<ID>.claim` for the caller's claim.
 async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars: Record<string, string>) => string, tenderDir: string, source?: string, type?: TaskType) {
   const dir = repoDir(cfg, r.key);
   const wt = join(dir, id);
@@ -474,6 +474,7 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
     remove(io, join(dir, `${id}.ended`));
     remove(io, join(dir, `${id}.reassigned`));
     remove(io, join(dir, `${id}.question`));
+    put(io, join(dir, `${id}.steer`), JSON.stringify({ seenAt: Date.now() }));
   }
   put(io, join(dir, `${id}.agent`), r.model || r.effort ? JSON.stringify({ name: r.agent, model: r.model, effort: r.effort }) : r.agent);
   if (type) put(io, join(dir, `${id}.type`), JSON.stringify({ name: type.name, instructions: type.instructions }));
@@ -490,7 +491,7 @@ async function launch(cfg: Config, io: Io, r: Session, id: string, prompt: (vars
     // Unlink + exclusive create: never write through a symlink or hardlink the agent left there.
     inRun(wt, (d) => (rmSync(`${d}/.gitignore`, { force: true }), writeFileSync(`${d}/.gitignore`, "*\n", { flag: "wx" })));
     // The last run's question was never asked by this session; its answer would be delivered to it.
-    if (source !== undefined) inRun(wt, (d) => ["question.md", "answer.md"].forEach((f) => rmSync(`${d}/${f}`, { recursive: true, force: true })));
+    if (source !== undefined) inRun(wt, (d) => ["question.md", "answer.md", "message.md"].forEach((f) => rmSync(`${d}/${f}`, { recursive: true, force: true })));
   }
   put(io, promptFile, text);
   put(io, script, launcher(r, wt, promptFile, scopeUnit(cfg, r.key, id), tenderDir, bun, ports, services), 0o755);

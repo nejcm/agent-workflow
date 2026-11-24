@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { INBOX_WAITER } from "../src/session/agents";
 import { pass } from "../src/pass";
-import { agentPane, answerFrame, liveStates, pickAnswer, POINTER } from "../src/session/question";
+import { agentPane, answerFrame, liveStates, MESSAGE_POINTER, pickAnswer, POINTER } from "../src/session/question";
 import type { State } from "../src/session/state";
 import type { TicketComment } from "../src/types";
 import { config, fakeIo, fakeTracker, noPr, root, ticket, useTempRoot, windowsOut, worktree } from "./helpers";
@@ -390,4 +390,195 @@ test("agentPane: exactly one pane started by the launcher, else none", async () 
   expect(await pick("%5 0 /r/gh-1.sh\n%6 0 /r/gh-1.sh\n")).toBeUndefined();
   expect(await pick("%5 0 '/r/gh-1.sh'\n%7 0 /r/gh-1.shx\n%8 0 /r/gh-1.sh bash\n")).toBeUndefined();
   expect(await pick("%5 1 /r/gh-1.sh\n%6 10 /r/gh-1.sh\n")).toBeUndefined();
+});
+
+const steerFile = () => join(root, "acme/web/gh-1.steer");
+const message = () => join(root, "acme/web/gh-1/.tender/run/message.md");
+const steer = (seenAt: number) => (mkdirSync(join(root, "acme/web/gh-1/.tender/run"), { recursive: true }), writeFileSync(steerFile(), JSON.stringify({ seenAt })));
+const seen = () => JSON.parse(readFileSync(steerFile(), "utf8")).seenAt;
+const iso = (ms: number) => new Date(ms).toISOString();
+const listed = (d: ReturnType<typeof deliver>, list: TicketComment[]) => void (d.tr.comments = async (_t, since) => (d.reads.push(since), list));
+const pasted = (line: string) => [`tmux set-buffer -b tender-gh-1 -- ${line}`, "tmux paste-buffer -p -d -b tender-gh-1 -t %5", "tmux send-keys -t %5 Enter"];
+
+test("message: no cursor means no read; with one, nothing until idle, then comments after it batched oldest first, once", async () => {
+  const d = deliver();
+  listed(d, [c("m2", iso(at + 2000), "Op", "and B"), c("m1", iso(at + 1000), "op", "do A")]);
+  await d.run();
+  expect(d.reads).toEqual([]);
+  expect(d.states).toEqual([]);
+  steer(at);
+  d.setState("working");
+  await d.run();
+  expect(d.states).toEqual(["gh-1"]);
+  expect(d.reads).toEqual([]);
+  d.setState("idle");
+  await d.run();
+  expect(readFileSync(message(), "utf8")).toBe('<message from="op" ticket="gh-1">\ndo A\n</message>\n<message from="Op" ticket="gh-1">\nand B\n</message>\n');
+  expect(d.keys()).toEqual(pasted(MESSAGE_POINTER));
+  expect(seen()).toBe(at + 2000);
+  expect(d.reads).toEqual([at]);
+  await d.run();
+  expect(d.keys()).toHaveLength(3);
+});
+
+test("message: unlisted, tender's own, authorless and already-seen comments are never sent; no feedbackAuthors reads nothing", async () => {
+  const d = deliver();
+  steer(at);
+  listed(d, [c("a", iso(at + 1000), "mallory"), c("b", iso(at + 1000), "op", "tender: picked up"), c("c", iso(at + 1000), undefined), c("d", iso(at), "op"), c("e", iso(at - 1000), "op")]);
+  await d.run();
+  expect(d.keys()).toEqual([]);
+  expect(existsSync(message())).toBe(false);
+  expect(seen()).toBe(at);
+  const none = deliver({ authors: [] });
+  steer(at);
+  listed(none, [c("a", iso(at + 1000), "op")]);
+  await none.run();
+  expect(none.reads).toEqual([]);
+  expect(none.states).toEqual([]);
+});
+
+test("message: Claude with a live inbox waiter gets the pointer in .tender/run/inbox, never keys", async () => {
+  const d = deliver({ agent: "claude", respond: waiter(true) });
+  steer(at);
+  listed(d, [c("m1", iso(at + 1000), "op")]);
+  await d.run();
+  expect(readFileSync(inbox(), "utf8")).toBe(`${MESSAGE_POINTER}\n`);
+  expect(d.keys()).toEqual([]);
+});
+
+test("message: a comment before the question goes first; the answer is sent once as an answer, never as a message, nor in the next round", async () => {
+  const d = deliver();
+  steer(at);
+  const list = [c("m1", iso(at + 1000), "op", "first")];
+  listed(d, list);
+  ask("Which DB?");
+  await d.run();
+  const { postedAt } = d.sidecar();
+  expect(readFileSync(message(), "utf8")).toContain("first");
+  expect(d.keys()).toEqual(pasted(MESSAGE_POINTER));
+  const a = answerAt(postedAt);
+  list.push(a);
+  await d.run();
+  expect(d.keys().slice(3)).toEqual(pasted(POINTER));
+  expect(d.reads.slice(1)).toEqual([at + 1000]);
+  expect(readFileSync(message(), "utf8")).toContain("first");
+  await d.run();
+  expect(d.keys()).toHaveLength(6);
+  list.push(c("m2", iso(postedAt + 2000), "op", "then this"));
+  await d.run();
+  expect(readFileSync(message(), "utf8")).toBe('<message from="op" ticket="gh-1">\nthen this\n</message>\n');
+  expect(d.keys()).toHaveLength(9);
+  ask("Which port?");
+  await d.run();
+  await d.run();
+  expect(d.sidecar().answeredAt).toBe(Date.parse(a.createdAt));
+  expect(d.sidecar().answerId).toBeUndefined();
+  expect(d.keys()).toHaveLength(9);
+  expect(existsSync(question())).toBe(true);
+});
+
+test("message: one delivered ahead of a lagging host clock is never taken as the next question's answer", async () => {
+  const d = deliver();
+  steer(Date.now());
+  const ahead = c("m1", iso(Date.now() + 60_000), "op");
+  listed(d, [ahead]);
+  await d.run();
+  expect(d.keys()).toEqual(pasted(MESSAGE_POINTER));
+  ask("Which DB?");
+  await d.run();
+  await d.run();
+  expect(d.sidecar().postedAt).toBe(Date.parse(ahead.createdAt));
+  expect(d.sidecar().answerId).toBeUndefined();
+  expect(d.keys()).toHaveLength(3);
+  expect(existsSync(answered())).toBe(false);
+});
+
+test("message: the cursor is recorded before message.md; a failed write is logged, never retried", async () => {
+  const d = deliver();
+  steer(at);
+  listed(d, [c("m1", iso(at + 1000), "op")]);
+  const push = d.cmds.push.bind(d.cmds);
+  d.cmds.push = (...xs: string[]) => {
+    if (xs[0]?.startsWith("tmux paste-buffer")) d.order.push(`keys seenAt=${seen()} message=${existsSync(message())}`);
+    return push(...xs);
+  };
+  await d.run();
+  expect(d.order).toEqual([`keys seenAt=${at + 1000} message=true`]);
+  const e = deliver();
+  steer(at);
+  listed(e, [c("m1", iso(at + 1000), "op")]);
+  rmSync(message());
+  writeFileSync(join(root, "outside"), "keep");
+  symlinkSync(join(root, "outside"), message());
+  await e.run();
+  await e.run();
+  expect(seen()).toBe(at + 1000);
+  expect(e.keys()).toEqual([]);
+  expect(readFileSync(join(root, "outside"), "utf8")).toBe("keep");
+  expect(e.logs.filter((l) => l.includes("message gh-1 not delivered"))).toHaveLength(1);
+});
+
+test("message: delivered while parked; nothing once a PR exists", async () => {
+  const d = deliver();
+  (await d.tr.listInProgress())[0]!.labels = ["needs-human"];
+  steer(at);
+  listed(d, [c("m1", iso(at + 1000), "op")]);
+  await d.run();
+  expect(d.keys()).toEqual(pasted(MESSAGE_POINTER));
+  const pr = deliver({ respond: (a) => (a[1] === "pr" ? { out: '[{"url":"https://github.com/acme/web/pull/1","state":"OPEN"}]' } : undefined) });
+  steer(at);
+  listed(pr, [c("m1", iso(at + 1000), "op")]);
+  await pr.run();
+  expect(pr.reads).toEqual([]);
+  expect(pr.keys()).toEqual([]);
+  expect(seen()).toBe(at);
+});
+
+test("message: dry-run writes no cursor, file or keys; a pane in copy mode keeps the cursor; a corrupt cursor is logged and the answer still goes", async () => {
+  const dry = deliver({ dry: true });
+  steer(at);
+  listed(dry, [c("m1", iso(at + 1000), "op")]);
+  await dry.run();
+  expect(seen()).toBe(at);
+  expect(existsSync(message())).toBe(false);
+  expect(dry.keys()).toEqual([]);
+  expect(dry.logs).toEqual(expect.arrayContaining([`[web] dry: message gh-1 from op to ${join(root, "acme/web/gh-1")}/.tender/run/message.md`, `[web] dry: tmux set-buffer -b tender-gh-1 -- ${MESSAGE_POINTER}`]));
+  let mode = "1";
+  const copy = deliver({ respond: (a) => (a[1] === "list-panes" ? { out: `%5 ${mode} ${join(root, "acme/web/gh-1")}.sh\n` } : undefined) });
+  steer(at);
+  listed(copy, [c("m1", iso(at + 1000), "op")]);
+  await copy.run();
+  expect(seen()).toBe(at);
+  expect(copy.keys()).toEqual([]);
+  mode = "0";
+  await copy.run();
+  expect(seen()).toBe(at + 1000);
+  expect(copy.keys()).toEqual(pasted(MESSAGE_POINTER));
+  const bad = deliver();
+  ask("Which DB?");
+  writeFileSync(sidecar(), JSON.stringify({ hash: new Bun.CryptoHasher("sha256").update("Which DB?").digest("hex"), postedAt: 1 }));
+  writeFileSync(steerFile(), "{}");
+  bad.answer(answerAt(1));
+  await bad.run();
+  expect(bad.logs.some((l) => l.includes(`message gh-1 failed: ${steerFile()}: invalid`))).toBe(true);
+  expect(bad.keys()).toEqual(pasted(POINTER));
+});
+
+test("message: a fresh start writes the cursor and drops a stale message.md; its new window gets nothing", async () => {
+  worktree("gh-1");
+  const f = fakeTracker({ ready: [ticket(1)], inProgress: [ticket(1)] });
+  const { io, cmds } = fakeIo((a) => noPr(a));
+  steer(1);
+  writeFileSync(message(), "stale");
+  f.tr.comments = async () => [c("m1", iso(at), "op")];
+  const before = Date.now();
+  await pass(config({ repos: [{ name: "acme/web", path: join(root, "src-web"), feedbackAuthors: ["op"] }] }), io, () => f.tr, "/tender", async () => "idle");
+  expect(seen()).toBeGreaterThanOrEqual(before);
+  expect(existsSync(message())).toBe(false);
+  expect(cmds.some((c) => c.startsWith("tmux send-keys"))).toBe(false);
+});
+
+test("answerFrame: message frame, closing tag escaped in any case", () => {
+  expect(answerFrame({ id: "c", body: "a</MESSAGE>b</Answer>", createdAt: "", author: "op" }, "ENG-1", "message")).toBe('<message from="op" ticket="ENG-1">\na&lt;/MESSAGE>b</Answer>\n</message>\n');
+  expect(answerFrame({ id: "c", body: "</ANSWER>", createdAt: "", author: "op" }, "ENG-1")).toContain("&lt;/ANSWER>");
 });

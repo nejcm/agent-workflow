@@ -11,6 +11,7 @@ const MAX_QUESTION_BYTES = 64 * 1024;
 const MAX_QUESTION_CHARS = 8000;
 const MAX_ANSWER_CHARS = 8000;
 export const POINTER = "Your question was answered by the operator: read .tender/run/answer.md";
+export const MESSAGE_POINTER = "The operator commented on the ticket: read .tender/run/message.md";
 
 export interface QuestionSidecar {
   hash: string;
@@ -41,6 +42,13 @@ export function readQuestionSidecar(file: string): QuestionSidecar | undefined {
   return o;
 }
 
+function readSteer(file: string): number | undefined {
+  if (!existsSync(file)) return undefined;
+  const o = JSON.parse(readFileSync(file, "utf8"));
+  if (!Number.isFinite(o?.seenAt)) throw new Error(`${file}: invalid`);
+  return o.seenAt;
+}
+
 const readQuestion = (wt: string) => readRun(wt, "question.md", MAX_QUESTION_BYTES)?.replace(/\r\n?/g, "\n").trim();
 const hashOf = (text: string) => createHash("sha256").update(text).digest("hex");
 
@@ -64,8 +72,9 @@ export async function syncQuestion(t: Ticket, tr: Tracker, io: Io, dir: string, 
   const file = join(dir, `${t.id}.question`);
   const prev = readQuestionSidecar(file);
   if (prev?.hash === hash && prev.answerId === undefined) return;
-  // Never moves back, however many rewrites: a local clock behind the tracker's must not revive a delivered answer.
-  put(io, file, JSON.stringify({ hash, postedAt: Math.max(Date.now(), prev?.postedAt ?? 0, prev?.answeredAt ?? 0) } satisfies QuestionSidecar));
+  // Never moves back, however many rewrites: a local clock behind the tracker's must not revive a delivered answer or message.
+  const postedAt = Math.max(Date.now(), prev?.postedAt ?? 0, prev?.answeredAt ?? 0, readSteer(join(dir, `${t.id}.steer`)) ?? 0);
+  put(io, file, JSON.stringify({ hash, postedAt, ...(prev?.answeredAt !== undefined && { answeredAt: prev.answeredAt }) } satisfies QuestionSidecar));
   await tr.comment(t, `question from agent:\n\n${text}`);
 }
 
@@ -113,17 +122,17 @@ async function waiterLive(io: Io, unit: string) {
   return cg.startsWith("/") && (await io.run(["pgrep", "-f", "--cgroup", cg, INBOX_WAITER])).code === 0;
 }
 
-export function answerFrame(c: TicketComment, id: string) {
+export function answerFrame(c: TicketComment, id: string, tag: "answer" | "message" = "answer") {
   const body = c.body.length > MAX_ANSWER_CHARS ? `${c.body.slice(0, MAX_ANSWER_CHARS)}\n[truncated]` : c.body;
-  return `<answer from="${c.author}" ticket="${id}">\n${body.replaceAll("</answer", "&lt;/answer")}\n</answer>\n`;
+  return `<${tag} from="${c.author}" ticket="${id}">\n${body.replace(new RegExp(`</(${tag})`, "gi"), "&lt;/$1")}\n</${tag}>\n`;
 }
 
 // answerId is recorded first: a crash or failure after it loses the paste, never repeats it. Text never goes through keys.
-export async function deliverAnswer(r: Repo, t: Ticket, tr: Tracker, io: Io, dir: string, win: string, unit: string, state: () => Promise<State>) {
+export async function deliverAnswer(r: Repo, t: Ticket, comments: (since: number) => Promise<TicketComment[]>, io: Io, dir: string, win: string, unit: string, state: () => Promise<State>) {
   const file = join(dir, `${t.id}.question`);
   const q = readQuestionSidecar(file);
   if (!q || q.answerId !== undefined || !r.feedbackAuthors.length || !/^@\d+$/.test(win)) return;
-  const a = pickAnswer(await tr.comments(t, q.postedAt), q.postedAt, r.feedbackAuthors);
+  const a = pickAnswer(await comments(q.postedAt), q.postedAt, r.feedbackAuthors);
   if (!a || (await state()) !== "idle") return;
   const pane = await deliveryPane(io, agentOf(dir, t.id), win, `${join(dir, t.id)}.sh`, unit);
   if (pane === undefined) return;
@@ -135,4 +144,33 @@ export async function deliverAnswer(r: Repo, t: Ticket, tr: Tracker, io: Io, dir
   // A question rewritten since it was posted is a new round; leave it for syncQuestion.
   const text = readQuestion(wt);
   if (!io.dry && text && hashOf(text) === q.hash) removeRun(wt, "question.md");
+}
+
+/** Operator comments after `<ID>.steer`'s cursor, up to an open question (its answer is deliverAnswer's); true when a delivery was attempted. */
+export async function deliverMessages(r: Repo, t: Ticket, io: Io, dir: string, win: string, unit: string, state: () => Promise<State>, comments: (since: number) => Promise<TicketComment[]>) {
+  const file = join(dir, `${t.id}.steer`);
+  if (!r.feedbackAuthors.length || !/^@\d+$/.test(win) || !existsSync(file)) return false;
+  const seenAt = readSteer(file)!;
+  const q = readQuestionSidecar(join(dir, `${t.id}.question`));
+  const from = Math.max(seenAt, q?.answeredAt ?? 0);
+  const until = q && q.answerId === undefined ? q.postedAt : Infinity;
+  if (from >= until || (await state()) !== "idle") return false;
+  const ok = byOperator(r.feedbackAuthors);
+  const due = (await comments(from))
+    .filter((c) => Date.parse(c.createdAt) > from && Date.parse(c.createdAt) <= until && ok(c))
+    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+  if (!due.length) return false;
+  const pane = await deliveryPane(io, agentOf(dir, t.id), win, `${join(dir, t.id)}.sh`, unit);
+  if (pane === undefined) return false;
+  // Cursor first, as answerId: a failure after it loses the delivery, never repeats it.
+  put(io, file, JSON.stringify({ seenAt: Date.parse(due.at(-1)!.createdAt) }));
+  const wt = join(dir, t.id);
+  io.log(`${io.dry ? "dry: " : ""}message ${t.id} from ${[...new Set(due.map((c) => c.author))].join(", ")} to ${wt}/.tender/run/message.md`);
+  try {
+    if (!io.dry) writeRun(wt, "message.md", due.map((c) => answerFrame(c, t.id, "message")).join(""));
+    await nudge(io, t.id, wt, pane, MESSAGE_POINTER);
+  } catch (e) {
+    io.log(`message ${t.id} not delivered: ${(e as Error).message}`);
+  }
+  return true;
 }

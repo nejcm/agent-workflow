@@ -5,11 +5,13 @@ import { join } from "node:path";
 import { AGENTS, agentOf, INBOX_WAITER, type Lookup } from "./agents";
 import { resolve, type State } from "./state";
 import type { AgentName, Io, Repo, Ticket, TicketComment, Tracker } from "../types";
-import { mtime, put, read, readRun, removeRun, SYSTEMD, write, writeRun } from "../util";
+import { INVISIBLE, mtime, put, read, readRun, removeRun, SYSTEMD, write, writeRun } from "../util";
 
 const MAX_QUESTION_BYTES = 64 * 1024;
 const MAX_QUESTION_CHARS = 8000;
 const MAX_ANSWER_CHARS = 8000;
+const MAX_HISTORY_CHARS = 32_000;
+const OWN = /^\s*(aw|tender):\s*/i;
 export const POINTER = "Your question was answered by the operator: read .tender/run/answer.md";
 export const MESSAGE_POINTER = "The operator commented on the ticket: read .tender/run/message.md";
 
@@ -125,6 +127,24 @@ async function waiterLive(io: Io, unit: string) {
 export function answerFrame(c: TicketComment, id: string, tag: "answer" | "message" = "answer") {
   const body = c.body.length > MAX_ANSWER_CHARS ? `${c.body.slice(0, MAX_ANSWER_CHARS)}\n[truncated]` : c.body;
   return `<${tag} from="${c.author}" ticket="${id}">\n${body.replace(new RegExp(`</(${tag})`, "gi"), "&lt;/$1")}\n</${tag}>\n`;
+}
+
+/** A restarted ticket's comments by tender or an operator, oldest first, the newest kept under the cap. */
+export function historyFrame(comments: TicketComment[], id: string, authors: string[]) {
+  const ok = byOperator(authors);
+  const at = (c: TicketComment) => Date.parse(c.createdAt) || 0;
+  const items = comments.filter((c) => OWN.test(c.body) || ok(c)).sort((a, b) => at(a) - at(b)).map((c) => {
+    const own = OWN.test(c.body);
+    const raw = own ? c.body.replace(OWN, "") : c.body;
+    const cut = raw.length > MAX_ANSWER_CHARS ? `${raw.slice(0, MAX_ANSWER_CHARS)}\n[truncated]` : raw;
+    const body = cut.replace(new RegExp(`[${INVISIBLE}]`, "gu"), "").replace(/<(\s*\/?\s*)(history|operator|tender)\b/gi, "&lt;$1$2");
+    const when = at(c) ? ` at="${new Date(at(c)).toISOString()}"` : "";
+    return own ? `<tender${when}>\n${body}\n</tender>\n` : `<operator from="${c.author}"${when}>\n${body}\n</operator>\n`;
+  });
+  let n = items.length, size = 0;
+  while (n && size + items[n - 1]!.length <= MAX_HISTORY_CHARS) size += items[--n]!.length;
+  const omitted = n ? `[${n} earlier comment${n === 1 ? "" : "s"} omitted: read them on the ticket]\n` : "";
+  return `<history ticket="${id}">\n${omitted}${items.slice(n).join("")}</history>\n`;
 }
 
 // answerId is recorded first: a crash or failure after it loses the paste, never repeats it. Text never goes through keys.

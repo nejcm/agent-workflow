@@ -9,12 +9,12 @@ import { authStamp, claim, cloned, CODEX_AUTH, codexIdentity, codexLogin, codexR
 import { autoMerge, checkState, policyBlocked, PR_FIELDS, prMode, prReady, viewPr } from "./review/merge";
 import { syncPhases } from "./review/phases";
 import { composeError, composeTeardown } from "./session/needs";
-import { agentPane, deliverAnswer, liveStates, syncQuestion } from "./session/question";
+import { agentPane, deliverAnswer, deliverMessages, liveStates, syncQuestion } from "./session/question";
 import { combine, loadSession, parseRepoConfig } from "./config/repo-config";
 import { lastSay, transcript } from "./ui/tail";
 import { type Adapter, TRACKERS } from "./trackers";
 import type { ProjectClaim } from "./trackers/linear";
-import type { Config, Io, Repo, Session, Source, Ticket, Tracker } from "./types";
+import type { Config, Io, Repo, Session, Source, Ticket, TicketComment, Tracker } from "./types";
 import { TENDER_DIR, byPriority, Kept, diskRepos, GIT, hasLabel, mtime, put, read, remove, SAFE_ID, SLOW_SECS, strip, subdirs, write } from "./util";
 
 export const sourceOf = (dir: string, id: string) => {
@@ -208,7 +208,16 @@ async function reconcileSource(cfg: Config, s: Source, tr: Tracker, io: Io, wins
         if (win) {
           if (!parked) await step(io, `stall ${t.id}`, () => checkStall(cfg, s, w, tr, io, dir, win, state));
           await step(io, `question ${t.id}`, () => syncQuestion(w, tr, io, dir, join(dir, t.id)));
-          return step(io, `answer ${t.id}`, () => deliverAnswer(cfg.repos[key]!, w, tr, io, dir, win, scopeUnit(cfg, key, t.id), () => state(dir, t.id)));
+          const r = cfg.repos[key]!;
+          const unit = scopeUnit(cfg, key, t.id);
+          // One read per pass: messages ask from an earlier time than the question's, so theirs covers the answer's.
+          let got: Promise<TicketComment[]> | undefined;
+          const comments = (since: number) => (got ??= tr.comments(w, since));
+          let sent = false;
+          await step(io, `message ${t.id}`, async () => void (sent = await deliverMessages(r, w, io, dir, win, unit, () => state(dir, t.id), comments)));
+          // The inbox holds one line: an answer waits a pass behind a message.
+          if (sent) return;
+          return step(io, `answer ${t.id}`, () => deliverAnswer(r, w, comments, io, dir, win, unit, () => state(dir, t.id)));
         }
         // The in-progress listing can lag a close that cleanup already acted on.
         if (parked) return;

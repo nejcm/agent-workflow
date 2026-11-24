@@ -62,7 +62,7 @@ A `repos` entry is `"owner/name"` or `{ "name": "owner/name", …settings }`. Ea
 | `maxInReview` | positive integer | unlimited | no new starts in the repo while it has this many In Review plus Ready to merge tickets on this host |
 | `autoMerge` | `off` \| `shadow` \| `intelligent` \| `all` | `off` | the ceiling for the repo's own `autoMerge` and `trust` rules, see [Auto-merge](auto-merge.md#auto-merge) |
 | `criticalPaths` | array of globs | `[]` | a floor of paths never auto-merged, added to the built-in and the repo's own |
-| `feedbackAuthors` | array of strings | `[]` | GitHub logins / Linear emails (case-insensitive) whose replies answer agent questions and whose PR reviews and comments go back to the session, see [Questions](lifecycle.md#questions) and [PR feedback](lifecycle.md#pr-feedback) |
+| `feedbackAuthors` | array of strings | `[]` | GitHub logins / Linear emails (case-insensitive) whose replies answer agent questions, whose other ticket comments reach the session before the PR, and whose PR reviews and comments go back to the session, see [Questions](lifecycle.md#questions), [Operator messages](lifecycle.md#operator-messages) and [PR feedback](lifecycle.md#pr-feedback) |
 | `stallMinutes` | positive integer | the top-level `stallMinutes` | see [Stalled](lifecycle.md) |
 | `feedback` | `{ "maxRounds": 1-10 }` | `{ "maxRounds": 3 }` | PR feedback rounds before the ticket is parked; the repo's `feedback.maxRounds` overrides it whatever `autoMerge` is, see [PR feedback](lifecycle.md#pr-feedback) |
 | `profile` | path | the top-level `profile` | this repo's [profile](#profile) |
@@ -232,7 +232,7 @@ The last type must be `default`, with no `match`: it takes every ticket no other
 
 ### Prompt
 
-A session's prompt is tender's `prompts/header.md` (the ticket and the rules that always hold), then the type's instruction file, then tender's `prompts/protocol.md` (push, merge file, `gh pr create`, and the phases, findings, question, feedback and merge files). The header and protocol are fixed, so every prompt keeps tender's required guidance; that is not an enforcement boundary, see [Auto-merge](auto-merge.md). A ticket body over 24,000 characters is cut, with a note to read the full ticket at its URL; a prompt over 120 KiB stops the start before the ticket's clone, session or claim (the repo's base clone and fetch, needed to read `.tender/`, come first).
+A session's prompt is tender's `prompts/header.md` (the ticket and the rules that always hold), then the type's instruction file, then tender's `prompts/protocol.md` (push, merge file, `gh pr create`, and the phases, findings, question, message, feedback and merge files). The header and protocol are fixed, so every prompt keeps tender's required guidance; that is not an enforcement boundary, see [Auto-merge](auto-merge.md). A ticket body over 24,000 characters is cut, with a note to read the full ticket at its URL; a prompt over 120 KiB stops the start before the ticket's clone, session or claim (the repo's base clone and fetch, needed to read `.tender/`, come first).
 
 ### Prompt placeholders
 

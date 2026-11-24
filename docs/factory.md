@@ -12,7 +12,7 @@ A skill runs inside the session it would have to start, contain, pace, gate or w
 | Isolate | one `git clone --shared` per ticket, a nono sandbox (unless `sandbox: none`) with GitHub credentials behind nono's proxy, a systemd scope that `tender` can kill whole | [Clones, sandbox and cleanup](sandbox.md) |
 | Run many at once | `maxConcurrent` and `maxInReview`, host-wide and per repo; port blocks allocated under the pass lock | [Config reference](config.md#top-level) |
 | Gate merges | every CI status check must pass, and a medium or large change needs at least one; auto-merge modes, trust per path, critical paths, escape hatches, Ready to merge; per repo, never per type | [Auto-merge](auto-merge.md) |
-| Deliver | posts questions to the ticket and delivers replies, PR comments, failed checks and conflicts back to the session | [PR feedback](lifecycle.md#pr-feedback), [Questions](lifecycle.md#questions) |
+| Deliver | posts questions to the ticket and delivers replies, other ticket comments before the PR, PR comments, failed checks and conflicts back to the session | [PR feedback](lifecycle.md#pr-feedback), [Questions](lifecycle.md#questions), [Operator messages](lifecycle.md#operator-messages) |
 
 tender runs no tests of its own. The session verifies its work as its instruction file and skills say; CI is the check from outside, and `.github/**` is a critical path, so a PR that edits its workflows never merges unattended. `.tender/` is read from the base branch, never from the PR, because ticket and PR text can steer the agent.
 

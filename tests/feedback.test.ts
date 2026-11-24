@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { FEEDBACK_POINTER, lineComments } from "../src/session/feedback";
 import { pass } from "../src/pass";
 import type { State } from "../src/session/state";
 import { configCache } from "../src/config/repo-config";
+import type { Ticket } from "../src/types";
 import { config, fakeIo, fakeTracker, repoFiles, root, ticket, useTempRoot, windowsOut, worktree } from "./helpers";
 
 useTempRoot();
@@ -14,25 +15,25 @@ const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
 const fail = { __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "FAILURE", detailsUrl: "https://github.com/acme/web/actions/runs/42/job/1" };
 const okCheck = { __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "SUCCESS" };
 
-function setup(o: { agent?: string; waiter?: boolean; authors?: string[]; open?: string[]; feedback?: object } = {}) {
+function setup(o: { agent?: string; waiter?: boolean; authors?: string[]; open?: string[]; feedback?: object; max?: number; dry?: boolean; more?: Ticket[]; respond?: (a: string[]) => { code?: number } | undefined } = {}) {
   worktree("gh-1");
   writeFileSync(join(root, "acme/web/gh-1.agent"), o.agent ?? "codex");
   mkdirSync(join(root, "acme/web/gh-1/.tender/run"), { recursive: true });
   const t = ticket(1);
-  const f = fakeTracker({ inReview: [t] });
+  const f = fakeTracker({ inReview: [t, ...(o.more ?? [])] });
   const pr: any = { url: URL, state: "OPEN", baseRefName: "main", headRefOid: "a", mergeStateStatus: "CLEAN", statusCheckRollup: [okCheck], reviews: [], comments: [] };
   let lines: any[] = [];
   const log = Array.from({ length: 100 }, (_, i) => `line ${i}`).join("\n");
   const { io, cmds, logs } = fakeIo((a) =>
-    a[1] === "list-windows" ? windowsOut(o.open ?? ["acme/web/gh-1"])
+    o.respond?.(a) ?? (a[1] === "list-windows" ? windowsOut(o.open ?? ["acme/web/gh-1"])
     : a[1] === "list-panes" ? { out: `%5 0 ${join(root, "acme/web/gh-1")}.sh\n` }
     : a[1] === "pr" && a[2] === "list" ? { out: JSON.stringify([{ url: URL, state: "OPEN" }]) }
     : a[1] === "pr" && a[2] === "view" ? { out: JSON.stringify(pr) }
     : a[1] === "api" ? { out: JSON.stringify(lines) }
     : a[0] === "sh" ? { out: log.split("\n").slice(-80).join("\n") }
     : a[0] === "systemctl" && a[2] === "show" ? { out: "/app.slice/s.scope\n" }
-    : a[0] === "pgrep" ? { code: o.waiter ? 0 : 1 } : undefined);
-  const cfg = config({ repos: [{ name: "acme/web", path: join(root, "src-web"), feedbackAuthors: o.authors ?? ["op"], feedback: o.feedback }] });
+    : a[0] === "pgrep" ? { code: o.waiter ? 0 : 1 } : undefined), o.dry);
+  const cfg = config({ repos: [{ name: "acme/web", path: join(root, "src-web"), feedbackAuthors: o.authors ?? ["op"], feedback: o.feedback }], ...(o.max && { maxConcurrent: o.max }) });
   let state: State = "idle";
   return {
     ...f, t, pr, cmds, logs,
@@ -41,6 +42,7 @@ function setup(o: { agent?: string; waiter?: boolean; authors?: string[]; open?:
     run: () => pass(cfg, io, () => f.tr, "/tender", async () => state),
     cursor: () => JSON.parse(readFileSync(join(root, "acme/web/gh-1.feedback"), "utf8")),
     file: () => readFileSync(join(root, "acme/web/gh-1/.tender/run/feedback.md"), "utf8"),
+    launches: () => cmds.filter((c) => c.startsWith("tmux new-window")),
     keys: () => cmds.filter((c) => /^tmux (set-buffer|paste-buffer|send-keys)/.test(c)),
   };
 }
@@ -145,7 +147,7 @@ test("feedback: nothing while the session is busy or the window is gone", async 
 test("feedback: a dead session's pending feedback is logged once per pending state", async () => {
   const d = setup({ authors: [], open: [] });
   writeFileSync(join(root, "acme/web/gh-1.pr"), URL);
-  const notice = `gh-1: PR feedback pending but the session's window is gone; restart it or act on ${URL} by hand`;
+  const notice = `gh-1: PR feedback pending but the session's window is gone and cannot be relaunched now (needs a free session slot, the clone and its prompt, a valid .tender/ and a ticket not ended); act on ${URL} by hand or free a slot`;
   const count = () => d.logs.filter((l) => l.endsWith(notice)).length;
   await d.run();
   expect(count()).toBe(0);
@@ -270,4 +272,101 @@ test("feedback: a line comment drafted before the cursor is sent when its review
   await d.run();
   expect(d.file()).toContain('<comment from="op" on="src/a.ts:3">\noff by one\n</comment>');
   expect(d.cursor().rounds).toBe(2);
+});
+
+const PROMPT = "Your earlier session on ticket gh-1 ended while its PR had feedback waiting.";
+const notice = `gh-1: PR feedback pending but the session's window is gone and cannot be relaunched now (needs a free session slot, the clone and its prompt, a valid .tender/ and a ticket not ended); act on ${URL} by hand or free a slot`;
+const dead = (id = "gh-1") => {
+  if (id !== "gh-1") worktree(id);
+  writeFileSync(join(root, `acme/web/${id}.agent`), "claude");
+  writeFileSync(join(root, `acme/web/${id}.pr`), URL);
+  writeFileSync(join(root, `acme/web/${id}.prompt.md`), "Original task\n");
+};
+
+test("feedback: a dead session with pending feedback is relaunched once in its clone with the batch, and the next pass sends nothing again", async () => {
+  const open: string[] = [];
+  const d = setup({ authors: [], open });
+  dead();
+  d.pr.statusCheckRollup = [fail];
+  await d.run();
+  expect(d.launches()).toEqual([`tmux new-window -d -t =tender: -n acme/web/gh-1 ${root}/acme/web/gh-1.sh`]);
+  const prompt = readFileSync(join(root, "acme/web/gh-1.prompt.md"), "utf8");
+  expect(prompt.startsWith(PROMPT)).toBe(true);
+  expect(prompt.endsWith("\n\nOriginal task\n")).toBe(true);
+  expect(d.file()).toContain(`<failed-check name="test" url="${fail.detailsUrl}"/>`);
+  expect(d.cursor()).toEqual({ seenAt: 0, ciShas: ["a"], rounds: 1 });
+  expect(d.keys()).toEqual([]);
+  expect(d.calls).toEqual([]);
+  expect(d.logs.some((l) => l.endsWith(`feedback gh-1 round 1: relaunched in ${root}/acme/web/gh-1 with .tender/run/feedback.md`))).toBe(true);
+  open.push("acme/web/gh-1");
+  await d.run();
+  expect(d.launches()).toHaveLength(1);
+  expect(d.keys()).toEqual([]);
+  expect(d.cursor().rounds).toBe(1);
+});
+
+test("feedback: no relaunch when handed off, parked, ended, without a clone or prompt, with the PR merged, or with no free slot", async () => {
+  const cases: [string, (d: ReturnType<typeof setup>) => void, boolean, object?][] = [
+    ["handoff", () => writeFileSync(join(root, "acme/web/gh-1.handoff"), "claude\n"), false],
+    ["needs-human", (d) => void (d.t.labels = ["needs-human"]), false],
+    ["ended", () => writeFileSync(join(root, "acme/web/gh-1.ended"), ""), true],
+    ["no clone", () => rmSync(join(root, "acme/web/gh-1"), { recursive: true }), true],
+    ["no prompt", () => rmSync(join(root, "acme/web/gh-1.prompt.md")), true],
+    ["merged", (d) => void (d.pr.state = "MERGED"), false],
+    ["full", () => {}, true, { max: 1, open: ["acme/web/gh-9"] }],
+  ];
+  for (const [name, arrange, logged, o] of cases) {
+    const d = setup({ authors: [], open: [], ...o });
+    dead();
+    d.pr.statusCheckRollup = [fail];
+    d.pr.headRefOid = name;
+    arrange(d);
+    await d.run();
+    expect([name, d.launches()]).toEqual([name, []]);
+    expect([name, existsSync(join(root, "acme/web/gh-1.feedback"))]).toEqual([name, false]);
+    expect([name, d.logs.some((l) => l.endsWith(notice))]).toEqual([name, logged]);
+    rmSync(join(root, "acme/web"), { recursive: true, force: true });
+  }
+});
+
+test("feedback: a dead session at the round limit is parked with the stop comment even with no free slot", async () => {
+  const d = setup({ authors: [], open: ["acme/web/gh-9"], max: 1 });
+  dead();
+  d.pr.statusCheckRollup = [fail];
+  writeFileSync(join(root, "acme/web/gh-1.feedback"), JSON.stringify({ seenAt: 0, rounds: 3 }));
+  await d.run();
+  expect(d.calls).toEqual(["park gh-1", `comment gh-1 PR feedback stopped after 3 rounds on ${URL}: a human is needed`]);
+  expect(d.launches()).toEqual([]);
+});
+
+test("feedback: a failed relaunch keeps the cursor, is logged once and is tried again next poll", async () => {
+  const d = setup({ authors: [], open: [], respond: (a) => (a[1] === "new-window" ? { code: 1 } : undefined) });
+  dead();
+  d.pr.statusCheckRollup = [fail];
+  await d.run();
+  await d.run();
+  expect(d.launches()).toHaveLength(2);
+  expect(existsSync(join(root, "acme/web/gh-1.feedback"))).toBe(false);
+  expect(d.logs.filter((l) => l.includes("relaunch acme/web/gh-1 failed:"))).toHaveLength(1);
+});
+
+test("feedback: a dry run relaunches nothing and writes no cursor or feedback", async () => {
+  const d = setup({ authors: [], open: [], dry: true });
+  dead();
+  d.pr.statusCheckRollup = [fail];
+  await d.run();
+  expect(d.launches()).toEqual([]);
+  expect(existsSync(join(root, "acme/web/gh-1.feedback"))).toBe(false);
+  expect(existsSync(join(root, "acme/web/gh-1/.tender/run/feedback.md"))).toBe(false);
+  expect(readFileSync(join(root, "acme/web/gh-1.prompt.md"), "utf8")).toBe("Original task\n");
+});
+
+test("feedback: relaunches count toward maxConcurrent within the pass", async () => {
+  const d = setup({ authors: [], open: [], max: 1, more: [ticket(2)] });
+  dead();
+  dead("gh-2");
+  d.pr.statusCheckRollup = [fail];
+  await d.run();
+  expect(d.launches()).toEqual([`tmux new-window -d -t =tender: -n acme/web/gh-1 ${root}/acme/web/gh-1.sh`]);
+  expect(d.logs.some((l) => l.endsWith(notice.replace("gh-1:", "gh-2:")))).toBe(true);
 });

@@ -5,6 +5,7 @@
     "": {
       "name": "tender",
       "dependencies": {
+        "@nejcm/oncue": "github:nejcm/oncue#v0.1.0",
         "@opentui/core": "0.8.4",
       },
       "devDependencies": {
@@ -14,6 +15,8 @@
     },
   },
   "packages": {
+    "@nejcm/oncue": ["@nejcm/oncue@github:nejcm/oncue#a2e3620", { "bin": { "oncue": "./src/cli.ts" } }, "nejcm-oncue-a2e3620", "sha512-V/45byumrdzDt9hYwcZ+iKDBMwYKIoK0d+iP6POipzEpm/I5Ptl9pakNsu8Gzz2GjtTQj8D6ZsYH5h3I/KpEgA=="],
+
     "@opentui/core": ["@opentui/core@0.8.4", "", { "dependencies": { "bun-ffi-structs": "0.3.1", "diff": "9.0.0", "marked": "17.0.1", "string-width": "7.2.0" }, "optionalDependencies": { "@opentui/core-darwin-arm64": "0.8.4", "@opentui/core-darwin-x64": "0.8.4", "@opentui/core-linux-arm64": "0.8.4", "@opentui/core-linux-arm64-musl": "0.8.4", "@opentui/core-linux-x64": "0.8.4", "@opentui/core-linux-x64-musl": "0.8.4", "@opentui/core-win32-arm64": "0.8.4", "@opentui/core-win32-x64": "0.8.4" }, "peerDependencies": { "web-tree-sitter": "0.25.10" } }, "sha512-s2z2FFEWxsQ6IPVEiAjlHHY5yssnCI+dIltL54+ZhVz1EWxylaB0HER+ypPL2goot0DKwKqrM57rnomh19/2rQ=="],
 
     "@opentui/core-darwin-arm64": ["@opentui/core-darwin-arm64@0.8.4", "", { "os": "darwin", "cpu": "arm64" }, "sha512-kAWCmLsGuxQANeq4AjjX0Yodca2VIofQGUfIH9Edg9BKajYpf941heZfMJkkkJUXawYTNFTR2lBYsdneUUJBrg=="],

@@ -38,7 +38,7 @@ Unknown keys are errors in both files.
 | `workspaceRoot` | path | `~/agent-ws` | session clones (`<owner>/<name>/<ID>`), prompts, launchers, sidecars, `tender.db`, intake state |
 | `reposRoot` | path | `~/agent-repos` | `tender`-managed clones (`<owner>/<name>`), cloned when `run` or `once` starts |
 | `tmuxSession` | string `[a-z0-9-]`, ≤ 32 | `tender` | tmux session that holds the agent windows |
-| `maxConcurrent` | positive integer | `2` | running sessions in total |
+| `maxConcurrent` | positive integer | `2` | running sessions in total; sessions relaunched for PR feedback count |
 | `maxInReview` | positive integer | unlimited | no new starts while this host has this many In Review plus Ready to merge tickets |
 | `stallMinutes` | positive integer | `30` | a session `working` with no transcript write for this long is parked, see [Stalled](lifecycle.md); a repo entry or `defaults` can override it |
 | `profile` | path | tender's `profile/` | the [profile](#profile) every repo uses unless its entry or `defaults` sets one; validated at startup |
@@ -58,7 +58,7 @@ A `repos` entry is `"owner/name"` or `{ "name": "owner/name", …settings }`. Ea
 | `path` | path (entry only) | `<reposRoot>/<owner>/<name>` | an existing `tender`-only clone; never your working clone, nor inside any repo's `<workspaceRoot>/<owner>/<name>` (symlinks resolved), where cleanup deletes `<ID>.*` |
 | `baseBranch` | branch name | the remote's default branch | where `.tender/` is read and PRs target |
 | `sandbox` | `nono` \| `none` | required in the entry or `defaults` | see [Sandbox](sandbox.md) |
-| `maxConcurrent` | positive integer | unlimited | sessions for this repo, within the global `maxConcurrent` |
+| `maxConcurrent` | positive integer | unlimited | sessions for this repo, within the global `maxConcurrent`; relaunched sessions count |
 | `maxInReview` | positive integer | unlimited | no new starts in the repo while it has this many In Review plus Ready to merge tickets on this host |
 | `autoMerge` | `off` \| `shadow` \| `intelligent` \| `all` | `off` | the ceiling for the repo's own `autoMerge` and `trust` rules, see [Auto-merge](auto-merge.md#auto-merge) |
 | `criticalPaths` | array of globs | `[]` | a floor of paths never auto-merged, added to the built-in and the repo's own |

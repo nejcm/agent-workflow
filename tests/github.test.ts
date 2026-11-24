@@ -376,6 +376,20 @@ test("openPr: no file or an unpushed branch opens nothing; an existing PR is ado
   expect(existsSync(join(dirOf(), "gh-1.prfile"))).toBe(false);
 });
 
+test("openPr: a 422 PR GitHub does not list yet stays pending, and a failed label is retried on the next PR", async () => {
+  const c = config();
+  prMd("fix: x\n");
+  const lag = prIo((a) => (a[4] === "repos/acme/web/pulls" ? { code: 1, err: "gh: A pull request already exists for acme:agent/gh-1. (HTTP 422)" } : undefined));
+  await expect(openPr(web(c), t1(), lag.io, dirOf())).rejects.toBeInstanceOf(Kept);
+  expect(existsSync(join(dirOf(), "gh-1.prfile"))).toBe(false);
+  const flaky = prIo((a) => (a[4] === "repos/acme/web/issues/7/labels" ? { code: 1, err: "gh: HTTP 502" } : undefined));
+  expect(await openPr(web(c), t1(), flaky.io, dirOf())).toBe(PULL);
+  prMd("fix: x, v2\n");
+  const next = prIo();
+  expect(await openPr(web(c), t1(), next.io, dirOf())).toBe(PULL);
+  expect(next.cmds).toContain("gh api repos/acme/web/labels/tender");
+});
+
 test("openPr: a dry run logs the POST and records nothing", async () => {
   const c = config();
   prMd("fix: x\n");

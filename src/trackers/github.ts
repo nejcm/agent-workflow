@@ -11,6 +11,13 @@ export function parseGitHub(r: Record<string, any>, at: string, check: Check) {
 // gh issue list pages by 100 itself, so a short listing stays one call.
 const LIST_CAP = 1000;
 
+// Undefined when unreadable: only an absent field means none, so a truncated or malformed list never starts a ticket.
+function openBlockers(b: any): string[] | undefined {
+  if (b === undefined) return [];
+  if (!Array.isArray(b?.nodes) || !(b.totalCount <= b.nodes.length) || b.nodes.some((n: any) => typeof n?.state !== "string")) return;
+  return b.nodes.filter((n: any) => n.state !== "CLOSED").map((n: any) => String(n.url || `#${n.number}`));
+}
+
 export function github(l: GitHubSource, host: string, io: Io, defaultHost: boolean, repos: string[]): Tracker {
   const hostLabel = `host:${host}`;
   let login: Promise<string> | undefined;
@@ -20,6 +27,7 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
       return x.trim().toLowerCase();
     }));
   // GitHub allows several assignees: a ticket is someone else's only while the tender user is not among them.
+  const blockedBy = new WeakMap<Ticket, string[] | undefined>();
   const otherAssignee = async (logins: string[]) => (logins.length && !logins.map((x) => x.toLowerCase()).includes(await viewer()) ? logins.join(", ") : undefined);
   const listMine = (labels: string[], search?: string, complete = false) =>
     defaultHost ? list(labels, search, complete).then((r) => r.filter((t) => ours(t, host, true))) : list([...labels, hostLabel], search, complete);
@@ -35,7 +43,7 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
       if (search) argv.push("--search", search);
       let issues: any[];
       try {
-        issues = JSON.parse(await read(io, [...argv, "--json", "number,title,body,url,labels,assignees,issueType"]));
+        issues = JSON.parse(await read(io, [...argv, "--json", "number,title,body,url,labels,assignees,issueType,blockedBy"]));
       } catch (e) {
         if (complete) throw e;
         io.log(`repo ${repo}: issue list failed, skipped: ${(e as Error).message}`);
@@ -52,7 +60,9 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
           const type = i.issueType?.name && `type:${String(i.issueType.name).toLowerCase()}`;
           if (type && !hasLabel(labels, type)) labels.push(type);
           const assignees = (i.assignees ?? []).map((x: any) => String(x.login));
-          all.push({ id: `gh-${i.number}`, ref: String(i.number), title: i.title ?? "", body: i.body ?? "", url: i.url ?? "", labels, repo, priority: labelPriority(labels), otherAssignee: await otherAssignee(assignees) });
+          const t: Ticket = { id: `gh-${i.number}`, ref: String(i.number), title: i.title ?? "", body: i.body ?? "", url: i.url ?? "", labels, repo, priority: labelPriority(labels), otherAssignee: await otherAssignee(assignees) };
+          blockedBy.set(t, openBlockers(i.blockedBy));
+          all.push(t);
         }
     }
     return all;
@@ -136,6 +146,11 @@ export function github(l: GitHubSource, host: string, io: Io, defaultHost: boole
     async view(t) {
       const i = JSON.parse(await read(io, ["gh", "issue", "view", t.ref, "--repo", t.repo!, "--json", "title,body,labels,state"]));
       return { title: String(i.title ?? ""), body: String(i.body ?? ""), labels: (i.labels ?? []).map((x: any) => String(x.name)), open: i.state === "OPEN" };
+    },
+    async blockers(t) {
+      const b = blockedBy.get(t);
+      if (!b) throw new Error(blockedBy.has(t) ? `${t.id}: blocker list truncated or malformed` : `${t.id}: blockers not listed`);
+      return b;
     },
     addLabels: (t, labels) => write(io, ["gh", "issue", "edit", t.ref, "--repo", t.repo!, ...labels.flatMap((x) => ["--add-label", x])]).then(() => {}),
     listPhases: async (parent) =>

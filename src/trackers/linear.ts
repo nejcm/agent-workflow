@@ -53,6 +53,7 @@ const labelNames = (c: any): string[] => (c?.nodes ?? []).map((x: any) => (x.par
 
 export const LINEAR_ISSUES = `query($f: IssueFilter, $after: String) { issues(filter: $f, first: 100, after: $after) { nodes { id identifier title description url priority labels { nodes { name parent { name } } } project { id name } assignee { id name } } pageInfo { hasNextPage endCursor } } }`;
 const LIST_PAGES = 10;
+const isOpen = (i: any) => !i.trashed && !["completed", "canceled", "duplicate"].includes(i.state?.type);
 
 export function linearTicket(i: any): Ticket {
   const labels = labelNames(i.labels);
@@ -244,7 +245,16 @@ export function linear(l: LinearSource, host: string, io: Io, defaultHost = fals
     async view(t) {
       const i = (await gql(`query($id: String!) { issue(id: $id) { title description trashed state { type } labels { nodes { name parent { name } } } } }`, { id: t.ref })).issue;
       if (!i) throw new Error(`linear issue ${t.id} not found`);
-      return { title: String(i.title ?? ""), body: String(i.description ?? ""), labels: labelNames(i.labels), open: !i.trashed && !["completed", "canceled", "duplicate"].includes(i.state?.type) };
+      return { title: String(i.title ?? ""), body: String(i.description ?? ""), labels: labelNames(i.labels), open: isOpen(i) };
+    },
+    // By state type, not this source's done names, so a blocker in another team counts too.
+    async blockers(t) {
+      const q = `query($id: String!) { issue(id: $id) { inverseRelations(first: 50) { nodes { type issue { identifier trashed state { type } } } pageInfo { hasNextPage } } } }`;
+      const r = (await gql(q, { id: t.ref })).issue?.inverseRelations;
+      if (!Array.isArray(r?.nodes) || r.pageInfo?.hasNextPage !== false) throw new Error(`linear blockers of ${t.id}: unreadable or more than 50`);
+      const bs = r.nodes.filter((n: any) => !n || n.type === "blocks");
+      if (bs.some((n: any) => !n?.issue)) throw new Error(`linear blockers of ${t.id}: a blocker is unreadable`);
+      return bs.filter((n: any) => isOpen(n.issue)).map((n: any) => String(n.issue.identifier));
     },
     async addLabels(t, labels) {
       for (const x of labels) await addLabel(t, x);

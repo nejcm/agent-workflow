@@ -57,9 +57,10 @@ export const config = (over: object = {}): Config => parseConfig(raw(over), TEND
 export const web = (c: Config) => c.repos["acme/web"]!;
 export const ticket = (n: number, repo = "acme/web"): Ticket => ({ id: `gh-${n}`, ref: String(n), title: `Fix thing ${n}`, body: "body; rm -rf ~ $(whoami)", url: `https://x/${n}`, repo });
 
-export function fakeTracker(s: { ready?: Ticket[]; inProgress?: Ticket[]; inReview?: Ticket[]; done?: string[]; canceled?: string[]; deleted?: string[]; globalIds?: boolean; readyToMerge?: boolean; markers?: Record<string, string>; views?: Record<string, { title?: string; body?: string; labels?: string[]; open?: boolean }> }) {
+export function fakeTracker(s: { ready?: Ticket[]; inProgress?: Ticket[]; inReview?: Ticket[]; done?: string[]; canceled?: string[]; deleted?: string[]; globalIds?: boolean; readyToMerge?: boolean; markers?: Record<string, string>; views?: Record<string, { title?: string; body?: string; labels?: string[]; open?: boolean }>; blocked?: Record<string, string[] | Error> }) {
   const calls: string[] = [];
   const subs: { ref: string; title: string; body?: string }[] = [];
+  const asked: string[] = [];
   const tr: Tracker = {
     globalIds: s.globalIds ?? false,
     restartHint: () => "remove the in-progress label",
@@ -96,11 +97,17 @@ export function fakeTracker(s: { ready?: Ticket[]; inProgress?: Ticket[]; inRevi
     findMarker: async (_target, m) => s.markers?.[m],
     reopen: async (t) => void calls.push(`reopen ${t.id}`),
     view: async (t) => ({ title: `Ticket ${t.id}`, body: "body", labels: [], open: true, ...s.views?.[t.id] }),
+    blockers: async (t) => {
+      asked.push(t.id);
+      const b = s.blocked?.[`${t.repo}#${t.id}`] ?? s.blocked?.[t.id] ?? [];
+      if (b instanceof Error) throw b;
+      return b;
+    },
     addLabels: async (t, labels) => void calls.push(`label ${t.id} [${labels}]`),
     listPhases: async () => subs.map((x) => ({ body: "", ...x })),
     setPhase: async (_t, ref, st) => void calls.push(`set ${ref} ${st}`),
   };
-  return { tr, calls, subs };
+  return { tr, calls, subs, asked };
 }
 
 export function fakeIo(respond: (argv: string[]) => { code?: number; out?: string; err?: string } | undefined = () => undefined, dry = false) {

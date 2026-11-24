@@ -18,7 +18,7 @@ An agent that is blocked asks on the ticket instead of only in its tmux session.
 - Operator messages: other `feedbackAuthors` comments after the `<ID>.steer` cursor (written at a fresh start) and, while a question is open, up to its `postedAt`, go to `.tender/run/message.md` the same way, until the PR exists. `postedAt` is at least the cursor, so a message is never re-picked as an answer.
 - Storage stays sidecar files (no SQLite).
 
-Out of scope: a fresh session after a crash does not see earlier Q&A; several answer comments are never merged; PR review feedback (built separately: docs/lifecycle.md "PR feedback", `src/session/feedback.ts`).
+Out of scope: a fresh session sees earlier Q&A only as `.tender/run/history.md` (docs/lifecycle.md "Restarts"), never as a live answer; several answer comments are never merged; PR review feedback (built separately: docs/lifecycle.md "PR feedback", `src/session/feedback.ts`).
 
 ## Phases
 
@@ -69,5 +69,5 @@ Done when: existing tests pass with the renamed `readRun` and the new comment te
 
 ## Risks
 
-- `gh issue view --json comments` cost grows with comment count; only paid for tickets with an open question or an idle steerable session (`<ID>.steer`, no PR).
+- `gh issue view --json comments` cost grows with comment count; only paid for tickets with an open question or an idle steerable session (`<ID>.steer`, no PR), and once per start.
 - On GitHub the sandboxed agent still has `gh`, so it could post its own "answer" or operator message. The allowlist stops that only if the agent's token belongs to a different login than the operator; otherwise it is a prompt rule, as with phases.

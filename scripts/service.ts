@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { capturePath, install, which, type Job, type Schedule } from "@nejcm/oncue";
@@ -29,24 +29,6 @@ if (!spec || !bun) {
   process.exit(1);
 }
 const mac = process.platform === "darwin";
-if (process.env.SYSTEMD_OFFLINE !== undefined) {
-  console.error("SYSTEMD_OFFLINE is set: unset it so systemctl reaches the user manager");
-  process.exit(1);
-}
-
-const systemctl = (...args: string[]) => {
-  if (Bun.spawnSync(["systemctl", "--user", ...args], { stdio: ["ignore", "ignore", "inherit"] }).exitCode === 0) return;
-  console.error(`systemctl --user ${args.join(" ")} failed`);
-  process.exit(1);
-};
-const legacy = join(homedir(), ".config/systemd/user/tender.service");
-if (name === "run" && process.platform === "linux" && existsSync(legacy)) {
-  // Offline, disable --now exits 0 without stopping anything; oncue probes the manager the same way.
-  systemctl("show-environment");
-  systemctl("disable", "--now", "tender.service");
-  rmSync(legacy);
-  systemctl("daemon-reload");
-}
 // oncue creates the log directory only for a custom `log` path.
 if (mac) mkdirSync(join(homedir(), "Library/Logs"), { recursive: true });
 

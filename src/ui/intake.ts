@@ -5,7 +5,7 @@ import { repoConfig } from "../config/repo-config";
 import { DB_FILE } from "../db";
 import { HEARTBEAT, ms, SLACK_MS } from "../intake";
 import type { Config, IntakeRule, Io } from "../types";
-import { clean, GIT, mtime, read, SYSTEMD } from "../util";
+import { clean, GIT, mtime, read } from "../util";
 import { clip, cut, type Line, type Palette, s as sp, scroll, type Span, spread, when, wrap } from "./dash-view";
 import { dur } from "./status";
 
@@ -45,16 +45,13 @@ export interface IntakeInfo {
   problem?: string;
 }
 
-/** The first timer tick at or after `at`: quarter hours under systemd, else launchd's `last + 15m` steps. */
-export function tickAt(at: number, last?: number, aligned = SYSTEMD) {
-  if (aligned || last === undefined) return Math.ceil(at / TICK) * TICK;
-  return last + Math.max(0, Math.ceil((at - last) / TICK)) * TICK;
-}
+/** The first timer tick at or after `at`: the timer fires on the quarter hour. */
+export const tickAt = (at: number) => Math.ceil(at / TICK) * TICK;
 
 /** When the rule next runs, and whether it is due now (never ran, or `every` has passed). */
-export function nextRun(ranAt: number | undefined, every: string, now: number, last?: number) {
+export function nextRun(ranAt: number | undefined, every: string, now: number) {
   const target = ranAt === undefined ? now : ranAt + ms(every) - SLACK_MS;
-  return { at: tickAt(Math.max(now, target), last), due: target <= now };
+  return { at: tickAt(Math.max(now, target)), due: target <= now };
 }
 
 export const modeOf = (rule: IntakeRule, cfg: Config): Mode => (rule.autoLabel.length ? "auto" : rule.judge ? (cfg.judge ? "judge" : "judge(off)") : "shadow");
@@ -138,7 +135,7 @@ export async function intakeInfo(cfg: Config, io: Io, now = Date.now()): Promise
     const info: RuleInfo = { ...base, every: rule.every, mode: modeOf(rule, cfg) };
     if (!here || !info.enabled) return info;
     const run = h.runs.get(id);
-    const { at: next, due } = nextRun(run?.ranAt, rule.every, now, beat);
+    const { at: next, due } = nextRun(run?.ranAt, rule.every, now);
     return { ...info, ...h.counts.get(id), ranAt: run?.ranAt, error: run?.error, next, due };
   });
   return {

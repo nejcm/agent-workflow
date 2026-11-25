@@ -69,8 +69,7 @@ What a session leaves in `.tender/run/` and the merge decision.
 - `prompts/`: the fixed `header.md` and `protocol.md` around every ticket prompt.
 - `profile/`: the default profile: `types.yaml` and the instruction file each task type puts between the header and protocol.
 - `nono/`: sandbox profiles for Claude and Codex sessions, intake scripts, the intake judge and checks.
-- `systemd/`: user units for `tender run`, the intake timer and the weekly PR sweep timer, installed by `scripts/run.sh`.
 - `.agents/skills/tender-setup/SKILL.md`: the setup skill for a repo's `.tender/`; `.agents/skills/tender-maintain/SKILL.md` proposes config repairs and intake rules. `.claude/skills/` symlinks to them for Claude Code.
-- `scripts/setup.sh`: idempotent host setup and tracker labels; `scripts/run.sh`: preflight, then poll, or install the systemd units.
+- `scripts/setup.sh`: idempotent host setup and tracker labels; `scripts/run.sh`: preflight, then poll, or install a service; `scripts/service.ts`: installs the poller, the intake timer or the weekly PR sweep timer through oncue (systemd or launchd).
 - `scripts/codex-hooks.sh`: installs or refreshes tender's Codex state hooks in a `config.toml`.
 - `tests/`: one file per module (launcher tests are in `pass.test.ts`, the Ready to merge pass in `ready.test.ts`, `intake/sentry.ts` in `sentry.test.ts`, `intake/posthog-errors.ts` in `posthog-errors.test.ts`, the `intake/pg*.ts` scripts in `pg.test.ts`, `intake/contract.ts` in `contract.test.ts`); shared fakes in `tests/helpers.ts`.

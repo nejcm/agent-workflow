@@ -1,9 +1,0 @@
-[Unit]
-Description=tender: intake every 15 minutes (each rule's every decides whether it runs)
-
-[Timer]
-OnCalendar=*:0/15
-Persistent=true
-
-[Install]
-WantedBy=timers.target

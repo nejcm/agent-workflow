@@ -15,7 +15,7 @@ import { lastSay, transcript } from "./ui/tail";
 import { type Adapter, TRACKERS } from "./trackers";
 import type { ProjectClaim } from "./trackers/linear";
 import type { Config, Io, Repo, Session, Source, Ticket, TicketComment, Tracker } from "./types";
-import { TENDER_DIR, byPriority, Kept, diskRepos, GIT, hasLabel, mtime, put, read, remove, SAFE_ID, SLOW_SECS, strip, subdirs, write } from "./util";
+import { TENDER_DIR, byPriority, Kept, diskRepos, GIT, hasLabel, mtime, put, read, remove, SAFE_ID, SLOW_SECS, strip, subdirs, SYSTEMD, write } from "./util";
 
 export const sourceOf = (dir: string, id: string) => {
   const f = join(dir, `${id}.source`);
@@ -444,7 +444,8 @@ async function countInReview(cfg: Config, io: Io, srcs: Map<string, { s: Source;
 
 export async function pass(cfg: Config, io: Io, tracker = makeTracker, tenderDir = TENDER_DIR, state = liveStates()) {
   if ((await io.run(["tmux", "has-session", "-t", `=${cfg.tmuxSession}`])).code !== 0)
-    await write(io, ["tmux", "new-session", "-d", "-s", cfg.tmuxSession]).catch((e) => io.log(`tmux: ${e.message}`));
+    // tmux 3.7+ makes each pane PartOf the server's unit; a server started in tender-run would lose panes on its restart.
+    await write(io, [...(SYSTEMD ? ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--"] : []), "tmux", "new-session", "-d", "-s", cfg.tmuxSession]).catch((e) => io.log(`tmux: ${e.message}`));
   const sessions = new Map<string, Promise<Session | undefined>>();
   let claimed: Promise<ProjectClaim[]> | undefined;
   // Only when a ticket needs it, once per pass: every repo's `.tender/` at its freshly fetched base commit; any repo unread fails it all.

@@ -10,7 +10,7 @@ import { endedNotice, pass } from "../src/pass";
 import { liveStates, pickAnswer } from "../src/session/question";
 import type { State } from "../src/session/state";
 import type { AgentName, Config, Io, Ticket, TicketComment, Tracker } from "../src/types";
-import { GIT, SLOW_SECS } from "../src/util";
+import { GIT, SLOW_SECS, SYSTEMD } from "../src/util";
 import { claudeFile, config, fakeIo, repoFiles, fakeTracker, noPr, root, setBaseSha, src, ticket, two, useTempRoot, web, windowsOut, worktree } from "./helpers";
 
 useTempRoot();
@@ -984,7 +984,7 @@ test("dry-run logs side effects and executes none", async () => {
   const { io, cmds, logs } = fakeIo((a) => (a[1] === "has-session" ? { code: 1 } : a[1] === "pr" && a.includes("agent/gh-2") ? { out: '[{"url":"https://pr/2","state":"OPEN"}]' } : noPr(a)), true);
   await pass(c, io, () => tr, "/tender");
   expect(cmds.every((x) => /has-session|list-windows|list-panes|list-units|rev-parse|ls-tree|cat-file|remote get-url|gh pr list|gh repo view/.test(x))).toBe(true);
-  expect(logs.some((l) => l.includes("dry: tmux new-session -d -s tender"))).toBe(true);
+  expect(logs.some((l) => l.includes(`dry: ${SYSTEMD ? "systemd-run --user --scope --quiet --collect -- " : ""}tmux new-session -d -s tender`))).toBe(true);
   expect(logs.some((l) => l.startsWith("[web] dry: nono run --no-rollback-prompt --profile /tender/nono/tender-check.json ") && l.endsWith(`-C ${root}/acme/web/gh-5 status --porcelain --ignore-submodules=none`))).toBe(true);
   expect(logs.some((l) => l.startsWith("[web] dry: nono run ") && l.endsWith(`-C ${root}/acme/web/gh-5 rev-list --ignore-missing --all --not --glob=refs/remotes/*`))).toBe(true);
   expect(logs.some((l) => l.startsWith("[web] dry: nono run ") && l.endsWith(`-C ${root}/acme/web/gh-5 for-each-ref --format=%(refname) refs/tags refs/stash refs/notes`))).toBe(true);
